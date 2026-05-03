@@ -1,0 +1,313 @@
+import { Router } from "express";
+import { supabase } from "../config/supabase";
+
+type GroupType = "phase" | "zone" | "color";
+type StatusType = "active" | "inactive";
+
+type IrrigationGroupPayload = {
+  type: GroupType;
+  name: string;
+  status: StatusType;
+};
+
+type LinkedItemPayload = {
+  name: string;
+  group_id: string;
+  dripper_count: number;
+  status: StatusType;
+};
+
+const GROUP_TYPES: GroupType[] = ["phase", "zone", "color"];
+const STATUS_VALUES: StatusType[] = ["active", "inactive"];
+
+function parseRequiredName(value: unknown) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) {
+    throw new Error("name is required");
+  }
+
+  return name;
+}
+
+function parseStatus(value: unknown): StatusType {
+  const status = typeof value === "string" ? value.toLowerCase() : "";
+  if (!STATUS_VALUES.includes(status as StatusType)) {
+    throw new Error("status must be active or inactive");
+  }
+
+  return status as StatusType;
+}
+
+function parseGroupType(value: unknown): GroupType {
+  const type = typeof value === "string" ? value.toLowerCase() : "";
+  if (!GROUP_TYPES.includes(type as GroupType)) {
+    throw new Error("type must be phase, zone, or color");
+  }
+
+  return type as GroupType;
+}
+
+function parseDripperCount(value: unknown): number {
+  const dripperCount = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(dripperCount) || dripperCount < 1) {
+    throw new Error("dripper_count must be 1 or greater");
+  }
+
+  return dripperCount;
+}
+
+function validateGroupPayload(input: unknown): IrrigationGroupPayload {
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid request body");
+  }
+
+  const body = input as Record<string, unknown>;
+
+  return {
+    type: parseGroupType(body.type),
+    name: parseRequiredName(body.name),
+    status: parseStatus(body.status)
+  };
+}
+
+function validateLinkedItemPayload(input: unknown): LinkedItemPayload {
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid request body");
+  }
+
+  const body = input as Record<string, unknown>;
+  const group_id = typeof body.group_id === "string" ? body.group_id.trim() : "";
+
+  if (!group_id) {
+    throw new Error("group_id is required");
+  }
+
+  return {
+    name: parseRequiredName(body.name),
+    group_id,
+    dripper_count: parseDripperCount(body.dripper_count),
+    status: parseStatus(body.status)
+  };
+}
+
+const irrigationSetupRouter = Router();
+
+irrigationSetupRouter.get("/irrigation-setup", async (_req, res) => {
+  const [groupsResult, feedValvesResult, drainBucketsResult] = await Promise.all([
+    supabase.from("irrigation_groups").select("*").order("created_at", { ascending: true }),
+    supabase
+      .from("irrigation_feed_valves")
+      .select("*")
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("irrigation_drain_buckets")
+      .select("*")
+      .order("created_at", { ascending: true })
+  ]);
+
+  if (groupsResult.error) {
+    return res.status(500).json({ message: groupsResult.error.message });
+  }
+
+  if (feedValvesResult.error) {
+    return res.status(500).json({ message: feedValvesResult.error.message });
+  }
+
+  if (drainBucketsResult.error) {
+    return res.status(500).json({ message: drainBucketsResult.error.message });
+  }
+
+  return res.json({
+    groups: groupsResult.data ?? [],
+    feedValves: feedValvesResult.data ?? [],
+    drainBuckets: drainBucketsResult.data ?? []
+  });
+});
+
+irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
+  let payload: IrrigationGroupPayload;
+
+  try {
+    payload = validateGroupPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data, error } = await supabase
+    .from("irrigation_groups")
+    .insert(payload)
+    .select("*")
+    .single();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(201).json(data);
+});
+
+irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
+  const { id } = req.params;
+  let payload: IrrigationGroupPayload;
+
+  try {
+    payload = validateGroupPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data, error } = await supabase
+    .from("irrigation_groups")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.json(data);
+});
+
+irrigationSetupRouter.delete("/irrigation-groups/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const { error } = await supabase.from("irrigation_groups").delete().eq("id", id);
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(204).send();
+});
+
+irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
+  let payload: LinkedItemPayload;
+
+  try {
+    payload = validateLinkedItemPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data, error } = await supabase
+    .from("irrigation_feed_valves")
+    .insert(payload)
+    .select("*")
+    .single();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(201).json(data);
+});
+
+irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
+  const { id } = req.params;
+  let payload: LinkedItemPayload;
+
+  try {
+    payload = validateLinkedItemPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data, error } = await supabase
+    .from("irrigation_feed_valves")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.json(data);
+});
+
+irrigationSetupRouter.delete("/irrigation-feed-valves/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from("irrigation_feed_valves")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(204).send();
+});
+
+irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
+  let payload: LinkedItemPayload;
+
+  try {
+    payload = validateLinkedItemPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data, error } = await supabase
+    .from("irrigation_drain_buckets")
+    .insert(payload)
+    .select("*")
+    .single();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(201).json(data);
+});
+
+irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
+  const { id } = req.params;
+  let payload: LinkedItemPayload;
+
+  try {
+    payload = validateLinkedItemPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data, error } = await supabase
+    .from("irrigation_drain_buckets")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.json(data);
+});
+
+irrigationSetupRouter.delete("/irrigation-drain-buckets/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from("irrigation_drain_buckets")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(204).send();
+});
+
+export { irrigationSetupRouter };
