@@ -25,6 +25,12 @@ export function MobileLayout() {
         >
           Daily Yield
         </NavLink>
+        <NavLink
+          to="/mobile/irrigation-log"
+          className={({ isActive }) => `mobile-bottom-link ${isActive ? "active" : ""}`}
+        >
+          Irrigation
+        </NavLink>
       </nav>
     </div>
   );

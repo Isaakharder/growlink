@@ -263,6 +263,40 @@ body {
   color: var(--text-muted);
 }
 
+.irrigation-summary-grid {
+  margin-top: 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.7rem;
+}
+
+.irrigation-summary-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 0.7rem 0.75rem;
+}
+
+.irrigation-summary-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.irrigation-summary-value {
+  margin: 0.35rem 0 0;
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.irrigation-reading-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
 .varieties-form {
   margin-top: 0.85rem;
   display: grid;
@@ -705,7 +739,7 @@ body {
   background: var(--surface);
   border-top: 1px solid var(--border);
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
   padding: 0.65rem 0.8rem;
 }
@@ -855,6 +889,99 @@ body {
   font-weight: 600;
 }
 
+.mobile-irrigation-page {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.mobile-irrigation-card h4 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.mobile-irrigation-equipment-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.mobile-irrigation-equipment-list {
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mobile-irrigation-equipment-list li {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 0.55rem 0.6rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.mobile-irrigation-equipment-list li span {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.mobile-irrigation-reading-row {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 170px);
+  align-items: end;
+  gap: 0.6rem;
+}
+
+.mobile-irrigation-reading-row label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.mobile-irrigation-input-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mobile-irrigation-bottom-section {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.mobile-irrigation-metrics {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f1fbf7;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mobile-irrigation-metrics p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.mobile-irrigation-notes {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0.68rem 0.7rem;
+  resize: vertical;
+}
+
+.mobile-irrigation-saved {
+  margin: 0;
+  color: #0a5e4c;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .auth-loading-shell {
   min-height: 100vh;
   display: grid;
@@ -968,6 +1095,10 @@ body {
 
   .modal-overlay {
     padding: 0.75rem;
+  }
+
+  .mobile-irrigation-input-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -16,10 +16,9 @@ export function MobileHomePage() {
           <span>Coming soon</span>
         </button>
 
-        <button type="button" className="mobile-card-button" disabled>
+        <Link className="mobile-card-button" to="/mobile/irrigation-log">
           Irrigation Log
-          <span>Coming soon</span>
-        </button>
+        </Link>
 
         <button type="button" className="mobile-card-button" disabled>
           Pest Log

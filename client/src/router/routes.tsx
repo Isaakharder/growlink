@@ -4,9 +4,11 @@ import { MobileLayout } from "../components/layout/MobileLayout";
 import { PagePlaceholder } from "../components/layout/PagePlaceholder";
 import { DashboardPage } from "../pages/DashboardPage";
 import { GreenhouseSetupPage } from "../pages/GreenhouseSetupPage";
+import { IrrigationPage } from "../pages/IrrigationPage";
 import { IrrigationSetupPage } from "../pages/IrrigationSetupPage";
 import { MobileDailyYieldPage } from "../pages/MobileDailyYieldPage";
 import { MobileHomePage } from "../pages/MobileHomePage";
+import { MobileIrrigationLogPage } from "../pages/MobileIrrigationLogPage";
 import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
@@ -34,12 +36,7 @@ export const appRouter = createBrowserRouter([
       },
       {
         path: "irrigation",
-        element: (
-          <PagePlaceholder
-            title="Irrigation"
-            description="Irrigation logs, schedules, and monitoring workflows will be managed here."
-          />
-        )
+        element: <IrrigationPage />
       },
       {
         path: "pest-control/operate",
@@ -137,6 +134,10 @@ export const appRouter = createBrowserRouter([
       {
         path: "daily-yield",
         element: <MobileDailyYieldPage />
+      },
+      {
+        path: "irrigation-log",
+        element: <MobileIrrigationLogPage />
       }
     ]
   }
