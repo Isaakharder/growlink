@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { apiUrl } from "../lib/api";
 
 type VarietyOption = {
   id: string;
@@ -39,9 +40,9 @@ type LocalSample = {
   bin_fill_percent: number;
 };
 
-const OPTIONS_URL = "http://localhost:4001/api/mobile/daily-yield/options";
-const SETTINGS_URL = "http://localhost:4001/api/mobile/daily-yield/settings";
-const SAMPLES_URL = "http://localhost:4001/api/mobile/daily-yield/samples";
+const OPTIONS_URL = apiUrl("/api/mobile/daily-yield/options");
+const SETTINGS_URL = apiUrl("/api/mobile/daily-yield/settings");
+const SAMPLES_URL = apiUrl("/api/mobile/daily-yield/samples");
 const MINIMUM_SAMPLE_COUNT = 4;
 
 function roundTo(value: number, decimals: number) {

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { apiUrl } from "../lib/api";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -51,10 +52,10 @@ type LinkedForm = {
   status: StatusType;
 };
 
-const SETUP_URL = "http://localhost:4001/api/irrigation-setup";
-const GROUPS_URL = "http://localhost:4001/api/irrigation-groups";
-const FEED_VALVES_URL = "http://localhost:4001/api/irrigation-feed-valves";
-const DRAIN_BUCKETS_URL = "http://localhost:4001/api/irrigation-drain-buckets";
+const SETUP_URL = apiUrl("/api/irrigation-setup");
+const GROUPS_URL = apiUrl("/api/irrigation-groups");
+const FEED_VALVES_URL = apiUrl("/api/irrigation-feed-valves");
+const DRAIN_BUCKETS_URL = apiUrl("/api/irrigation-drain-buckets");
 const TRACK_TYPE_STORAGE_KEY = "irrigation.trackType";
 
 const TYPE_LABELS: Record<GroupType, string> = {

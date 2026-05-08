@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { apiFetch, apiUrl } from "../lib/api";
 
 type VarietyStatus = "active" | "inactive";
 type VarietyColor = "red" | "orange" | "yellow" | "green";
@@ -42,8 +43,8 @@ type YieldSizeFormState = {
   status: YieldSizeStatus;
 };
 
-const API_BASE = "http://localhost:4001/api/varieties";
-const YIELD_SIZES_API_BASE = "http://localhost:4001/api/yield-sizes";
+const API_BASE = apiUrl("/api/varieties");
+const YIELD_SIZES_API_BASE = apiUrl("/api/yield-sizes");
 
 const INITIAL_FORM: VarietyFormState = {
   name: "",
@@ -122,7 +123,7 @@ export function VarietiesSetupPage() {
     setError(null);
 
     try {
-      const res = await fetch("http://localhost:4001/api/varieties");
+      const res = await apiFetch(API_BASE);
       if (!res.ok) {
         throw new Error("Failed to fetch");
       }
@@ -141,7 +142,7 @@ export function VarietiesSetupPage() {
     setSizesError(null);
 
     try {
-      const response = await fetch(YIELD_SIZES_API_BASE);
+      const response = await apiFetch(YIELD_SIZES_API_BASE);
       if (!response.ok) {
         throw new Error("Failed to fetch sizes");
       }

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { apiUrl } from "../lib/api";
 
 type YieldSizeStatus = "active" | "inactive";
 type VarietyStatus = "active" | "inactive";
@@ -46,8 +47,8 @@ type WeekOption = {
   label: string;
 };
 
-const OPTIONS_URL = "http://localhost:4001/api/yield-entry-options";
-const ENTRIES_URL = "http://localhost:4001/api/yield-entries";
+const OPTIONS_URL = apiUrl("/api/yield-entry-options");
+const ENTRIES_URL = apiUrl("/api/yield-entries");
 
 function getWeekStartSunday(year: number, week: number) {
   const jan1 = new Date(year, 0, 1);

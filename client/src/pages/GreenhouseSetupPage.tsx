@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { apiUrl } from "../lib/api";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -92,11 +93,11 @@ type AssignmentFormState = {
   end_row: string;
 };
 
-const SETUP_URL = "http://localhost:4001/api/greenhouse-setup";
-const GROUPS_URL = "http://localhost:4001/api/greenhouse-groups";
-const ROW_SECTIONS_URL = "http://localhost:4001/api/greenhouse-row-sections";
-const ROWS_URL = "http://localhost:4001/api/greenhouse-rows";
-const ASSIGNMENTS_URL = "http://localhost:4001/api/greenhouse-variety-assignments";
+const SETUP_URL = apiUrl("/api/greenhouse-setup");
+const GROUPS_URL = apiUrl("/api/greenhouse-groups");
+const ROW_SECTIONS_URL = apiUrl("/api/greenhouse-row-sections");
+const ROWS_URL = apiUrl("/api/greenhouse-rows");
+const ASSIGNMENTS_URL = apiUrl("/api/greenhouse-variety-assignments");
 
 const TYPE_LABELS: Record<GroupType, string> = {
   phase: "Phase",

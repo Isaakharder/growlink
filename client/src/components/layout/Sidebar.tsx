@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import { supabase } from "../../lib/supabase";
 
 type SidebarProps = {
   mobileOpen: boolean;
@@ -60,6 +61,7 @@ const navItems: NavItem[] = [
 
 export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
   const location = useLocation();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const groups = useMemo(
     () => navItems.filter((item): item is NavGroupItem => item.type === "group"),
@@ -87,6 +89,13 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
       return next;
     });
   }, [groups, location.pathname]);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    await supabase.auth.signOut();
+    setIsLoggingOut(false);
+    onCloseMobile();
+  }
 
   return (
     <>
@@ -161,6 +170,17 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             );
           })}
         </nav>
+
+        <div className="sidebar-footer">
+          <button
+            type="button"
+            className="sidebar-logout"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+          >
+            {isLoggingOut ? "Logging out..." : "Log out"}
+          </button>
+        </div>
       </aside>
 
       <button
