@@ -7,6 +7,7 @@ import { GreenhouseSetupPage } from "../pages/GreenhouseSetupPage";
 import { IrrigationSetupPage } from "../pages/IrrigationSetupPage";
 import { MobileDailyYieldPage } from "../pages/MobileDailyYieldPage";
 import { MobileHomePage } from "../pages/MobileHomePage";
+import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 
@@ -25,12 +26,7 @@ export const appRouter = createBrowserRouter([
       },
       {
         path: "yield/analytics",
-        element: (
-          <PagePlaceholder
-            title="Yield Analytics"
-            description="Yield trends and comparative performance analytics will be presented in this section."
-          />
-        )
+        element: <YieldAnalyticsPage />
       },
       {
         path: "yield",

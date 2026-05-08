@@ -256,4 +256,118 @@ yieldEntriesRouter.delete("/yield-entries/:id", async (req, res) => {
   return res.status(204).send();
 });
 
+yieldEntriesRouter.get("/yield-analytics/summary", async (_req, res) => {
+  const [entriesResult, sizesResult, varietiesResult] = await Promise.all([
+    supabase
+      .from("yield_entries")
+      .select("variety_id, total_kg, average_fruit_weight_g, size_kg, varieties(id, name, area_m2)"),
+    supabase
+      .from("yield_sizes")
+      .select("id, name, sort_order")
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("varieties")
+      .select("id, name, area_m2")
+      .order("name", { ascending: true })
+  ]);
+
+  if (entriesResult.error) {
+    return res.status(500).json({ message: entriesResult.error.message });
+  }
+  if (sizesResult.error) {
+    return res.status(500).json({ message: sizesResult.error.message });
+  }
+  if (varietiesResult.error) {
+    return res.status(500).json({ message: varietiesResult.error.message });
+  }
+
+  const sizes = sizesResult.data ?? [];
+  const varietiesMap = new Map<string, { id: string; name: string; area_m2: number }>();
+  for (const v of varietiesResult.data ?? []) {
+    varietiesMap.set(v.id, v);
+  }
+
+  type VarietySummary = {
+    variety_id: string;
+    variety_name: string;
+    entries_count: number;
+    total_kg: number;
+    weighted_fw_sum: number;
+    weighted_fw_kg: number;
+    size_kg_sum: Record<string, number>;
+    area_m2: number;
+  };
+
+  const summaryMap = new Map<string, VarietySummary>();
+
+  for (const entry of entriesResult.data ?? []) {
+    const varietyRef = entry.varieties as { id?: string; name?: string; area_m2?: number } | Array<{ id?: string; name?: string; area_m2?: number }> | null;
+    const ref = Array.isArray(varietyRef) ? varietyRef[0] : varietyRef;
+    const varietyName = ref?.name ?? varietiesMap.get(entry.variety_id)?.name ?? "-";
+    const areaM2 = ref?.area_m2 ?? varietiesMap.get(entry.variety_id)?.area_m2 ?? 0;
+
+    if (!summaryMap.has(entry.variety_id)) {
+      summaryMap.set(entry.variety_id, {
+        variety_id: entry.variety_id,
+        variety_name: varietyName,
+        entries_count: 0,
+        total_kg: 0,
+        weighted_fw_sum: 0,
+        weighted_fw_kg: 0,
+        size_kg_sum: {},
+        area_m2: areaM2
+      });
+    }
+
+    const row = summaryMap.get(entry.variety_id)!;
+    row.entries_count += 1;
+    row.total_kg += entry.total_kg ?? 0;
+
+    if (entry.average_fruit_weight_g !== null && entry.average_fruit_weight_g !== undefined && (entry.total_kg ?? 0) > 0) {
+      row.weighted_fw_sum += entry.average_fruit_weight_g * (entry.total_kg ?? 0);
+      row.weighted_fw_kg += entry.total_kg ?? 0;
+    }
+
+    const sizeKg = (entry.size_kg ?? {}) as Record<string, number>;
+    for (const [sizeId, kg] of Object.entries(sizeKg)) {
+      row.size_kg_sum[sizeId] = (row.size_kg_sum[sizeId] ?? 0) + (typeof kg === "number" ? kg : 0);
+    }
+  }
+
+  const rows = Array.from(summaryMap.values()).map((row) => {
+    const avg_fruit_weight_g = row.weighted_fw_kg > 0
+      ? row.weighted_fw_sum / row.weighted_fw_kg
+      : null;
+
+    const kg_per_m2 = row.area_m2 > 0 ? row.total_kg / row.area_m2 : null;
+
+    const size_pct: Record<string, number> = {};
+    if (row.total_kg > 0) {
+      for (const size of sizes) {
+        const sizeKg = row.size_kg_sum[size.id] ?? 0;
+        size_pct[size.id] = (sizeKg / row.total_kg) * 100;
+      }
+    } else {
+      for (const size of sizes) {
+        size_pct[size.id] = 0;
+      }
+    }
+
+    return {
+      variety_id: row.variety_id,
+      variety_name: row.variety_name,
+      entries_count: row.entries_count,
+      total_kg: row.total_kg,
+      avg_fruit_weight_g,
+      kg_per_m2,
+      size_pct
+    };
+  });
+
+  rows.sort((a, b) => a.variety_name.localeCompare(b.variety_name));
+
+  return res.json({ sizes, rows });
+});
+
 export { yieldEntriesRouter };

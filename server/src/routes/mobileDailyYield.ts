@@ -17,6 +17,36 @@ type AssignmentRecord = {
   end_row: number;
 };
 
+type MobileYieldSamplePayload = {
+  variety_id: string;
+  row_id: string;
+  phase_id: string | null;
+  phase_name: string | null;
+  row_label: string | null;
+  row_number: number | null;
+  percent_full: number;
+  kg_per_full_bin: number;
+  kg_per_case: number;
+  calculated_sample_kg: number;
+  calculated_kg_per_stem: number;
+  sample_date: string;
+  session_year: number;
+  session_week: number;
+};
+
+const DEFAULT_CASES_PER_BIN = 38;
+const DEFAULT_KG_PER_FULL_BIN = 0;
+const DEFAULT_KG_PER_CASE = 0;
+
+function isMissingSettingsStorageError(error: { code?: string; message?: string }) {
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    message.includes("daily_yield_bin_settings") && message.includes("does not exist")
+  );
+}
+
 function parseRequiredNumber(value: unknown, fieldName: string): number {
   const parsed = typeof value === "number" ? value : Number(value);
 
@@ -30,8 +60,60 @@ function parseRequiredNumber(value: unknown, fieldName: string): number {
 function parseBinFillPercent(value: unknown): number {
   const parsed = parseRequiredNumber(value, "bin_fill_percent");
 
-  if (parsed < 0 || parsed > 100) {
-    throw new Error("bin_fill_percent must be between 0 and 100");
+  if (parsed < 0) {
+    throw new Error("bin_fill_percent must be 0 or greater");
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeNumber(value: unknown, fieldName: string): number {
+  const parsed = parseRequiredNumber(value, fieldName);
+
+  if (parsed < 0) {
+    throw new Error(`${fieldName} must be 0 or greater`);
+  }
+
+  return parsed;
+}
+
+function parseOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function parseOptionalInteger(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed)) {
+    throw new Error("row_number must be a whole number");
+  }
+
+  return parsed;
+}
+
+function parseRequiredInteger(value: unknown, fieldName: string): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${fieldName} is required`);
+  }
+
+  return parsed;
+}
+
+function parseSampleDate(value: unknown): string {
+  const parsed = typeof value === "string" ? value.trim() : "";
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed)) {
+    throw new Error("sample_date must be YYYY-MM-DD");
   }
 
   return parsed;
@@ -57,6 +139,37 @@ function parseId(value: unknown, fieldName: string): string {
   return parsed;
 }
 
+function validateSamplePayload(input: unknown): MobileYieldSamplePayload {
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid request body");
+  }
+
+  const body = input as Record<string, unknown>;
+
+  return {
+    variety_id: parseId(body.variety_id, "variety_id"),
+    row_id: parseId(body.row_id, "row_id"),
+    phase_id: parseOptionalString(body.phase_id),
+    phase_name: parseOptionalString(body.phase_name),
+    row_label: parseOptionalString(body.row_label),
+    row_number: parseOptionalInteger(body.row_number),
+    percent_full: parseBinFillPercent(body.percent_full ?? body.bin_fill_percent),
+    kg_per_full_bin: parseNonNegativeNumber(body.kg_per_full_bin, "kg_per_full_bin"),
+    kg_per_case: parseNonNegativeNumber(body.kg_per_case, "kg_per_case"),
+    calculated_sample_kg: parseNonNegativeNumber(
+      body.calculated_sample_kg,
+      "calculated_sample_kg"
+    ),
+    calculated_kg_per_stem: parseNonNegativeNumber(
+      body.calculated_kg_per_stem,
+      "calculated_kg_per_stem"
+    ),
+    sample_date: parseSampleDate(body.sample_date),
+    session_year: parseRequiredInteger(body.session_year, "session_year"),
+    session_week: parseRequiredInteger(body.session_week, "session_week")
+  };
+}
+
 async function getCurrentCasesPerBin(): Promise<number> {
   const { data, error } = await supabase
     .from("daily_yield_bin_settings")
@@ -66,14 +179,19 @@ async function getCurrentCasesPerBin(): Promise<number> {
     .maybeSingle();
 
   if (error) {
+    if (isMissingSettingsStorageError(error)) {
+      return DEFAULT_CASES_PER_BIN;
+    }
+
     throw new Error(error.message);
   }
 
   if (!data) {
-    return 38;
+    return DEFAULT_CASES_PER_BIN;
   }
 
-  return Number(data.cases_per_bin);
+  const parsed = Number(data.cases_per_bin);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CASES_PER_BIN;
 }
 
 async function fetchRowsLinkedToActiveVarieties() {
@@ -231,7 +349,11 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (_req, res) => {
 mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (_req, res) => {
   try {
     const casesPerBin = await getCurrentCasesPerBin();
-    return res.json({ cases_per_bin: casesPerBin });
+    return res.json({
+      cases_per_bin: casesPerBin,
+      kg_per_full_bin: DEFAULT_KG_PER_FULL_BIN,
+      kg_per_case: DEFAULT_KG_PER_CASE
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load settings";
     return res.status(500).json({ message });
@@ -291,16 +413,10 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
 });
 
 mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
-  let varietyId: string;
-  let rowId: string;
-  let binFillPercent: number;
+  let payload: MobileYieldSamplePayload;
 
   try {
-    const body = req.body as Record<string, unknown>;
-    varietyId = parseId(body.variety_id, "variety_id");
-    rowId = parseId(body.row_id, "row_id");
-    binFillPercent = parseBinFillPercent(body.bin_fill_percent);
-    await ensureRowLinkedToVariety(varietyId, rowId);
+    payload = validateSamplePayload(req.body);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -309,11 +425,23 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
   const { data, error } = await supabase
     .from("daily_yield_samples")
     .insert({
-      variety_id: varietyId,
-      row_id: rowId,
-      bin_fill_percent: binFillPercent
+      variety_id: payload.variety_id,
+      row_id: payload.row_id,
+      phase_id: payload.phase_id,
+      phase_name: payload.phase_name,
+      row_label: payload.row_label,
+      row_number: payload.row_number,
+      bin_fill_percent: payload.percent_full,
+      percent_full: payload.percent_full,
+      kg_per_full_bin: payload.kg_per_full_bin,
+      kg_per_case: payload.kg_per_case,
+      calculated_sample_kg: payload.calculated_sample_kg,
+      calculated_kg_per_stem: payload.calculated_kg_per_stem,
+      sample_date: payload.sample_date,
+      session_year: payload.session_year,
+      session_week: payload.session_week
     })
-    .select("id, variety_id, row_id, bin_fill_percent, created_at")
+    .select("*")
     .single();
 
   if (error) {
@@ -321,6 +449,55 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
   }
 
   return res.status(201).json(data);
+});
+
+mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
+  try {
+    const varietyId = parseId(req.query.variety_id, "variety_id");
+    const sessionYear = parseRequiredInteger(req.query.session_year, "session_year");
+    const sessionWeek = parseRequiredInteger(req.query.session_week, "session_week");
+
+    const { data, error } = await supabase
+      .from("daily_yield_samples")
+      .select("*")
+      .eq("variety_id", varietyId)
+      .eq("session_year", sessionYear)
+      .eq("session_week", sessionWeek)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+
+    return res.json(data ?? []);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load samples";
+    return res.status(400).json({ message });
+  }
+});
+
+mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", async (req, res) => {
+  try {
+    const varietyId = parseId(req.query.variety_id, "variety_id");
+    const sessionYear = parseRequiredInteger(req.query.session_year, "session_year");
+    const sessionWeek = parseRequiredInteger(req.query.session_week, "session_week");
+
+    const { error } = await supabase
+      .from("daily_yield_samples")
+      .delete()
+      .eq("variety_id", varietyId)
+      .eq("session_year", sessionYear)
+      .eq("session_week", sessionWeek);
+
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+
+    return res.status(204).send();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to reset samples";
+    return res.status(400).json({ message });
+  }
 });
 
 export { mobileDailyYieldRouter };
