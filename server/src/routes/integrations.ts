@@ -156,8 +156,7 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
 
   const { data: viewRows, error: queryError } = await docklinkSupabase
     .from("growlink_weekly_color_totals")
-    .select("organization_id, iso_year, iso_week, pack_color, total_cases")
-    .eq("organization_id", externalOrganizationId);
+    .select("organization_id, iso_year, iso_week, pack_color, total_cases");
 
   if (queryError) {
     console.error("DockLink growlink_weekly_color_totals query error:", queryError);
@@ -171,15 +170,29 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
     throw new Error(`Failed to query DockLink growlink_weekly_color_totals: ${queryError.message}`);
   }
 
-  const rowCount = viewRows?.length ?? 0;
-  console.log(`DockLink growlink_weekly_color_totals returned rows: ${rowCount}`);
+  const totalRowsReturned = viewRows?.length ?? 0;
+  console.log(`DockLink growlink_weekly_color_totals total rows returned: ${totalRowsReturned}`);
 
-  if (!viewRows || viewRows.length === 0) {
+  // Server-side org filter (case-insensitive string comparison with trim)
+  const filteredRows = (viewRows ?? []).filter(row => {
+    console.log("row org raw:", JSON.stringify(row.organization_id));
+    console.log("mapped org raw:", JSON.stringify(externalOrganizationId));
+    const isEqual =
+      String(row.organization_id).trim().toLowerCase() ===
+      String(externalOrganizationId).trim().toLowerCase();
+    console.log("equal:", isEqual);
+    return isEqual;
+  });
+
+  const rowsAfterFilter = filteredRows.length;
+  console.log(`DockLink rows after server-side org filter: ${rowsAfterFilter}`);
+
+  if (!filteredRows || filteredRows.length === 0) {
     console.log(`No rows found in DockLink growlink_weekly_color_totals for mapped organization ${externalOrganizationId}`);
     return weeklyTotals;
   }
 
-  for (const row of viewRows as Record<string, unknown>[]) {
+  for (const row of filteredRows as Record<string, unknown>[]) {
     const colorRaw = row.pack_color;
     if (typeof colorRaw !== "string" || colorRaw.trim().length === 0) {
       continue;
