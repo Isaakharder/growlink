@@ -22,11 +22,11 @@ class HttpError extends Error {
 
 /**
  * DockLink schema:
- * - growlink_weekly_color_totals view: finalized weekly totals by color
- * - expected fields include:
- *   - color
- *   - iso_year or year
- *   - iso_week or week
+ * - growlink_weekly_color_totals view fields used by GrowLink:
+ *   - organization_id
+ *   - iso_year
+ *   - iso_week
+ *   - pack_color
  *   - total_cases
  */
 
@@ -152,9 +152,11 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
 
   const weeklyTotals: DocklinkWeeklyColorTotal[] = [];
 
+  console.log(`DockLink mapped external organization id: ${externalOrganizationId}`);
+
   const { data: viewRows, error: queryError } = await docklinkSupabase
     .from("growlink_weekly_color_totals")
-    .select("*")
+    .select("organization_id, iso_year, iso_week, pack_color, total_cases")
     .eq("organization_id", externalOrganizationId);
 
   if (queryError) {
@@ -169,22 +171,23 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
     throw new Error(`Failed to query DockLink growlink_weekly_color_totals: ${queryError.message}`);
   }
 
+  const rowCount = viewRows?.length ?? 0;
+  console.log(`DockLink growlink_weekly_color_totals returned rows: ${rowCount}`);
+
   if (!viewRows || viewRows.length === 0) {
-    console.log("No rows found in DockLink growlink_weekly_color_totals");
+    console.log(`No rows found in DockLink growlink_weekly_color_totals for mapped organization ${externalOrganizationId}`);
     return weeklyTotals;
   }
 
-  console.log(`Fetched ${viewRows.length} total rows from DockLink growlink_weekly_color_totals`);
-
   for (const row of viewRows as Record<string, unknown>[]) {
-    const colorRaw = row.color;
+    const colorRaw = row.pack_color;
     if (typeof colorRaw !== "string" || colorRaw.trim().length === 0) {
       continue;
     }
 
     const normalizedColor = normalizeColor(colorRaw);
     if (!normalizedColor) {
-      console.warn(`Could not normalize color from DockLink view color: "${String(colorRaw)}"`);
+      console.warn(`Could not normalize color from DockLink view pack_color: "${String(colorRaw)}"`);
       continue;
     }
 
@@ -193,8 +196,8 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
       continue;
     }
 
-    const year = getNumericField(row, "iso_year") ?? getNumericField(row, "year");
-    const week = getNumericField(row, "iso_week") ?? getNumericField(row, "week");
+    const year = getNumericField(row, "iso_year");
+    const week = getNumericField(row, "iso_week");
 
     if (year === null || week === null) {
       continue;
@@ -210,7 +213,7 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
 
   if (weeklyTotals.length === 0) {
     throw new Error(
-      "DockLink view growlink_weekly_color_totals returned rows but none matched required fields: color, total_cases, and iso_year/year + iso_week/week."
+      "DockLink view growlink_weekly_color_totals returned rows but none matched required fields: pack_color, total_cases, iso_year, iso_week."
     );
   }
 
