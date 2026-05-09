@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { apiUrl } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 type VarietyColor = "red" | "orange" | "yellow" | "green";
 
@@ -32,8 +32,8 @@ type WeekOption = {
   label: string;
 };
 
-const OPTIONS_URL = apiUrl("/api/case-entry-options");
-const ENTRIES_URL = apiUrl("/api/color-case-entries");
+const OPTIONS_URL = "/api/case-entry-options";
+const ENTRIES_URL = "/api/color-case-entries";
 
 function getWeekStartSunday(year: number, week: number) {
   const jan1 = new Date(year, 0, 1);
@@ -118,8 +118,8 @@ export function CasesEntryTab() {
 
     try {
       const [optionsResponse, entriesResponse] = await Promise.all([
-        fetch(OPTIONS_URL),
-        fetch(ENTRIES_URL)
+        apiFetch(OPTIONS_URL),
+        apiFetch(ENTRIES_URL)
       ]);
 
       if (!optionsResponse.ok) {
@@ -206,9 +206,8 @@ export function CasesEntryTab() {
       const method = editingId ? "PUT" : "POST";
       const url = editingId ? `${ENTRIES_URL}/${editingId}` : ENTRIES_URL;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -236,7 +235,7 @@ export function CasesEntryTab() {
         case_weight_kg: "0"
       });
 
-      const entriesResponse = await fetch(ENTRIES_URL);
+      const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
         throw new Error("Saved, but failed to refresh entries");
       }
@@ -274,7 +273,7 @@ export function CasesEntryTab() {
     setError(null);
 
     try {
-      const response = await fetch(`${ENTRIES_URL}/${id}`, { method: "DELETE" });
+      const response = await apiFetch(`${ENTRIES_URL}/${id}`, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(`Delete failed (${response.status})`);
       }
@@ -283,7 +282,7 @@ export function CasesEntryTab() {
         setEditingId(null);
       }
 
-      const entriesResponse = await fetch(ENTRIES_URL);
+      const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
         throw new Error("Deleted, but failed to refresh entries");
       }
@@ -302,7 +301,7 @@ export function CasesEntryTab() {
     setError(null);
 
     try {
-      const response = await fetch(apiUrl("/api/integrations/docklink/sync-color-cases"), {
+      const response = await apiFetch("/api/integrations/docklink/sync-color-cases", {
         method: "POST"
       });
 
@@ -321,7 +320,7 @@ export function CasesEntryTab() {
         throw new Error(message);
       }
 
-      const entriesResponse = await fetch(ENTRIES_URL);
+      const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
         throw new Error("Synced, but failed to refresh entries");
       }

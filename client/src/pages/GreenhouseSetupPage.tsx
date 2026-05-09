@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { apiUrl } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -93,11 +93,11 @@ type AssignmentFormState = {
   end_row: string;
 };
 
-const SETUP_URL = apiUrl("/api/greenhouse-setup");
-const GROUPS_URL = apiUrl("/api/greenhouse-groups");
-const ROW_SECTIONS_URL = apiUrl("/api/greenhouse-row-sections");
-const ROWS_URL = apiUrl("/api/greenhouse-rows");
-const ASSIGNMENTS_URL = apiUrl("/api/greenhouse-variety-assignments");
+const SETUP_URL = "/api/greenhouse-setup";
+const GROUPS_URL = "/api/greenhouse-groups";
+const ROW_SECTIONS_URL = "/api/greenhouse-row-sections";
+const ROWS_URL = "/api/greenhouse-rows";
+const ASSIGNMENTS_URL = "/api/greenhouse-variety-assignments";
 
 const TYPE_LABELS: Record<GroupType, string> = {
   phase: "Phase",
@@ -271,7 +271,7 @@ export function GreenhouseSetupPage() {
     setError(null);
 
     try {
-      const response = await fetch(SETUP_URL);
+      const response = await apiFetch(SETUP_URL);
       if (!response.ok) {
         throw new Error("Failed to fetch greenhouse setup");
       }
@@ -463,9 +463,8 @@ export function GreenhouseSetupPage() {
       const method = editingGroupId ? "PUT" : "POST";
       const url = editingGroupId ? `${GROUPS_URL}/${editingGroupId}` : GROUPS_URL;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -543,9 +542,8 @@ export function GreenhouseSetupPage() {
         ? `${ROW_SECTIONS_URL}/${editingRowSectionId}`
         : ROW_SECTIONS_URL;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -614,9 +612,8 @@ export function GreenhouseSetupPage() {
         ? `${ASSIGNMENTS_URL}/${editingAssignmentId}`
         : ASSIGNMENTS_URL;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -668,9 +665,8 @@ export function GreenhouseSetupPage() {
       return;
     }
 
-    const response = await fetch(`${ROWS_URL}/${row.id}`, {
+      const response = await apiFetch(`${ROWS_URL}/${row.id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
@@ -708,7 +704,7 @@ export function GreenhouseSetupPage() {
     setError(null);
 
     try {
-      const response = await fetch(url, { method: "DELETE" });
+      const response = await apiFetch(url, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(`Failed to delete ${label}`);
       }

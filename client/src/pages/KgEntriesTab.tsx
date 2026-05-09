@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { apiUrl } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 type YieldSizeStatus = "active" | "inactive";
 type VarietyStatus = "active" | "inactive";
@@ -49,8 +49,8 @@ type WeekOption = {
   label: string;
 };
 
-const OPTIONS_URL = apiUrl("/api/yield-entry-options");
-const ENTRIES_URL = apiUrl("/api/yield-entries");
+const OPTIONS_URL = "/api/yield-entry-options";
+const ENTRIES_URL = "/api/yield-entries";
 
 function getWeekStartSunday(year: number, week: number) {
   const jan1 = new Date(year, 0, 1);
@@ -162,8 +162,8 @@ export function KgEntriesTab() {
 
     try {
       const [optionsResponse, entriesResponse] = await Promise.all([
-        fetch(OPTIONS_URL),
-        fetch(ENTRIES_URL)
+        apiFetch(OPTIONS_URL),
+        apiFetch(ENTRIES_URL)
       ]);
 
       if (!optionsResponse.ok) {
@@ -275,9 +275,8 @@ export function KgEntriesTab() {
       const method = editingId ? "PUT" : "POST";
       const url = editingId ? `${ENTRIES_URL}/${editingId}` : ENTRIES_URL;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -301,7 +300,7 @@ export function KgEntriesTab() {
         size_kg: resetSizeKgFields(yieldSizes)
       }));
 
-      const entriesResponse = await fetch(ENTRIES_URL);
+      const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
         throw new Error("Saved, but failed to refresh entries");
       }
@@ -346,7 +345,7 @@ export function KgEntriesTab() {
     setError(null);
 
     try {
-      const response = await fetch(`${ENTRIES_URL}/${id}`, { method: "DELETE" });
+      const response = await apiFetch(`${ENTRIES_URL}/${id}`, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(`Delete failed (${response.status})`);
       }
@@ -355,7 +354,7 @@ export function KgEntriesTab() {
         setEditingId(null);
       }
 
-      const entriesResponse = await fetch(ENTRIES_URL);
+      const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
         throw new Error("Deleted, but failed to refresh entries");
       }

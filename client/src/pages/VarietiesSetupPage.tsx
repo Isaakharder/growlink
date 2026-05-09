@@ -209,9 +209,8 @@ export function VarietiesSetupPage() {
       const method = editingId ? "PUT" : "POST";
       const url = editingId ? `${API_BASE}/${editingId}` : API_BASE;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -275,7 +274,7 @@ export function VarietiesSetupPage() {
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE}/${id}`, { method: "DELETE" });
+      const response = await apiFetch(`${API_BASE}/${id}`, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(`Delete failed (${response.status})`);
       }
@@ -318,9 +317,8 @@ export function VarietiesSetupPage() {
         ? `${YIELD_SIZES_API_BASE}/${editingSizeId}`
         : YIELD_SIZES_API_BASE;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
@@ -380,7 +378,7 @@ export function VarietiesSetupPage() {
     setSizesError(null);
 
     try {
-      const response = await fetch(`${YIELD_SIZES_API_BASE}/${id}`, { method: "DELETE" });
+      const response = await apiFetch(`${YIELD_SIZES_API_BASE}/${id}`, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(`Delete failed (${response.status})`);
       }
