@@ -102,11 +102,15 @@ function calculateTotals(sizeKg: Record<string, number>, variety: VarietyForCalc
   return { total_kg, kg_per_m2, total_cases };
 }
 
-async function fetchVarietyForCalc(varietyId: string): Promise<VarietyForCalc> {
+async function fetchVarietyForCalc(
+  varietyId: string,
+  organizationId: string
+): Promise<VarietyForCalc> {
   const { data, error } = await supabase
     .from("varieties")
     .select("id, area_m2, case_kg")
     .eq("id", varietyId)
+    .eq("organization_id", organizationId)
     .single();
 
   if (error || !data) {
@@ -118,16 +122,20 @@ async function fetchVarietyForCalc(varietyId: string): Promise<VarietyForCalc> {
 
 const yieldEntriesRouter = Router();
 
-yieldEntriesRouter.get("/yield-entry-options", async (_req, res) => {
+yieldEntriesRouter.get("/yield-entry-options", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const [varietiesResult, sizesResult] = await Promise.all([
     supabase
       .from("varieties")
       .select("id, name, area_m2, case_kg, status, color")
+      .eq("organization_id", organizationId)
       .eq("status", "active")
       .order("name", { ascending: true }),
     supabase
       .from("yield_sizes")
       .select("id, name, sort_order, status")
+      .eq("organization_id", organizationId)
       .eq("status", "active")
       .order("sort_order", { ascending: true })
   ]);
@@ -146,12 +154,15 @@ yieldEntriesRouter.get("/yield-entry-options", async (_req, res) => {
   });
 });
 
-yieldEntriesRouter.get("/yield-entries", async (_req, res) => {
+yieldEntriesRouter.get("/yield-entries", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const { data, error } = await supabase
     .from("yield_entries")
     .select(
       "id, variety_id, year, week, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name)"
     )
+    .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -181,6 +192,7 @@ yieldEntriesRouter.get("/yield-entries", async (_req, res) => {
 });
 
 yieldEntriesRouter.post("/yield-entries", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: YieldEntryPayload;
 
   try {
@@ -191,12 +203,12 @@ yieldEntriesRouter.post("/yield-entries", async (req, res) => {
   }
 
   try {
-    const variety = await fetchVarietyForCalc(payload.variety_id);
+    const variety = await fetchVarietyForCalc(payload.variety_id, organizationId);
     const totals = calculateTotals(payload.size_kg, variety);
 
     const { data, error } = await supabase
       .from("yield_entries")
-      .insert({ ...payload, ...totals })
+      .insert({ ...payload, ...totals, organization_id: organizationId })
       .select("*")
       .single();
 
@@ -212,6 +224,7 @@ yieldEntriesRouter.post("/yield-entries", async (req, res) => {
 });
 
 yieldEntriesRouter.put("/yield-entries/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: YieldEntryPayload;
 
@@ -223,13 +236,14 @@ yieldEntriesRouter.put("/yield-entries/:id", async (req, res) => {
   }
 
   try {
-    const variety = await fetchVarietyForCalc(payload.variety_id);
+    const variety = await fetchVarietyForCalc(payload.variety_id, organizationId);
     const totals = calculateTotals(payload.size_kg, variety);
 
     const { data, error } = await supabase
       .from("yield_entries")
       .update({ ...payload, ...totals, updated_at: new Date().toISOString() })
       .eq("id", id)
+      .eq("organization_id", organizationId)
       .select("*")
       .single();
 
@@ -245,9 +259,14 @@ yieldEntriesRouter.put("/yield-entries/:id", async (req, res) => {
 });
 
 yieldEntriesRouter.delete("/yield-entries/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase.from("yield_entries").delete().eq("id", id);
+  const { error } = await supabase
+    .from("yield_entries")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });
@@ -256,19 +275,24 @@ yieldEntriesRouter.delete("/yield-entries/:id", async (req, res) => {
   return res.status(204).send();
 });
 
-yieldEntriesRouter.get("/yield-analytics/summary", async (_req, res) => {
+yieldEntriesRouter.get("/yield-analytics/summary", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const [entriesResult, sizesResult, varietiesResult] = await Promise.all([
     supabase
       .from("yield_entries")
-      .select("variety_id, total_kg, average_fruit_weight_g, size_kg, varieties(id, name, area_m2)"),
+      .select("variety_id, total_kg, average_fruit_weight_g, size_kg, varieties(id, name, area_m2)")
+      .eq("organization_id", organizationId),
     supabase
       .from("yield_sizes")
       .select("id, name, sort_order")
+      .eq("organization_id", organizationId)
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true }),
     supabase
       .from("varieties")
       .select("id, name, area_m2")
+      .eq("organization_id", organizationId)
       .order("name", { ascending: true })
   ]);
 
@@ -430,10 +454,11 @@ function validateColorCasePayload(input: unknown): ColorCasePayload {
   };
 }
 
-async function fetchColorAreaM2(): Promise<ColorAreaMap> {
+async function fetchColorAreaM2(organizationId: string): Promise<ColorAreaMap> {
   const { data, error } = await supabase
     .from("varieties")
     .select("color, area_m2")
+    .eq("organization_id", organizationId)
     .eq("status", "active");
 
   if (error) {
@@ -452,10 +477,13 @@ async function fetchColorAreaM2(): Promise<ColorAreaMap> {
   return colorAreaMap;
 }
 
-yieldEntriesRouter.get("/color-case-entries", async (_req, res) => {
+yieldEntriesRouter.get("/color-case-entries", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const { data, error } = await supabase
     .from("color_case_entries")
     .select("*")
+    .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -466,6 +494,7 @@ yieldEntriesRouter.get("/color-case-entries", async (_req, res) => {
 });
 
 yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: ColorCasePayload;
 
   try {
@@ -476,7 +505,7 @@ yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
   }
 
   try {
-    const colorAreaMap = await fetchColorAreaM2();
+    const colorAreaMap = await fetchColorAreaM2(organizationId);
     const color_area_m2 = colorAreaMap[payload.color] ?? 0;
     const total_kg = payload.total_cases * payload.case_weight_kg;
     const kg_per_m2 = color_area_m2 > 0 ? total_kg / color_area_m2 : 0;
@@ -484,6 +513,7 @@ yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
     const { data, error } = await supabase
       .from("color_case_entries")
       .insert({
+        organization_id: organizationId,
         color: payload.color,
         year: payload.year,
         week: payload.week,
@@ -508,6 +538,7 @@ yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
 });
 
 yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: ColorCasePayload;
 
@@ -519,7 +550,7 @@ yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
   }
 
   try {
-    const colorAreaMap = await fetchColorAreaM2();
+    const colorAreaMap = await fetchColorAreaM2(organizationId);
     const color_area_m2 = colorAreaMap[payload.color] ?? 0;
     const total_kg = payload.total_cases * payload.case_weight_kg;
     const kg_per_m2 = color_area_m2 > 0 ? total_kg / color_area_m2 : 0;
@@ -538,6 +569,7 @@ yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
         updated_at: new Date().toISOString()
       })
       .eq("id", id)
+      .eq("organization_id", organizationId)
       .select("*")
       .single();
 
@@ -553,9 +585,14 @@ yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
 });
 
 yieldEntriesRouter.delete("/color-case-entries/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase.from("color_case_entries").delete().eq("id", id);
+  const { error } = await supabase
+    .from("color_case_entries")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });
@@ -564,10 +601,13 @@ yieldEntriesRouter.delete("/color-case-entries/:id", async (req, res) => {
   return res.status(204).send();
 });
 
-yieldEntriesRouter.get("/case-entry-options", async (_req, res) => {
+yieldEntriesRouter.get("/case-entry-options", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const { data, error } = await supabase
     .from("varieties")
     .select("color")
+    .eq("organization_id", organizationId)
     .eq("status", "active");
 
   if (error) {

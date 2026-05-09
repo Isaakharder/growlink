@@ -210,11 +210,12 @@ function generateRowNumbers(startRow: number, endRow: number, pattern: RowPatter
   return rowNumbers;
 }
 
-async function ensureGroupExists(groupId: string) {
+async function ensureGroupExists(groupId: string, organizationId: string) {
   const { data, error } = await supabase
     .from("greenhouse_groups")
     .select("id")
     .eq("id", groupId)
+    .eq("organization_id", organizationId)
     .single();
 
   if (error || !data) {
@@ -222,11 +223,12 @@ async function ensureGroupExists(groupId: string) {
   }
 }
 
-async function ensureVarietyExists(varietyId: string) {
+async function ensureVarietyExists(varietyId: string, organizationId: string) {
   const { data, error } = await supabase
     .from("varieties")
     .select("id")
     .eq("id", varietyId)
+    .eq("organization_id", organizationId)
     .single();
 
   if (error || !data) {
@@ -236,6 +238,7 @@ async function ensureVarietyExists(varietyId: string) {
 
 async function ensureAssignmentRangeWithinGeneratedRows(
   groupId: string,
+  organizationId: string,
   startRow: number,
   endRow: number
 ) {
@@ -243,6 +246,7 @@ async function ensureAssignmentRangeWithinGeneratedRows(
     .from("greenhouse_rows")
     .select("row_number")
     .eq("group_id", groupId)
+    .eq("organization_id", organizationId)
     .gte("row_number", startRow)
     .lte("row_number", endRow);
 
@@ -261,7 +265,11 @@ async function ensureAssignmentRangeWithinGeneratedRows(
   }
 }
 
-async function upsertRowsFromSection(sectionId: string, payload: GreenhouseRowSectionPayload) {
+async function upsertRowsFromSection(
+  sectionId: string,
+  organizationId: string,
+  payload: GreenhouseRowSectionPayload
+) {
   const rowNumbers = generateRowNumbers(payload.start_row, payload.end_row, payload.row_pattern);
 
   if (rowNumbers.length === 0) {
@@ -270,6 +278,7 @@ async function upsertRowsFromSection(sectionId: string, payload: GreenhouseRowSe
 
   const now = new Date().toISOString();
   const rows = rowNumbers.map((rowNumber) => ({
+    organization_id: organizationId,
     group_id: payload.group_id,
     section_id: sectionId,
     row_number: rowNumber,
@@ -290,29 +299,36 @@ async function upsertRowsFromSection(sectionId: string, payload: GreenhouseRowSe
 
 const greenhouseSetupRouter = Router();
 
-greenhouseSetupRouter.get("/greenhouse-setup", async (_req, res) => {
+greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const [groupsResult, sectionsResult, rowsResult, assignmentsResult, varietiesResult] =
     await Promise.all([
     supabase
       .from("greenhouse_groups")
       .select("*")
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: true }),
     supabase
       .from("greenhouse_row_sections")
       .select("*")
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: true }),
     supabase
       .from("greenhouse_rows")
       .select("*")
+      .eq("organization_id", organizationId)
       .order("row_number", { ascending: true })
       ,
     supabase
       .from("greenhouse_variety_assignments")
       .select("*")
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: true }),
     supabase
       .from("varieties")
       .select("id,name,color,status")
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: true })
   ]);
 
@@ -346,6 +362,7 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (_req, res) => {
 });
 
 greenhouseSetupRouter.post("/greenhouse-groups", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: GreenhouseGroupPayload;
 
   try {
@@ -357,7 +374,7 @@ greenhouseSetupRouter.post("/greenhouse-groups", async (req, res) => {
 
   const { data, error } = await supabase
     .from("greenhouse_groups")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -369,6 +386,7 @@ greenhouseSetupRouter.post("/greenhouse-groups", async (req, res) => {
 });
 
 greenhouseSetupRouter.put("/greenhouse-groups/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseGroupPayload;
 
@@ -383,6 +401,7 @@ greenhouseSetupRouter.put("/greenhouse-groups/:id", async (req, res) => {
     .from("greenhouse_groups")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -394,9 +413,14 @@ greenhouseSetupRouter.put("/greenhouse-groups/:id", async (req, res) => {
 });
 
 greenhouseSetupRouter.delete("/greenhouse-groups/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase.from("greenhouse_groups").delete().eq("id", id);
+  const { error } = await supabase
+    .from("greenhouse_groups")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });
@@ -406,11 +430,12 @@ greenhouseSetupRouter.delete("/greenhouse-groups/:id", async (req, res) => {
 });
 
 greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: GreenhouseRowSectionPayload;
 
   try {
     payload = validateRowSectionPayload(req.body);
-    await ensureGroupExists(payload.group_id);
+    await ensureGroupExists(payload.group_id, organizationId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -418,7 +443,7 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
 
   const { data: sectionData, error: sectionError } = await supabase
     .from("greenhouse_row_sections")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -429,12 +454,13 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
   }
 
   try {
-    await upsertRowsFromSection((sectionData as { id: string }).id, payload);
+    await upsertRowsFromSection((sectionData as { id: string }).id, organizationId, payload);
   } catch (error) {
     await supabase
       .from("greenhouse_row_sections")
       .delete()
-      .eq("id", (sectionData as { id: string }).id);
+      .eq("id", (sectionData as { id: string }).id)
+      .eq("organization_id", organizationId);
 
     const message = error instanceof Error ? error.message : "Failed to generate rows";
     return res.status(500).json({ message });
@@ -444,12 +470,13 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
 });
 
 greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseRowSectionPayload;
 
   try {
     payload = validateRowSectionPayload(req.body);
-    await ensureGroupExists(payload.group_id);
+    await ensureGroupExists(payload.group_id, organizationId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -459,6 +486,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
     .from("greenhouse_row_sections")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -478,7 +506,8 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
     const { error: clearError } = await supabase
       .from("greenhouse_rows")
       .delete()
-      .eq("section_id", id);
+      .eq("section_id", id)
+      .eq("organization_id", organizationId);
 
     if (clearError) {
       return res.status(500).json({ message: clearError.message });
@@ -488,6 +517,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
       .from("greenhouse_rows")
       .delete()
       .eq("section_id", id)
+      .eq("organization_id", organizationId)
       .not("row_number", "in", `(${rowNumbersToKeep.join(",")})`);
 
     if (clearError) {
@@ -496,7 +526,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
   }
 
   try {
-    await upsertRowsFromSection(id, payload);
+    await upsertRowsFromSection(id, organizationId, payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update generated rows";
     return res.status(500).json({ message });
@@ -506,18 +536,24 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
 });
 
 greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
   const { error: rowsError } = await supabase
     .from("greenhouse_rows")
     .delete()
-    .eq("section_id", id);
+    .eq("section_id", id)
+    .eq("organization_id", organizationId);
 
   if (rowsError) {
     return res.status(500).json({ message: rowsError.message });
   }
 
-  const { error } = await supabase.from("greenhouse_row_sections").delete().eq("id", id);
+  const { error } = await supabase
+    .from("greenhouse_row_sections")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });
@@ -527,6 +563,7 @@ greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) =>
 });
 
 greenhouseSetupRouter.put("/greenhouse-rows/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseRowPayload;
 
@@ -541,6 +578,7 @@ greenhouseSetupRouter.put("/greenhouse-rows/:id", async (req, res) => {
     .from("greenhouse_rows")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -552,14 +590,16 @@ greenhouseSetupRouter.put("/greenhouse-rows/:id", async (req, res) => {
 });
 
 greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: GreenhouseVarietyAssignmentPayload;
 
   try {
     payload = validateVarietyAssignmentPayload(req.body);
-    await ensureGroupExists(payload.group_id);
-    await ensureVarietyExists(payload.variety_id);
+    await ensureGroupExists(payload.group_id, organizationId);
+    await ensureVarietyExists(payload.variety_id, organizationId);
     await ensureAssignmentRangeWithinGeneratedRows(
       payload.group_id,
+      organizationId,
       payload.start_row,
       payload.end_row
     );
@@ -570,7 +610,7 @@ greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) =
 
   const { data, error } = await supabase
     .from("greenhouse_variety_assignments")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -582,15 +622,17 @@ greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) =
 });
 
 greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseVarietyAssignmentPayload;
 
   try {
     payload = validateVarietyAssignmentPayload(req.body);
-    await ensureGroupExists(payload.group_id);
-    await ensureVarietyExists(payload.variety_id);
+    await ensureGroupExists(payload.group_id, organizationId);
+    await ensureVarietyExists(payload.variety_id, organizationId);
     await ensureAssignmentRangeWithinGeneratedRows(
       payload.group_id,
+      organizationId,
       payload.start_row,
       payload.end_row
     );
@@ -603,6 +645,7 @@ greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res
     .from("greenhouse_variety_assignments")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -614,12 +657,14 @@ greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res
 });
 
 greenhouseSetupRouter.delete("/greenhouse-variety-assignments/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
   const { error } = await supabase
     .from("greenhouse_variety_assignments")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });

@@ -50,10 +50,13 @@ function validatePayload(input: unknown): YieldSizePayload {
 
 const yieldSizesRouter = Router();
 
-yieldSizesRouter.get("/yield-sizes", async (_req, res) => {
+yieldSizesRouter.get("/yield-sizes", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const { data, error } = await supabase
     .from("yield_sizes")
     .select("*")
+    .eq("organization_id", organizationId)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
@@ -65,6 +68,7 @@ yieldSizesRouter.get("/yield-sizes", async (_req, res) => {
 });
 
 yieldSizesRouter.post("/yield-sizes", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: YieldSizePayload;
 
   try {
@@ -76,7 +80,7 @@ yieldSizesRouter.post("/yield-sizes", async (req, res) => {
 
   const { data, error } = await supabase
     .from("yield_sizes")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -88,6 +92,7 @@ yieldSizesRouter.post("/yield-sizes", async (req, res) => {
 });
 
 yieldSizesRouter.put("/yield-sizes/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: YieldSizePayload;
 
@@ -102,6 +107,7 @@ yieldSizesRouter.put("/yield-sizes/:id", async (req, res) => {
     .from("yield_sizes")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -113,9 +119,14 @@ yieldSizesRouter.put("/yield-sizes/:id", async (req, res) => {
 });
 
 yieldSizesRouter.delete("/yield-sizes/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase.from("yield_sizes").delete().eq("id", id);
+  const { error } = await supabase
+    .from("yield_sizes")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });

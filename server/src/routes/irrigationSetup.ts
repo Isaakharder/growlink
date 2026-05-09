@@ -90,18 +90,39 @@ function validateLinkedItemPayload(input: unknown): LinkedItemPayload {
   };
 }
 
+async function ensureGroupExists(groupId: string, organizationId: string) {
+  const { data, error } = await supabase
+    .from("irrigation_groups")
+    .select("id")
+    .eq("id", groupId)
+    .eq("organization_id", organizationId)
+    .single();
+
+  if (error || !data) {
+    throw new Error("Selected group was not found");
+  }
+}
+
 const irrigationSetupRouter = Router();
 
-irrigationSetupRouter.get("/irrigation-setup", async (_req, res) => {
+irrigationSetupRouter.get("/irrigation-setup", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const [groupsResult, feedValvesResult, drainBucketsResult] = await Promise.all([
-    supabase.from("irrigation_groups").select("*").order("created_at", { ascending: true }),
+    supabase
+      .from("irrigation_groups")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: true }),
     supabase
       .from("irrigation_feed_valves")
       .select("*")
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: true }),
     supabase
       .from("irrigation_drain_buckets")
       .select("*")
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: true })
   ]);
 
@@ -125,6 +146,7 @@ irrigationSetupRouter.get("/irrigation-setup", async (_req, res) => {
 });
 
 irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: IrrigationGroupPayload;
 
   try {
@@ -136,7 +158,7 @@ irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
 
   const { data, error } = await supabase
     .from("irrigation_groups")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -148,6 +170,7 @@ irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
 });
 
 irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: IrrigationGroupPayload;
 
@@ -162,6 +185,7 @@ irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
     .from("irrigation_groups")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -173,9 +197,14 @@ irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
 });
 
 irrigationSetupRouter.delete("/irrigation-groups/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase.from("irrigation_groups").delete().eq("id", id);
+  const { error } = await supabase
+    .from("irrigation_groups")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });
@@ -185,10 +214,12 @@ irrigationSetupRouter.delete("/irrigation-groups/:id", async (req, res) => {
 });
 
 irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: LinkedItemPayload;
 
   try {
     payload = validateLinkedItemPayload(req.body);
+    await ensureGroupExists(payload.group_id, organizationId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -196,7 +227,7 @@ irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
 
   const { data, error } = await supabase
     .from("irrigation_feed_valves")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -208,11 +239,13 @@ irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
 });
 
 irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: LinkedItemPayload;
 
   try {
     payload = validateLinkedItemPayload(req.body);
+    await ensureGroupExists(payload.group_id, organizationId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -222,6 +255,7 @@ irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
     .from("irrigation_feed_valves")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -233,12 +267,14 @@ irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
 });
 
 irrigationSetupRouter.delete("/irrigation-feed-valves/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
   const { error } = await supabase
     .from("irrigation_feed_valves")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });
@@ -248,10 +284,12 @@ irrigationSetupRouter.delete("/irrigation-feed-valves/:id", async (req, res) => 
 });
 
 irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: LinkedItemPayload;
 
   try {
     payload = validateLinkedItemPayload(req.body);
+    await ensureGroupExists(payload.group_id, organizationId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -259,7 +297,7 @@ irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
 
   const { data, error } = await supabase
     .from("irrigation_drain_buckets")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -271,11 +309,13 @@ irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
 });
 
 irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: LinkedItemPayload;
 
   try {
     payload = validateLinkedItemPayload(req.body);
+    await ensureGroupExists(payload.group_id, organizationId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
@@ -285,6 +325,7 @@ irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
     .from("irrigation_drain_buckets")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -296,12 +337,14 @@ irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
 });
 
 irrigationSetupRouter.delete("/irrigation-drain-buckets/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
   const { error } = await supabase
     .from("irrigation_drain_buckets")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });

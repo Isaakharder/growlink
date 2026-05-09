@@ -187,6 +187,7 @@ function resolveTrackingMode(groups: IrrigationGroup[]): GroupType | null {
 const mobileIrrigationLogRouter = Router();
 
 mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
+  const organizationId = req.organizationId;
   const days = parseDaysQuery(req.query.days);
   const fromDate = new Date();
   fromDate.setDate(fromDate.getDate() - (days - 1));
@@ -196,6 +197,7 @@ mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
   const { data, error } = await supabase
     .from("mobile_irrigation_logs")
     .select("*")
+    .eq("organization_id", organizationId)
     .gte("log_date", fromDateString)
     .order("log_date", { ascending: false })
     .order("group_name", { ascending: true });
@@ -208,6 +210,7 @@ mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
 });
 
 mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
+  const organizationId = req.organizationId;
   const requestedDate = req.query.log_date;
   const logDate =
     typeof requestedDate === "string" && requestedDate.trim().length > 0
@@ -221,6 +224,7 @@ mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
   const { data: groupsData, error: groupsError } = await supabase
     .from("irrigation_groups")
     .select("id, type, name, status, created_at")
+    .eq("organization_id", organizationId)
     .eq("status", "active")
     .order("created_at", { ascending: true });
 
@@ -254,18 +258,21 @@ mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
     supabase
       .from("irrigation_feed_valves")
       .select("id, name, group_id, dripper_count, status")
+      .eq("organization_id", organizationId)
       .eq("status", "active")
       .in("group_id", groupIds)
       .order("created_at", { ascending: true }),
     supabase
       .from("irrigation_drain_buckets")
       .select("id, name, group_id, dripper_count, status")
+      .eq("organization_id", organizationId)
       .eq("status", "active")
       .in("group_id", groupIds)
       .order("created_at", { ascending: true }),
     supabase
       .from("mobile_irrigation_logs")
       .select("*")
+      .eq("organization_id", organizationId)
       .eq("log_date", logDate)
       .in("group_key", groupIds)
   ]);
@@ -310,6 +317,7 @@ mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
 });
 
 mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res) => {
+  const organizationId = req.organizationId;
   const groupId = typeof req.params.groupId === "string" ? req.params.groupId.trim() : "";
 
   if (!groupId) {
@@ -360,6 +368,7 @@ mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res
     .from("irrigation_groups")
     .select("id, type, name")
     .eq("id", groupId)
+    .eq("organization_id", organizationId)
     .single();
 
   if (groupError || !groupData) {
@@ -374,11 +383,13 @@ mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res
     supabase
       .from("irrigation_feed_valves")
       .select("id, name")
+      .eq("organization_id", organizationId)
       .eq("group_id", groupId)
       .eq("status", "active"),
     supabase
       .from("irrigation_drain_buckets")
       .select("id, name")
+      .eq("organization_id", organizationId)
       .eq("group_id", groupId)
       .eq("status", "active")
   ]);
@@ -421,6 +432,7 @@ mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res
   const now = new Date().toISOString();
 
   const upsertPayload = {
+    organization_id: organizationId,
     log_date: logDate,
     tracking_mode: trackingMode,
     group_id: groupData.id,
@@ -441,7 +453,7 @@ mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res
   const { data, error } = await supabase
     .from("mobile_irrigation_logs")
     .upsert(upsertPayload, {
-      onConflict: "log_date,group_key"
+      onConflict: "organization_id,log_date,group_key"
     })
     .select("*")
     .single();

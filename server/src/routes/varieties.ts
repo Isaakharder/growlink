@@ -89,10 +89,13 @@ function validatePayload(input: unknown): VarietyPayload {
 
 const varietiesRouter = Router();
 
-varietiesRouter.get("/varieties", async (_req, res) => {
+varietiesRouter.get("/varieties", async (req, res) => {
+  const organizationId = req.organizationId;
+
   const { data, error } = await supabase
     .from("varieties")
     .select("*")
+    .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -103,6 +106,7 @@ varietiesRouter.get("/varieties", async (_req, res) => {
 });
 
 varietiesRouter.post("/varieties", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: VarietyPayload;
 
   try {
@@ -114,7 +118,7 @@ varietiesRouter.post("/varieties", async (req, res) => {
 
   const { data, error } = await supabase
     .from("varieties")
-    .insert(payload)
+    .insert({ ...payload, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -126,6 +130,7 @@ varietiesRouter.post("/varieties", async (req, res) => {
 });
 
 varietiesRouter.put("/varieties/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: VarietyPayload;
 
@@ -140,6 +145,7 @@ varietiesRouter.put("/varieties/:id", async (req, res) => {
     .from("varieties")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("organization_id", organizationId)
     .select("*")
     .single();
 
@@ -151,9 +157,14 @@ varietiesRouter.put("/varieties/:id", async (req, res) => {
 });
 
 varietiesRouter.delete("/varieties/:id", async (req, res) => {
+  const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase.from("varieties").delete().eq("id", id);
+  const { error } = await supabase
+    .from("varieties")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return res.status(500).json({ message: error.message });

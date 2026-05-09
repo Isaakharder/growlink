@@ -170,10 +170,11 @@ function validateSamplePayload(input: unknown): MobileYieldSamplePayload {
   };
 }
 
-async function getCurrentCasesPerBin(): Promise<number> {
+async function getCurrentCasesPerBin(organizationId: string): Promise<number> {
   const { data, error } = await supabase
     .from("daily_yield_bin_settings")
     .select("cases_per_bin")
+    .eq("organization_id", organizationId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -194,19 +195,22 @@ async function getCurrentCasesPerBin(): Promise<number> {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CASES_PER_BIN;
 }
 
-async function fetchRowsLinkedToActiveVarieties() {
+async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
   const [varietiesResult, assignmentsResult, rowsResult] = await Promise.all([
     supabase
       .from("varieties")
       .select("id, name, color, status")
+      .eq("organization_id", organizationId)
       .eq("status", "active")
       .order("name", { ascending: true }),
     supabase
       .from("greenhouse_variety_assignments")
-      .select("variety_id, group_id, start_row, end_row"),
+      .select("variety_id, group_id, start_row, end_row")
+      .eq("organization_id", organizationId),
     supabase
       .from("greenhouse_rows")
       .select("id, group_id, row_number, slab_count, plants_per_slab, stems_per_plant")
+      .eq("organization_id", organizationId)
       .order("row_number", { ascending: true })
   ]);
 
@@ -296,11 +300,27 @@ async function fetchRowsLinkedToActiveVarieties() {
   };
 }
 
-async function ensureRowLinkedToVariety(varietyId: string, rowId: string) {
+async function ensureRowLinkedToVariety(
+  varietyId: string,
+  rowId: string,
+  organizationId: string
+) {
+  const { data: varietyData, error: varietyError } = await supabase
+    .from("varieties")
+    .select("id")
+    .eq("id", varietyId)
+    .eq("organization_id", organizationId)
+    .single();
+
+  if (varietyError || !varietyData) {
+    throw new Error("Selected variety was not found");
+  }
+
   const { data: rowData, error: rowError } = await supabase
     .from("greenhouse_rows")
     .select("id, group_id, row_number")
     .eq("id", rowId)
+    .eq("organization_id", organizationId)
     .single();
 
   if (rowError || !rowData) {
@@ -310,6 +330,7 @@ async function ensureRowLinkedToVariety(varietyId: string, rowId: string) {
   const { data: assignmentData, error: assignmentError } = await supabase
     .from("greenhouse_variety_assignments")
     .select("id")
+    .eq("organization_id", organizationId)
     .eq("variety_id", varietyId)
     .eq("group_id", rowData.group_id)
     .lte("start_row", rowData.row_number)
@@ -328,11 +349,13 @@ async function ensureRowLinkedToVariety(varietyId: string, rowId: string) {
 
 const mobileDailyYieldRouter = Router();
 
-mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (_req, res) => {
+mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (req, res) => {
+  const organizationId = req.organizationId;
+
   try {
     const [options, casesPerBin] = await Promise.all([
-      fetchRowsLinkedToActiveVarieties(),
-      getCurrentCasesPerBin()
+      fetchRowsLinkedToActiveVarieties(organizationId),
+      getCurrentCasesPerBin(organizationId)
     ]);
 
     return res.json({
@@ -346,9 +369,11 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (_req, res) => {
   }
 });
 
-mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (_req, res) => {
+mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (req, res) => {
+  const organizationId = req.organizationId;
+
   try {
-    const casesPerBin = await getCurrentCasesPerBin();
+    const casesPerBin = await getCurrentCasesPerBin(organizationId);
     return res.json({
       cases_per_bin: casesPerBin,
       kg_per_full_bin: DEFAULT_KG_PER_FULL_BIN,
@@ -361,6 +386,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (_req, res) => 
 });
 
 mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
+  const organizationId = req.organizationId;
   let casesPerBin: number;
 
   try {
@@ -376,6 +402,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
   const { data: currentSetting, error: currentError } = await supabase
     .from("daily_yield_bin_settings")
     .select("id")
+    .eq("organization_id", organizationId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -389,6 +416,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
       .from("daily_yield_bin_settings")
       .update({ cases_per_bin: casesPerBin, updated_at: now })
       .eq("id", currentSetting.id)
+      .eq("organization_id", organizationId)
       .select("id, cases_per_bin, created_at, updated_at")
       .single();
 
@@ -401,7 +429,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
 
   const { data, error } = await supabase
     .from("daily_yield_bin_settings")
-    .insert({ cases_per_bin: casesPerBin, updated_at: now })
+    .insert({ organization_id: organizationId, cases_per_bin: casesPerBin, updated_at: now })
     .select("id, cases_per_bin, created_at, updated_at")
     .single();
 
@@ -413,6 +441,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
 });
 
 mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
+  const organizationId = req.organizationId;
   let payload: MobileYieldSamplePayload;
 
   try {
@@ -422,9 +451,17 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
     return res.status(400).json({ message });
   }
 
+  try {
+    await ensureRowLinkedToVariety(payload.variety_id, payload.row_id, organizationId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid row/variety selection";
+    return res.status(400).json({ message });
+  }
+
   const { data, error } = await supabase
     .from("daily_yield_samples")
     .insert({
+      organization_id: organizationId,
       variety_id: payload.variety_id,
       row_id: payload.row_id,
       phase_id: payload.phase_id,
@@ -452,6 +489,8 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
 });
 
 mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
+  const organizationId = req.organizationId;
+
   try {
     const varietyId = parseId(req.query.variety_id, "variety_id");
     const sessionYear = parseRequiredInteger(req.query.session_year, "session_year");
@@ -460,6 +499,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
     const { data, error } = await supabase
       .from("daily_yield_samples")
       .select("*")
+      .eq("organization_id", organizationId)
       .eq("variety_id", varietyId)
       .eq("session_year", sessionYear)
       .eq("session_week", sessionWeek)
@@ -477,6 +517,8 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
 });
 
 mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", async (req, res) => {
+  const organizationId = req.organizationId;
+
   try {
     const varietyId = parseId(req.query.variety_id, "variety_id");
     const sessionYear = parseRequiredInteger(req.query.session_year, "session_year");
@@ -485,6 +527,7 @@ mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", async (req, res) =>
     const { error } = await supabase
       .from("daily_yield_samples")
       .delete()
+      .eq("organization_id", organizationId)
       .eq("variety_id", varietyId)
       .eq("session_year", sessionYear)
       .eq("session_week", sessionWeek);
