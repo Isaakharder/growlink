@@ -244,6 +244,40 @@ body {
   color: var(--text-muted);
 }
 
+.tab-navigation {
+  margin-top: 1.25rem;
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+}
+
+.tab-button {
+  padding: 0.75rem 1.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s ease;
+}
+
+.tab-button:hover {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.tab-button.active {
+  color: var(--text);
+  border-bottom-color: var(--brand);
+}
+
+.tab-content {
+  margin-top: 1.25rem;
+}
+
 .coming-soon-card {
   margin-top: 1.25rem;
   background: var(--surface);
@@ -261,6 +295,82 @@ body {
 .coming-soon-card p {
   margin: 0.65rem 0 0;
   color: var(--text-muted);
+}
+
+.color-share-card {
+  margin-top: 1.25rem;
+}
+
+.color-share-description {
+  margin: 0.65rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.color-groups-container {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.color-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 0.85rem;
+}
+
+.color-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.6rem;
+}
+
+.color-group-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.color-group-total {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.color-group-varieties {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.variety-share-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.88rem;
+  padding: 0.4rem 0;
+}
+
+.variety-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.variety-kg {
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.variety-percent {
+  color: var(--text-muted);
+  text-align: right;
+  min-width: 45px;
 }
 
 .irrigation-summary-grid {
@@ -378,6 +488,60 @@ body {
 
 .yield-entry-table {
   min-width: 100%;
+}
+
+.recent-entries-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.recent-entries-header h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 1.05rem;
+}
+
+.sync-button {
+  padding: 0.5rem 0.9rem;
+  background: var(--brand-soft);
+  color: #0a5e4c;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sync-button:hover:not(:disabled) {
+  background: var(--brand);
+  color: white;
+}
+
+.sync-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.source-badge {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.source-manual {
+  background: #e8f5e9;
+  color: #1b5e20;
+}
+
+.source-docklink {
+  background: #e3f2fd;
+  color: #0d47a1;
 }
 
 .form-actions {
@@ -1108,6 +1272,10 @@ body {
   }
 
   .greenhouse-top-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .color-groups-container {
     grid-template-columns: 1fr;
   }
 }

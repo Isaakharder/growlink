@@ -1,7 +1,9 @@
 import cors from "cors";
 import express from "express";
+import { requireOrganizationContext } from "./middleware/requireOrganizationContext";
 import { greenhouseSetupRouter } from "./routes/greenhouseSetup";
 import { healthRouter } from "./routes/health";
+import { integrationsRouter } from "./routes/integrations";
 import { irrigationSetupRouter } from "./routes/irrigationSetup";
 import { mobileDailyYieldRouter } from "./routes/mobileDailyYield";
 import { mobileIrrigationLogRouter } from "./routes/mobileIrrigationLog";
@@ -15,7 +17,9 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api", healthRouter);
+app.use("/api", requireOrganizationContext);
 app.use("/api", greenhouseSetupRouter);
+app.use("/api", integrationsRouter);
 app.use("/api", irrigationSetupRouter);
 app.use("/api", varietiesRouter);
 app.use("/api", yieldEntriesRouter);

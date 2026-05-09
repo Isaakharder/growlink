@@ -122,7 +122,7 @@ yieldEntriesRouter.get("/yield-entry-options", async (_req, res) => {
   const [varietiesResult, sizesResult] = await Promise.all([
     supabase
       .from("varieties")
-      .select("id, name, area_m2, case_kg, status")
+      .select("id, name, area_m2, case_kg, status, color")
       .eq("status", "active")
       .order("name", { ascending: true }),
     supabase
@@ -368,6 +368,222 @@ yieldEntriesRouter.get("/yield-analytics/summary", async (_req, res) => {
   rows.sort((a, b) => a.variety_name.localeCompare(b.variety_name));
 
   return res.json({ sizes, rows });
+});
+
+// Color case entries endpoints
+type ColorCasePayload = {
+  color: string;
+  year: number;
+  week: number;
+  total_cases: number;
+  case_weight_kg: number;
+};
+
+type ColorAreaMap = {
+  [color: string]: number;
+};
+
+function parseRequiredNonNegativeNumber(value: unknown, fieldName: string): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${fieldName} must be 0 or greater`);
+  }
+
+  return parsed;
+}
+
+function validateColor(value: unknown): string {
+  const color = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const validColors = ["red", "orange", "yellow", "green"];
+
+  if (!validColors.includes(color)) {
+    throw new Error(`color must be one of: ${validColors.join(", ")}`);
+  }
+
+  return color;
+}
+
+function validateColorCasePayload(input: unknown): ColorCasePayload {
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid request body");
+  }
+
+  const body = input as Record<string, unknown>;
+  const color = validateColor(body.color);
+  const year = parseRequiredInteger(body.year, "year");
+  const week = parseRequiredInteger(body.week, "week");
+
+  if (week < 1 || week > 53) {
+    throw new Error("week must be between 1 and 53");
+  }
+
+  const total_cases = parseRequiredNonNegativeNumber(body.total_cases, "total_cases");
+  const case_weight_kg = parseRequiredNonNegativeNumber(body.case_weight_kg, "case_weight_kg");
+
+  return {
+    color,
+    year,
+    week,
+    total_cases,
+    case_weight_kg
+  };
+}
+
+async function fetchColorAreaM2(): Promise<ColorAreaMap> {
+  const { data, error } = await supabase
+    .from("varieties")
+    .select("color, area_m2")
+    .eq("status", "active");
+
+  if (error) {
+    throw new Error("Failed to fetch variety areas");
+  }
+
+  const colorAreaMap: ColorAreaMap = {};
+
+  for (const variety of data ?? []) {
+    const color = (variety.color ?? "").toLowerCase();
+    if (color) {
+      colorAreaMap[color] = (colorAreaMap[color] ?? 0) + (variety.area_m2 ?? 0);
+    }
+  }
+
+  return colorAreaMap;
+}
+
+yieldEntriesRouter.get("/color-case-entries", async (_req, res) => {
+  const { data, error } = await supabase
+    .from("color_case_entries")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.json(data ?? []);
+});
+
+yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
+  let payload: ColorCasePayload;
+
+  try {
+    payload = validateColorCasePayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  try {
+    const colorAreaMap = await fetchColorAreaM2();
+    const color_area_m2 = colorAreaMap[payload.color] ?? 0;
+    const total_kg = payload.total_cases * payload.case_weight_kg;
+    const kg_per_m2 = color_area_m2 > 0 ? total_kg / color_area_m2 : 0;
+
+    const { data, error } = await supabase
+      .from("color_case_entries")
+      .insert({
+        color: payload.color,
+        year: payload.year,
+        week: payload.week,
+        total_cases: payload.total_cases,
+        case_weight_kg: payload.case_weight_kg,
+        total_kg,
+        kg_per_m2,
+        color_area_m2
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+
+    return res.status(201).json(data);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to create entry";
+    return res.status(400).json({ message });
+  }
+});
+
+yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
+  const { id } = req.params;
+  let payload: ColorCasePayload;
+
+  try {
+    payload = validateColorCasePayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  try {
+    const colorAreaMap = await fetchColorAreaM2();
+    const color_area_m2 = colorAreaMap[payload.color] ?? 0;
+    const total_kg = payload.total_cases * payload.case_weight_kg;
+    const kg_per_m2 = color_area_m2 > 0 ? total_kg / color_area_m2 : 0;
+
+    const { data, error } = await supabase
+      .from("color_case_entries")
+      .update({
+        color: payload.color,
+        year: payload.year,
+        week: payload.week,
+        total_cases: payload.total_cases,
+        case_weight_kg: payload.case_weight_kg,
+        total_kg,
+        kg_per_m2,
+        color_area_m2,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+
+    return res.json(data);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to update entry";
+    return res.status(400).json({ message });
+  }
+});
+
+yieldEntriesRouter.delete("/color-case-entries/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const { error } = await supabase.from("color_case_entries").delete().eq("id", id);
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  return res.status(204).send();
+});
+
+yieldEntriesRouter.get("/case-entry-options", async (_req, res) => {
+  const { data, error } = await supabase
+    .from("varieties")
+    .select("color")
+    .eq("status", "active");
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  const colorsSet = new Set<string>();
+  for (const variety of data ?? []) {
+    if (variety.color) {
+      colorsSet.add(variety.color);
+    }
+  }
+
+  const colors = Array.from(colorsSet).sort();
+
+  return res.json({ colors });
 });
 
 export { yieldEntriesRouter };
