@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 function getBearerToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
@@ -37,7 +38,7 @@ async function requireOrganizationContext(
     .maybeSingle();
 
   if (membershipResult.error) {
-    return res.status(500).json({ message: membershipResult.error.message });
+    return sendSafeError(res, 500, "Failed to resolve organization membership.", "Membership lookup error:", membershipResult.error);
   }
 
   if (!membershipResult.data?.organization_id) {

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -251,7 +252,8 @@ async function ensureAssignmentRangeWithinGeneratedRows(
     .lte("row_number", endRow);
 
   if (error) {
-    throw new Error(error.message);
+    console.error("Row assignment range validation error:", error);
+    throw new Error("Failed to validate row assignment range.");
   }
 
   const generatedRows = new Set((data ?? []).map((row) => row.row_number as number));
@@ -293,7 +295,8 @@ async function upsertRowsFromSection(
     .upsert(rows, { onConflict: "group_id,row_number" });
 
   if (error) {
-    throw new Error(error.message);
+    console.error("Row upsert error:", error);
+    throw new Error("Failed to generate greenhouse rows.");
   }
 }
 
@@ -333,23 +336,23 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
   ]);
 
   if (groupsResult.error) {
-    return res.status(500).json({ message: groupsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - groups error:", groupsResult.error);
   }
 
   if (sectionsResult.error) {
-    return res.status(500).json({ message: sectionsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - sections error:", sectionsResult.error);
   }
 
   if (rowsResult.error) {
-    return res.status(500).json({ message: rowsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - rows error:", rowsResult.error);
   }
 
   if (assignmentsResult.error) {
-    return res.status(500).json({ message: assignmentsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - assignments error:", assignmentsResult.error);
   }
 
   if (varietiesResult.error) {
-    return res.status(500).json({ message: varietiesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - varieties error:", varietiesResult.error);
   }
 
   return res.json({
@@ -379,7 +382,7 @@ greenhouseSetupRouter.post("/greenhouse-groups", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create greenhouse group.", "Greenhouse group insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -406,7 +409,7 @@ greenhouseSetupRouter.put("/greenhouse-groups/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update greenhouse group.", "Greenhouse group update error:", error);
   }
 
   return res.json(data);
@@ -423,7 +426,7 @@ greenhouseSetupRouter.delete("/greenhouse-groups/:id", async (req, res) => {
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete greenhouse group.", "Greenhouse group delete error:", error);
   }
 
   return res.status(204).send();
@@ -448,9 +451,7 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
     .single();
 
   if (sectionError || !sectionData) {
-    return res
-      .status(500)
-      .json({ message: sectionError?.message ?? "Failed to create row section" });
+    return sendSafeError(res, 500, "Failed to create row section.", "Greenhouse row section insert error:", sectionError ?? new Error("No data returned"));
   }
 
   try {
@@ -462,8 +463,7 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
       .eq("id", (sectionData as { id: string }).id)
       .eq("organization_id", organizationId);
 
-    const message = error instanceof Error ? error.message : "Failed to generate rows";
-    return res.status(500).json({ message });
+    return sendSafeError(res, 500, "Failed to generate greenhouse rows.", "Greenhouse row upsert error:", error);
   }
 
   return res.status(201).json(sectionData);
@@ -491,9 +491,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
     .single();
 
   if (sectionError || !updatedSection) {
-    return res
-      .status(500)
-      .json({ message: sectionError?.message ?? "Failed to update row section" });
+    return sendSafeError(res, 500, "Failed to update row section.", "Greenhouse row section update error:", sectionError ?? new Error("No data returned"));
   }
 
   const rowNumbersToKeep = generateRowNumbers(
@@ -510,7 +508,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
       .eq("organization_id", organizationId);
 
     if (clearError) {
-      return res.status(500).json({ message: clearError.message });
+      return sendSafeError(res, 500, "Failed to update greenhouse rows.", "Greenhouse row clear error:", clearError);
     }
   } else {
     const { error: clearError } = await supabase
@@ -521,15 +519,14 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
       .not("row_number", "in", `(${rowNumbersToKeep.join(",")})`);
 
     if (clearError) {
-      return res.status(500).json({ message: clearError.message });
+      return sendSafeError(res, 500, "Failed to update greenhouse rows.", "Greenhouse row clear error:", clearError);
     }
   }
 
   try {
     await upsertRowsFromSection(id, organizationId, payload);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to update generated rows";
-    return res.status(500).json({ message });
+    return sendSafeError(res, 500, "Failed to update greenhouse rows.", "Greenhouse row upsert error:", error);
   }
 
   return res.json(updatedSection);
@@ -546,7 +543,7 @@ greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) =>
     .eq("organization_id", organizationId);
 
   if (rowsError) {
-    return res.status(500).json({ message: rowsError.message });
+    return sendSafeError(res, 500, "Failed to delete greenhouse rows.", "Greenhouse rows delete error:", rowsError);
   }
 
   const { error } = await supabase
@@ -556,7 +553,7 @@ greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) =>
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete row section.", "Greenhouse row section delete error:", error);
   }
 
   return res.status(204).send();
@@ -583,7 +580,7 @@ greenhouseSetupRouter.put("/greenhouse-rows/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update greenhouse row.", "Greenhouse row update error:", error);
   }
 
   return res.json(data);
@@ -615,7 +612,7 @@ greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) =
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create variety assignment.", "Greenhouse variety assignment insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -650,7 +647,7 @@ greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update variety assignment.", "Greenhouse variety assignment update error:", error);
   }
 
   return res.json(data);
@@ -667,7 +664,7 @@ greenhouseSetupRouter.delete("/greenhouse-variety-assignments/:id", async (req, 
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete variety assignment.", "Greenhouse variety assignment delete error:", error);
   }
 
   return res.status(204).send();

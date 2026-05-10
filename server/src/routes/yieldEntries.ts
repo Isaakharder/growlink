@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -141,11 +142,11 @@ yieldEntriesRouter.get("/yield-entry-options", async (req, res) => {
   ]);
 
   if (varietiesResult.error) {
-    return res.status(500).json({ message: varietiesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load varieties.", "Yield entry options - varieties error:", varietiesResult.error);
   }
 
   if (sizesResult.error) {
-    return res.status(500).json({ message: sizesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load yield sizes.", "Yield entry options - sizes error:", sizesResult.error);
   }
 
   return res.json({
@@ -166,7 +167,7 @@ yieldEntriesRouter.get("/yield-entries", async (req, res) => {
     .order("created_at", { ascending: false });
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to load yield entries.", "Yield entries fetch error:", error);
   }
 
   const entries = (data ?? []).map((entry) => {
@@ -213,7 +214,7 @@ yieldEntriesRouter.post("/yield-entries", async (req, res) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to create yield entry.", "Yield entry insert error:", error);
     }
 
     return res.status(201).json(data);
@@ -248,7 +249,7 @@ yieldEntriesRouter.put("/yield-entries/:id", async (req, res) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to update yield entry.", "Yield entry update error:", error);
     }
 
     return res.json(data);
@@ -269,7 +270,7 @@ yieldEntriesRouter.delete("/yield-entries/:id", async (req, res) => {
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete yield entry.", "Yield entry delete error:", error);
   }
 
   return res.status(204).send();
@@ -297,13 +298,13 @@ yieldEntriesRouter.get("/yield-analytics/summary", async (req, res) => {
   ]);
 
   if (entriesResult.error) {
-    return res.status(500).json({ message: entriesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load yield analytics.", "Yield analytics - entries error:", entriesResult.error);
   }
   if (sizesResult.error) {
-    return res.status(500).json({ message: sizesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load yield analytics.", "Yield analytics - sizes error:", sizesResult.error);
   }
   if (varietiesResult.error) {
-    return res.status(500).json({ message: varietiesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load yield analytics.", "Yield analytics - varieties error:", varietiesResult.error);
   }
 
   const sizes = sizesResult.data ?? [];
@@ -487,7 +488,7 @@ yieldEntriesRouter.get("/color-case-entries", async (req, res) => {
     .order("created_at", { ascending: false });
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to load color case entries.", "Color case entries fetch error:", error);
   }
 
   return res.json(data ?? []);
@@ -527,7 +528,7 @@ yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to create color case entry.", "Color case entry insert error:", error);
     }
 
     return res.status(201).json(data);
@@ -574,7 +575,7 @@ yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to update color case entry.", "Color case entry update error:", error);
     }
 
     return res.json(data);
@@ -595,7 +596,7 @@ yieldEntriesRouter.delete("/color-case-entries/:id", async (req, res) => {
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete color case entry.", "Color case entry delete error:", error);
   }
 
   return res.status(204).send();
@@ -611,7 +612,7 @@ yieldEntriesRouter.get("/case-entry-options", async (req, res) => {
     .eq("status", "active");
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to load case entry options.", "Case entry options fetch error:", error);
   }
 
   const colorsSet = new Set<string>();

@@ -38,7 +38,8 @@ export default defineConfig({
         mobileHtmlFallbackPlugin(),
         VitePWA({
             registerType: "autoUpdate",
-            injectRegister: "auto",
+            // Registration is handled explicitly in main.tsx via registerSW()
+            injectRegister: false,
             manifest: false,
             includeAssets: [
                 "favicon.svg",
@@ -48,10 +49,32 @@ export default defineConfig({
                 "pwa-maskable.svg"
             ],
             workbox: {
+                // Precache only static build artifacts — no org/user data lives here
                 globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
+                // Serve index.html as the SPA shell for desktop navigation fallback.
+                // The denylist ensures /mobile/* is never served index.html by the SW;
+                // those requests fall through to the network so the server returns the
+                // correct mobile.html (preserving the mobile PWA's manifest and shell).
+                navigateFallback: "index.html",
+                navigateFallbackDenylist: [/^\/mobile/],
                 runtimeCaching: [
+                    // Same-origin API — always network, never cache
                     {
                         urlPattern: ({ url }) => url.pathname.startsWith("/api/"),
+                        handler: "NetworkOnly",
+                        method: "GET"
+                    },
+                    // Supabase auth and REST API — always network, never cache.
+                    // These responses contain session tokens and org-scoped data.
+                    {
+                        urlPattern: ({ url }) => url.hostname.endsWith(".supabase.co"),
+                        handler: "NetworkOnly",
+                        method: "GET"
+                    },
+                    // Belt-and-suspenders: any authenticated GET request must not be
+                    // cached regardless of URL, preventing stale org data on re-login.
+                    {
+                        urlPattern: ({ request }) => request.headers.has("Authorization"),
                         handler: "NetworkOnly",
                         method: "GET"
                     }

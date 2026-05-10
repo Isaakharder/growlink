@@ -117,11 +117,13 @@ async function assertGrowlinkOrgScopingReady(): Promise<void> {
   }
 
   if (colorCaseError) {
-    throw new Error(`Failed to validate organization scoping for color_case_entries: ${colorCaseError.message}`);
+    console.error("GrowLink org scoping check - color_case_entries error:", colorCaseError);
+    throw new Error("Failed to validate GrowLink data access.");
   }
 
   if (varietiesError) {
-    throw new Error(`Failed to validate organization scoping for varieties: ${varietiesError.message}`);
+    console.error("GrowLink org scoping check - varieties error:", varietiesError);
+    throw new Error("Failed to validate GrowLink data access.");
   }
 }
 
@@ -143,7 +145,8 @@ async function getDocklinkOrganizationMapping(organizationId: string): Promise<s
       );
     }
 
-    throw new Error(`Failed to load organization DockLink mapping: ${error.message}`);
+    console.error("DockLink org mapping fetch error:", error);
+    throw new Error("Failed to load DockLink integration configuration.");
   }
 
   if (!data) {
@@ -186,7 +189,8 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
       );
     }
 
-    throw new Error(`Failed to query DockLink growlink_weekly_color_totals: ${queryError.message}`);
+    console.error("DockLink weekly totals query error:", queryError);
+    throw new Error("Failed to query DockLink data.");
   }
 
   const totalRowsReturned = viewRows?.length ?? 0;
@@ -304,7 +308,8 @@ async function syncDocklinkCases(req: Request): Promise<DocklinkSyncResult> {
     .eq("status", "active");
 
   if (varietiesError) {
-    throw new Error(`Failed to fetch variety areas: ${varietiesError.message}`);
+    console.error("DockLink sync - variety areas fetch error:", varietiesError);
+    throw new Error("Failed to fetch variety data.");
   }
 
   const colorAreaMap: Record<string, number> = {};
@@ -361,7 +366,8 @@ async function syncDocklinkCases(req: Request): Promise<DocklinkSyncResult> {
       );
 
     if (upsertError) {
-      throw new Error(`Failed to sync color case entry: ${upsertError.message}`);
+      console.error("DockLink sync - color case upsert error:", upsertError);
+      throw new Error("Failed to sync color case data.");
     }
 
     if (existing?.id) {

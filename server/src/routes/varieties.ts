@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type VarietyStatus = "active" | "inactive";
 type VarietyColor = "red" | "orange" | "yellow" | "green";
@@ -99,7 +100,7 @@ varietiesRouter.get("/varieties", async (req, res) => {
     .order("created_at", { ascending: false });
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to load varieties.", "Varieties fetch error:", error);
   }
 
   return res.json(data ?? []);
@@ -123,7 +124,7 @@ varietiesRouter.post("/varieties", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create variety.", "Variety insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -150,7 +151,7 @@ varietiesRouter.put("/varieties/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update variety.", "Variety update error:", error);
   }
 
   return res.json(data);
@@ -167,7 +168,7 @@ varietiesRouter.delete("/varieties/:id", async (req, res) => {
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete variety.", "Variety delete error:", error);
   }
 
   return res.status(204).send();

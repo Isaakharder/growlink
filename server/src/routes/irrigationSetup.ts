@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -127,15 +128,15 @@ irrigationSetupRouter.get("/irrigation-setup", async (req, res) => {
   ]);
 
   if (groupsResult.error) {
-    return res.status(500).json({ message: groupsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation setup.", "Irrigation setup - groups error:", groupsResult.error);
   }
 
   if (feedValvesResult.error) {
-    return res.status(500).json({ message: feedValvesResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation setup.", "Irrigation setup - feed valves error:", feedValvesResult.error);
   }
 
   if (drainBucketsResult.error) {
-    return res.status(500).json({ message: drainBucketsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation setup.", "Irrigation setup - drain buckets error:", drainBucketsResult.error);
   }
 
   return res.json({
@@ -163,7 +164,7 @@ irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create irrigation group.", "Irrigation group insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -190,7 +191,7 @@ irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update irrigation group.", "Irrigation group update error:", error);
   }
 
   return res.json(data);
@@ -207,7 +208,7 @@ irrigationSetupRouter.delete("/irrigation-groups/:id", async (req, res) => {
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete irrigation group.", "Irrigation group delete error:", error);
   }
 
   return res.status(204).send();
@@ -232,7 +233,7 @@ irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create feed valve.", "Irrigation feed valve insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -260,7 +261,7 @@ irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update feed valve.", "Irrigation feed valve update error:", error);
   }
 
   return res.json(data);
@@ -277,7 +278,7 @@ irrigationSetupRouter.delete("/irrigation-feed-valves/:id", async (req, res) => 
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete feed valve.", "Irrigation feed valve delete error:", error);
   }
 
   return res.status(204).send();
@@ -302,7 +303,7 @@ irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create drain bucket.", "Irrigation drain bucket insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -330,7 +331,7 @@ irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update drain bucket.", "Irrigation drain bucket update error:", error);
   }
 
   return res.json(data);
@@ -347,7 +348,7 @@ irrigationSetupRouter.delete("/irrigation-drain-buckets/:id", async (req, res) =
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete drain bucket.", "Irrigation drain bucket delete error:", error);
   }
 
   return res.status(204).send();

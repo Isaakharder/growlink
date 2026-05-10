@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(dir \"c:\\\\growlink\" /b)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(npx supabase *)"
     ]
   }
 }

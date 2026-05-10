@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type YieldSizeStatus = "active" | "inactive";
 
@@ -61,7 +62,7 @@ yieldSizesRouter.get("/yield-sizes", async (req, res) => {
     .order("created_at", { ascending: true });
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to load yield sizes.", "Yield sizes fetch error:", error);
   }
 
   return res.json(data ?? []);
@@ -85,7 +86,7 @@ yieldSizesRouter.post("/yield-sizes", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create yield size.", "Yield size insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -112,7 +113,7 @@ yieldSizesRouter.put("/yield-sizes/:id", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to update yield size.", "Yield size update error:", error);
   }
 
   return res.json(data);
@@ -129,7 +130,7 @@ yieldSizesRouter.delete("/yield-sizes/:id", async (req, res) => {
     .eq("organization_id", organizationId);
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to delete yield size.", "Yield size delete error:", error);
   }
 
   return res.status(204).send();

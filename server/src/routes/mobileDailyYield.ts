@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type RowRecord = {
   id: string;
@@ -184,7 +185,8 @@ async function getCurrentCasesPerBin(organizationId: string): Promise<number> {
       return DEFAULT_CASES_PER_BIN;
     }
 
-    throw new Error(error.message);
+    console.error("Bin settings fetch error:", error);
+    throw new Error("Failed to load bin settings.");
   }
 
   if (!data) {
@@ -215,15 +217,18 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
   ]);
 
   if (varietiesResult.error) {
-    throw new Error(varietiesResult.error.message);
+    console.error("Varieties fetch error:", varietiesResult.error);
+    throw new Error("Failed to load varieties.");
   }
 
   if (assignmentsResult.error) {
-    throw new Error(assignmentsResult.error.message);
+    console.error("Variety assignments fetch error:", assignmentsResult.error);
+    throw new Error("Failed to load variety assignments.");
   }
 
   if (rowsResult.error) {
-    throw new Error(rowsResult.error.message);
+    console.error("Greenhouse rows fetch error:", rowsResult.error);
+    throw new Error("Failed to load greenhouse rows.");
   }
 
   const varieties = varietiesResult.data ?? [];
@@ -339,7 +344,8 @@ async function ensureRowLinkedToVariety(
     .maybeSingle();
 
   if (assignmentError) {
-    throw new Error(assignmentError.message);
+    console.error("Row assignment validation error:", assignmentError);
+    throw new Error("Failed to validate row assignment.");
   }
 
   if (!assignmentData) {
@@ -408,7 +414,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
     .maybeSingle();
 
   if (currentError) {
-    return res.status(500).json({ message: currentError.message });
+    return sendSafeError(res, 500, "Failed to load bin settings.", "Bin settings fetch error:", currentError);
   }
 
   if (currentSetting) {
@@ -421,7 +427,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to update bin settings.", "Bin settings update error:", error);
     }
 
     return res.json(data);
@@ -434,7 +440,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to create bin settings.", "Bin settings insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -482,7 +488,7 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to save yield sample.", "Daily yield sample insert error:", error);
   }
 
   return res.status(201).json(data);
@@ -506,7 +512,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
       .order("created_at", { ascending: true });
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to load yield samples.", "Daily yield samples fetch error:", error);
     }
 
     return res.json(data ?? []);
@@ -533,7 +539,7 @@ mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", async (req, res) =>
       .eq("session_week", sessionWeek);
 
     if (error) {
-      return res.status(500).json({ message: error.message });
+      return sendSafeError(res, 500, "Failed to delete yield samples.", "Daily yield samples delete error:", error);
     }
 
     return res.status(204).send();

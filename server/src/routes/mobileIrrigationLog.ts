@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { sendSafeError } from "../utils/safeError";
 
 type GroupType = "phase" | "zone" | "color";
 
@@ -204,7 +205,7 @@ mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
     .order("group_name", { ascending: true });
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation logs.", "Irrigation logs fetch error:", error);
   }
 
   const logs = data ?? [];
@@ -245,11 +246,11 @@ mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
   ]);
 
   if (feedEquipmentResult.error) {
-    return res.status(500).json({ message: feedEquipmentResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation equipment.", "Feed valves fetch error:", feedEquipmentResult.error);
   }
 
   if (drainEquipmentResult.error) {
-    return res.status(500).json({ message: drainEquipmentResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation equipment.", "Drain buckets fetch error:", drainEquipmentResult.error);
   }
 
   const feedDripperCountById = new Map(
@@ -298,7 +299,7 @@ mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
     .order("created_at", { ascending: true });
 
   if (groupsError) {
-    return res.status(500).json({ message: groupsError.message });
+    return sendSafeError(res, 500, "Failed to load irrigation groups.", "Irrigation groups fetch error:", groupsError);
   }
 
   const allActiveGroups = (groupsData ?? []) as IrrigationGroup[];
@@ -347,15 +348,15 @@ mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
   ]);
 
   if (feedResult.error) {
-    return res.status(500).json({ message: feedResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation equipment.", "Feed valves fetch error:", feedResult.error);
   }
 
   if (drainResult.error) {
-    return res.status(500).json({ message: drainResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation equipment.", "Drain buckets fetch error:", drainResult.error);
   }
 
   if (logsResult.error) {
-    return res.status(500).json({ message: logsResult.error.message });
+    return sendSafeError(res, 500, "Failed to load irrigation logs.", "Irrigation logs fetch error:", logsResult.error);
   }
 
   const feedValves = (feedResult.data ?? []) as IrrigationEquipment[];
@@ -464,11 +465,11 @@ mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res
   ]);
 
   if (feedResult.error) {
-    return res.status(500).json({ message: feedResult.error.message });
+    return sendSafeError(res, 500, "Failed to load feed valves.", "Feed valves fetch error:", feedResult.error);
   }
 
   if (drainResult.error) {
-    return res.status(500).json({ message: drainResult.error.message });
+    return sendSafeError(res, 500, "Failed to load drain buckets.", "Drain buckets fetch error:", drainResult.error);
   }
 
   const allowedFeedValves = new Map((feedResult.data ?? []).map((entry) => [entry.id, entry.name]));
@@ -528,7 +529,7 @@ mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res
     .single();
 
   if (error) {
-    return res.status(500).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to save irrigation log.", "Irrigation log upsert error:", error);
   }
 
   return res.json(data);
