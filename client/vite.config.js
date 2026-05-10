@@ -1,9 +1,41 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+function rewriteMobileEntry(url) {
+    if (!url) {
+        return url;
+    }
+    const [pathname, search = ""] = url.split("?");
+    // Serve the dedicated mobile shell for /mobile and nested routes.
+    if (/^\/mobile(?:\/.*)?$/.test(pathname) && !pathname.includes(".")) {
+        return `/mobile.html${search ? `?${search}` : ""}`;
+    }
+    return url;
+}
+function mobileHtmlFallbackPlugin() {
+    const applyRewrite = (req) => {
+        req.url = rewriteMobileEntry(req.url);
+    };
+    return {
+        name: "mobile-html-fallback",
+        configureServer(server) {
+            server.middlewares.use((req, _res, next) => {
+                applyRewrite(req);
+                next();
+            });
+        },
+        configurePreviewServer(server) {
+            server.middlewares.use((req, _res, next) => {
+                applyRewrite(req);
+                next();
+            });
+        }
+    };
+}
 export default defineConfig({
     plugins: [
         react(),
+        mobileHtmlFallbackPlugin(),
         VitePWA({
             registerType: "autoUpdate",
             injectRegister: "auto",
@@ -30,6 +62,14 @@ export default defineConfig({
             }
         })
     ],
+    build: {
+        rollupOptions: {
+            input: {
+                main: "index.html",
+                mobile: "mobile.html"
+            }
+        }
+    },
     server: {
         port: 5173
     }
