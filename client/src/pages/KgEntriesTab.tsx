@@ -110,6 +110,7 @@ export function KgEntriesTab() {
   const [varieties, setVarieties] = useState<VarietyOption[]>([]);
   const [yieldSizes, setYieldSizes] = useState<YieldSizeOption[]>([]);
   const [entries, setEntries] = useState<YieldEntry[]>([]);
+  const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -221,6 +222,24 @@ export function KgEntriesTab() {
     void fetchOptionsAndEntries();
   }, []);
 
+  useEffect(() => {
+    if (!isEntryModalOpen) {
+      return;
+    }
+
+    function onEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsEntryModalOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", onEscape);
+
+    return () => {
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [isEntryModalOpen]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -299,6 +318,7 @@ export function KgEntriesTab() {
         average_fruit_weight_g: "",
         size_kg: resetSizeKgFields(yieldSizes)
       }));
+      setIsEntryModalOpen(false);
 
       const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
@@ -325,6 +345,7 @@ export function KgEntriesTab() {
     }
 
     setEditingId(entry.id);
+    setIsEntryModalOpen(true);
     setForm({
       variety_id: entry.variety_id,
       year: String(entry.year),
@@ -334,6 +355,32 @@ export function KgEntriesTab() {
       size_kg: nextSizeKg
     });
     setError(null);
+  }
+
+  function openEntryModal() {
+    setError(null);
+    setEditingId(null);
+    setForm({
+      variety_id: varieties[0]?.id ?? "",
+      year: String(currentYear),
+      week: String(getCurrentWeek(currentYear)),
+      average_fruit_weight_g: "",
+      size_kg: resetSizeKgFields(yieldSizes)
+    });
+    setIsEntryModalOpen(true);
+  }
+
+  function closeEntryModal() {
+    setIsEntryModalOpen(false);
+    setEditingId(null);
+    setError(null);
+    setForm({
+      variety_id: varieties[0]?.id ?? "",
+      year: String(currentYear),
+      week: String(getCurrentWeek(currentYear)),
+      average_fruit_weight_g: "",
+      size_kg: resetSizeKgFields(yieldSizes)
+    });
   }
 
   async function deleteEntry(id: string) {
@@ -494,129 +541,40 @@ export function KgEntriesTab() {
       )}
 
       <div className="yield-entry-layout">
-        <div className="coming-soon-card yield-entry-primary">
-          <h2>{editingId ? "Edit Yield Entry" : "Weekly Yield Entry"}</h2>
-
-          {error && <p className="form-error">{error}</p>}
-          {loading && <p>Loading...</p>}
-
-          {!loading && (
-            <form className="yield-entry-form" onSubmit={handleSubmit}>
-              <label>
-                Variety
-                <select
-                  value={form.variety_id}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, variety_id: event.target.value }))
-                  }
-                  required
-                >
-                  {varieties.length === 0 && <option value="">No active varieties</option>}
-                  {varieties.map((variety) => (
-                    <option key={variety.id} value={variety.id}>
-                      {variety.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Year
-                <select
-                  value={form.year}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, year: event.target.value }))
-                  }
-                >
-                  {[currentYear - 1, currentYear, currentYear + 1].map((year) => (
-                    <option key={year} value={String(year)}>
-                      {year}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Week
-                <select
-                  value={form.week}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, week: event.target.value }))
-                  }
-                >
-                  {weekOptions.map((week) => (
-                    <option key={week.value} value={String(week.value)}>
-                      {week.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="yield-size-fields">
-                {yieldSizes.map((size) => (
-                  <label key={size.id}>
-                    {size.name} (kg)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.size_kg[size.id] ?? "0"}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          size_kg: {
-                            ...current.size_kg,
-                            [size.id]: event.target.value
-                          }
-                        }))
-                      }
-                    />
-                  </label>
-                ))}
-              </div>
-
-              <label>
-                Total kg
-                <input type="number" value={roundTo(totalKg, 3)} readOnly />
-              </label>
-
-              <label>
-                Average fruit weight (g)
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={form.average_fruit_weight_g}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      average_fruit_weight_g: event.target.value
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Kg/m²
-                <input type="number" value={roundTo(kgPerM2, 3)} readOnly />
-              </label>
-
-              <label>
-                Total cases
-                <input type="number" value={roundTo(totalCases, 3)} readOnly />
-              </label>
-
-              <div className="form-actions">
-                <button type="submit" disabled={saving || varieties.length === 0}>
-                  {saving ? "Saving..." : "Save"}
-                </button>
-              </div>
-            </form>
-          )}
+        <div className="cases-entry-header">
+          <h2>Kg Entries</h2>
+          <div className="kg-entry-header-buttons">
+            <button
+              type="button"
+              className="cases-entry-open-button"
+              onClick={openEntryModal}
+              disabled={loading}
+            >
+              Enter Kg Manually
+            </button>
+            <button
+              type="button"
+              className="cases-entry-open-button"
+              onClick={() => alert("PDF Upload coming soon")}
+              disabled={loading}
+            >
+              PDF Upload
+            </button>
+            <button
+              type="button"
+              className="cases-entry-open-button"
+              onClick={() => alert("CSV Upload coming soon")}
+              disabled={loading}
+            >
+              CSV Upload
+            </button>
+          </div>
         </div>
 
-        <div className="coming-soon-card yield-entry-secondary">
+        <div className="coming-soon-card yield-entry-recent-entries">
           <h2>Recent Entries</h2>
+
+          {error && <p className="form-error">{error}</p>}
 
           {entries.length === 0 && <p>No yield entries yet.</p>}
 
@@ -671,6 +629,145 @@ export function KgEntriesTab() {
           )}
         </div>
       </div>
+
+      {isEntryModalOpen ? (
+        <div className="modal-overlay" onClick={closeEntryModal}>
+          <div
+            className="variety-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="enter-kg-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="enter-kg-title">{editingId ? "Edit Yield Entry" : "Enter Kg"}</h2>
+
+            {error ? <p className="form-error">{error}</p> : null}
+            {loading ? <p>Loading...</p> : null}
+
+            {!loading ? (
+              <form className="yield-entry-form" onSubmit={handleSubmit}>
+                <label>
+                  Variety
+                  <select
+                    value={form.variety_id}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, variety_id: event.target.value }))
+                    }
+                    required
+                  >
+                    {varieties.length === 0 && <option value="">No active varieties</option>}
+                    {varieties.map((variety) => (
+                      <option key={variety.id} value={variety.id}>
+                        {variety.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Year
+                  <select
+                    value={form.year}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, year: event.target.value }))
+                    }
+                  >
+                    {[currentYear - 1, currentYear, currentYear + 1].map((year) => (
+                      <option key={year} value={String(year)}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Week
+                  <select
+                    value={form.week}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, week: event.target.value }))
+                    }
+                  >
+                    {weekOptions.map((week) => (
+                      <option key={week.value} value={String(week.value)}>
+                        {week.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="yield-size-fields">
+                  {yieldSizes.map((size) => (
+                    <label key={size.id}>
+                      {size.name} (kg)
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={form.size_kg[size.id] ?? "0"}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            size_kg: {
+                              ...current.size_kg,
+                              [size.id]: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                <label>
+                  Total kg
+                  <input type="number" value={roundTo(totalKg, 3)} readOnly />
+                </label>
+
+                <label>
+                  Average fruit weight (g)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.average_fruit_weight_g}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        average_fruit_weight_g: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  Kg/m²
+                  <input type="number" value={roundTo(kgPerM2, 3)} readOnly />
+                </label>
+
+                <label>
+                  Total cases
+                  <input type="number" value={roundTo(totalCases, 3)} readOnly />
+                </label>
+
+                <div className="form-actions">
+                  <button type="submit" disabled={saving || varieties.length === 0}>
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={closeEntryModal}
+                    disabled={saving}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

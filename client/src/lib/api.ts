@@ -78,3 +78,59 @@ export function getBackendHealth() {
 export function getForecastingStatus() {
   return fetchJson(FORECASTING_STATUS_URL);
 }
+
+/**
+ * Fetches the current user's organization ID from Supabase memberships.
+ * Returns "unknown" as a safe fallback if the org ID cannot be determined.
+ * This ensures dashboard settings are organization-scoped and never leak
+ * between different companies/organizations.
+ */
+export async function getOrganizationId(): Promise<string> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user?.id) {
+      return "unknown";
+    }
+
+    const { data: membership, error } = await supabase
+      .from("memberships")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error || !membership?.organization_id) {
+      return "unknown";
+    }
+
+    return membership.organization_id;
+  } catch {
+    return "unknown";
+  }
+}
+
+export async function getOrganizationName(): Promise<string | null> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.id) return null;
+
+    const { data: membership, error: membershipError } = await supabase
+      .from("memberships")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (membershipError || !membership?.organization_id) return null;
+
+    const { data: org, error: orgError } = await supabase
+      .from("organizations")
+      .select("name")
+      .eq("id", membership.organization_id)
+      .maybeSingle();
+
+    if (orgError || !org) return null;
+    return org.name ?? null;
+  } catch {
+    return null;
+  }
+}

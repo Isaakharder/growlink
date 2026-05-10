@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"c:\\\\growlink\" /b)",
+      "Bash(npm run *)"
+    ]
+  }
+}
