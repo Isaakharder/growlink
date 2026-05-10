@@ -5,7 +5,12 @@ import type { Session } from "@supabase/supabase-js";
 import { appRouter } from "./router/routes";
 import { supabase } from "./lib/supabase";
 import { LoginPage } from "./pages/LoginPage";
+import { registerSW } from "virtual:pwa-register";
 import "./index.css";
+
+registerSW({
+  immediate: true
+});
 
 function AppRoot() {
   const [loading, setLoading] = useState(true);

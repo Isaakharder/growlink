@@ -116,6 +116,39 @@ function averageOf(values: number[]): number | null {
   return total / values.length;
 }
 
+function calculateDrainPercent(params: {
+  feedVolume: number;
+  feedDripperCount: number | null | undefined;
+  drainVolume: number;
+  drainDripperCount: number | null | undefined;
+}) {
+  const safeFeedDrippers = Number(params.feedDripperCount) > 0 ? Number(params.feedDripperCount) : 1;
+  const safeDrainDrippers = Number(params.drainDripperCount) > 0 ? Number(params.drainDripperCount) : 1;
+
+  const feedPerDripper = Number(params.feedVolume) / safeFeedDrippers;
+  const drainPerDripper = Number(params.drainVolume) / safeDrainDrippers;
+
+  if (!Number.isFinite(feedPerDripper) || feedPerDripper <= 0) {
+    return 0;
+  }
+
+  if (!Number.isFinite(drainPerDripper) || drainPerDripper < 0) {
+    return 0;
+  }
+
+  return (drainPerDripper / feedPerDripper) * 100;
+}
+
+function parseNormalizedVolume(volume: string, dripperCount: number | null | undefined): number | null {
+  const parsedVolume = parseValidVolumeValue(volume);
+  if (parsedVolume === null) {
+    return null;
+  }
+
+  const safeDrippers = Number(dripperCount) > 0 ? Number(dripperCount) : 1;
+  return parsedVolume / safeDrippers;
+}
+
 function formatMetric(value: number | null, decimals = 2) {
   if (value === null || !Number.isFinite(value)) {
     return "--";
@@ -173,15 +206,42 @@ export function MobileIrrigationLogPage() {
       .filter((value): value is number => value !== null);
   }, [selectedGroup, draft.drain_bucket_volumes]);
 
+  const normalizedFeedVolumeValues = useMemo(() => {
+    if (!selectedGroup) {
+      return [] as number[];
+    }
+
+    return selectedGroup.feedValves
+      .map((valve) => parseNormalizedVolume(draft.feed_valve_volumes[valve.id] ?? "", valve.dripper_count))
+      .filter((value): value is number => value !== null);
+  }, [selectedGroup, draft.feed_valve_volumes]);
+
+  const normalizedDrainVolumeValues = useMemo(() => {
+    if (!selectedGroup) {
+      return [] as number[];
+    }
+
+    return selectedGroup.drainBuckets
+      .map((bucket) => parseNormalizedVolume(draft.drain_bucket_volumes[bucket.id] ?? "", bucket.dripper_count))
+      .filter((value): value is number => value !== null);
+  }, [selectedGroup, draft.drain_bucket_volumes]);
+
   const avgFeedMl = useMemo(() => averageOf(feedVolumeValues), [feedVolumeValues]);
   const avgDrainMl = useMemo(() => averageOf(drainVolumeValues), [drainVolumeValues]);
+  const avgFeedMlPerDripper = useMemo(() => averageOf(normalizedFeedVolumeValues), [normalizedFeedVolumeValues]);
+  const avgDrainMlPerDripper = useMemo(() => averageOf(normalizedDrainVolumeValues), [normalizedDrainVolumeValues]);
   const drainPercent = useMemo(() => {
-    if (avgFeedMl === null || avgFeedMl <= 0 || avgDrainMl === null) {
+    if (avgFeedMlPerDripper === null || avgDrainMlPerDripper === null) {
       return null;
     }
 
-    return (avgDrainMl / avgFeedMl) * 100;
-  }, [avgDrainMl, avgFeedMl]);
+    return calculateDrainPercent({
+      feedVolume: avgFeedMlPerDripper,
+      feedDripperCount: 1,
+      drainVolume: avgDrainMlPerDripper,
+      drainDripperCount: 1
+    });
+  }, [avgDrainMlPerDripper, avgFeedMlPerDripper]);
 
   function buildGroupDraft(group: IrrigationLogGroup): GroupDraft {
     const existingFeedReadings = new Map(
@@ -383,6 +443,7 @@ export function MobileIrrigationLogPage() {
     <section className="mobile-page mobile-irrigation-page">
       <h2>Irrigation Log</h2>
       <p>Log feed and drain readings once per tracking group.</p>
+      <p>Drain % is normalized by configured dripper counts.</p>
 
       {trackingModeLabel ? <p>Tracking by {trackingModeLabel}</p> : null}
       <p>Log date: {logDate}</p>
@@ -434,7 +495,6 @@ export function MobileIrrigationLogPage() {
                         <li key={valve.id} className="mobile-irrigation-reading-row">
                           <div>
                             <strong>{valve.name}</strong>
-                            <span>{valve.dripper_count} dripper(s)</span>
                           </div>
                           <label>
                             Volume ml
@@ -471,7 +531,6 @@ export function MobileIrrigationLogPage() {
                         <li key={bucket.id} className="mobile-irrigation-reading-row">
                           <div>
                             <strong>{bucket.name}</strong>
-                            <span>{bucket.dripper_count} dripper(s)</span>
                           </div>
                           <label>
                             Volume ml

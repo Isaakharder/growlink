@@ -7,6 +7,7 @@ type EquipmentReading = {
   id: string;
   name: string;
   volume_ml: number | null;
+  dripper_count?: number | null;
 };
 
 type IrrigationLogRecord = {
@@ -50,6 +51,43 @@ function averageOf(values: number[]): number | null {
   return total / values.length;
 }
 
+function calculateDrainPercent(params: {
+  feedVolume: number;
+  feedDripperCount: number | null | undefined;
+  drainVolume: number;
+  drainDripperCount: number | null | undefined;
+}) {
+  const safeFeedDrippers = Number(params.feedDripperCount) > 0 ? Number(params.feedDripperCount) : 1;
+  const safeDrainDrippers = Number(params.drainDripperCount) > 0 ? Number(params.drainDripperCount) : 1;
+
+  const feedPerDripper = Number(params.feedVolume) / safeFeedDrippers;
+  const drainPerDripper = Number(params.drainVolume) / safeDrainDrippers;
+
+  if (!Number.isFinite(feedPerDripper) || feedPerDripper <= 0) {
+    return 0;
+  }
+
+  if (!Number.isFinite(drainPerDripper) || drainPerDripper < 0) {
+    return 0;
+  }
+
+  return (drainPerDripper / feedPerDripper) * 100;
+}
+
+function parseReadingVolumesPerDripper(readings: EquipmentReading[] | undefined): number[] {
+  return (readings ?? [])
+    .map((reading) => {
+      const volume = reading.volume_ml;
+      if (typeof volume !== "number" || !Number.isFinite(volume) || volume < 0) {
+        return null;
+      }
+
+      const dripperCount = Number(reading.dripper_count) > 0 ? Number(reading.dripper_count) : 1;
+      return volume / dripperCount;
+    })
+    .filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0);
+}
+
 function formatNumber(value: number | null, decimals = 2): string {
   if (value === null || !Number.isFinite(value)) {
     return "--";
@@ -77,12 +115,21 @@ function capitalize(value: string) {
 function computeRowMetrics(log: IrrigationLogRecord) {
   const feedValues = parseReadingVolumes(log.feed_valve_readings);
   const drainValues = parseReadingVolumes(log.drain_bucket_readings);
+  const feedValuesPerDripper = parseReadingVolumesPerDripper(log.feed_valve_readings);
+  const drainValuesPerDripper = parseReadingVolumesPerDripper(log.drain_bucket_readings);
 
   const avgFeedMl = averageOf(feedValues);
   const avgDrainMl = averageOf(drainValues);
+  const avgFeedMlPerDripper = averageOf(feedValuesPerDripper);
+  const avgDrainMlPerDripper = averageOf(drainValuesPerDripper);
   const drainPercent =
-    avgFeedMl !== null && avgFeedMl > 0 && avgDrainMl !== null
-      ? (avgDrainMl / avgFeedMl) * 100
+    avgFeedMlPerDripper !== null && avgDrainMlPerDripper !== null
+      ? calculateDrainPercent({
+          feedVolume: avgFeedMlPerDripper,
+          feedDripperCount: 1,
+          drainVolume: avgDrainMlPerDripper,
+          drainDripperCount: 1
+        })
       : null;
 
   return {
@@ -187,6 +234,7 @@ export function IrrigationPage() {
       <header>
         <h1>Irrigation</h1>
         <p>Last 30 days of mobile irrigation logs with summary metrics.</p>
+        <p>Drain % is normalized by configured dripper counts.</p>
       </header>
 
       <div className="coming-soon-card">

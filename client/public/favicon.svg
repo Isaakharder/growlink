@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GrowLink favicon">
+  <rect width="64" height="64" rx="16" fill="#0f7660" />
+  <ellipse cx="31" cy="24" rx="10" ry="14" transform="rotate(-28 31 24)" fill="#d8f3eb" />
+  <path d="M32 20v22M32 28c-4-3-7-4-11-5M32 34c4-3 7-5 11-8" stroke="#ffffff" stroke-width="3" stroke-linecap="round" fill="none" />
+</svg>

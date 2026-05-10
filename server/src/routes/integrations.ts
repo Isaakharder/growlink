@@ -11,6 +11,21 @@ interface DocklinkWeeklyColorTotal {
   totalCases: number;
 }
 
+interface DocklinkFetchResult {
+  weeklyTotals: DocklinkWeeklyColorTotal[];
+  fetchedRows: number;
+  matchedRows: number;
+  skippedRows: number;
+}
+
+interface DocklinkSyncResult {
+  fetchedRows: number;
+  matchedRows: number;
+  imported: number;
+  updated: number;
+  skippedRows: number;
+}
+
 class HttpError extends Error {
   status: number;
 
@@ -131,16 +146,22 @@ async function getDocklinkOrganizationMapping(organizationId: string): Promise<s
     throw new Error(`Failed to load organization DockLink mapping: ${error.message}`);
   }
 
-  const externalOrganizationId = data?.external_organization_id;
+  if (!data) {
+    console.warn("DockLink sync skipped: no integration mapping for organization");
+    throw new HttpError(200, "DockLink sync skipped: integration mapping is not configured.");
+  }
+
+  const externalOrganizationId = data.external_organization_id;
 
   if (typeof externalOrganizationId !== "string" || externalOrganizationId.trim().length === 0) {
-    throw new HttpError(403, "DockLink integration is not configured for this organization.");
+    console.warn("DockLink sync skipped: external organization UUID is empty");
+    throw new HttpError(200, "DockLink sync skipped: external organization UUID is empty.");
   }
 
   return externalOrganizationId.trim();
 }
 
-async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promise<DocklinkWeeklyColorTotal[]> {
+async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promise<DocklinkFetchResult> {
   const configError = getDocklinkConfigError();
   if (configError) {
     throw new Error(configError);
@@ -151,15 +172,13 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
   }
 
   const weeklyTotals: DocklinkWeeklyColorTotal[] = [];
-
-  console.log(`DockLink mapped external organization id: ${externalOrganizationId}`);
+  let skippedRows = 0;
 
   const { data: viewRows, error: queryError } = await docklinkSupabase
     .from("growlink_weekly_color_totals")
     .select("organization_id, iso_year, iso_week, pack_color, total_cases");
 
   if (queryError) {
-    console.error("DockLink growlink_weekly_color_totals query error:", queryError);
     const lowerMessage = queryError.message.toLowerCase();
     if (lowerMessage.includes("does not exist") || lowerMessage.includes("not found")) {
       throw new Error(
@@ -174,38 +193,38 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
   console.log(`DockLink growlink_weekly_color_totals total rows returned: ${totalRowsReturned}`);
 
   // Server-side org filter (case-insensitive string comparison with trim)
-  const filteredRows = (viewRows ?? []).filter(row => {
-    console.log("row org raw:", JSON.stringify(row.organization_id));
-    console.log("mapped org raw:", JSON.stringify(externalOrganizationId));
-    const isEqual =
+  const filteredRows = (viewRows ?? []).filter(row =>
       String(row.organization_id).trim().toLowerCase() ===
-      String(externalOrganizationId).trim().toLowerCase();
-    console.log("equal:", isEqual);
-    return isEqual;
-  });
+      String(externalOrganizationId).trim().toLowerCase()
+  );
 
   const rowsAfterFilter = filteredRows.length;
   console.log(`DockLink rows after server-side org filter: ${rowsAfterFilter}`);
 
   if (!filteredRows || filteredRows.length === 0) {
-    console.log(`No rows found in DockLink growlink_weekly_color_totals for mapped organization ${externalOrganizationId}`);
-    return weeklyTotals;
+    return {
+      weeklyTotals,
+      fetchedRows: totalRowsReturned,
+      matchedRows: rowsAfterFilter,
+      skippedRows
+    };
   }
 
   for (const row of filteredRows as Record<string, unknown>[]) {
     const colorRaw = row.pack_color;
     if (typeof colorRaw !== "string" || colorRaw.trim().length === 0) {
+      skippedRows++;
       continue;
     }
 
     const normalizedColor = normalizeColor(colorRaw);
     if (!normalizedColor) {
-      console.warn(`Could not normalize color from DockLink view pack_color: "${String(colorRaw)}"`);
       continue;
     }
 
     const totalCases = getNumericField(row, "total_cases");
     if (totalCases === null || totalCases < 0) {
+      skippedRows++;
       continue;
     }
 
@@ -213,6 +232,7 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
     const week = getNumericField(row, "iso_week");
 
     if (year === null || week === null) {
+      skippedRows++;
       continue;
     }
 
@@ -231,10 +251,15 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
   }
 
   console.log(`Processed ${weeklyTotals.length} valid growlink_weekly_color_totals rows after filtering`);
-  return weeklyTotals;
+  return {
+    weeklyTotals,
+    fetchedRows: totalRowsReturned,
+    matchedRows: rowsAfterFilter,
+    skippedRows
+  };
 }
 
-async function syncDocklinkCases(req: Request): Promise<{ imported: number; updated: number }> {
+async function syncDocklinkCases(req: Request): Promise<DocklinkSyncResult> {
   const configError = getDocklinkConfigError();
   if (configError) {
     throw new Error(configError);
@@ -248,7 +273,8 @@ async function syncDocklinkCases(req: Request): Promise<{ imported: number; upda
   await assertGrowlinkOrgScopingReady();
   const externalOrganizationId = await getDocklinkOrganizationMapping(organizationId);
 
-  const docklinkWeeklyTotals = await fetchDocklinkWeeklyTotals(externalOrganizationId);
+  const { weeklyTotals: docklinkWeeklyTotals, fetchedRows, matchedRows, skippedRows } =
+    await fetchDocklinkWeeklyTotals(externalOrganizationId);
 
   // Group by (color, year, week) in case the view returns duplicates
   type WeekKey = string; // "yellow-2026-20"
@@ -269,13 +295,6 @@ async function syncDocklinkCases(req: Request): Promise<{ imported: number; upda
     const entry = grouped.get(key)!;
     entry.totalCases += row.totalCases;
   }
-
-  console.log(
-    `Grouped into ${grouped.size} weekly color totals:`,
-    Array.from(grouped.entries()).map(
-      ([key, data]) => `${data.color} week ${data.year}W${data.week}: ${data.totalCases} cases`
-    )
-  );
 
   // Fetch GrowLink variety areas by color for kg_per_m2 calculation
   const { data: varieties, error: varietiesError } = await supabase
@@ -342,7 +361,6 @@ async function syncDocklinkCases(req: Request): Promise<{ imported: number; upda
       );
 
     if (upsertError) {
-      console.error(`Failed to upsert color case entry for ${key}:`, upsertError);
       throw new Error(`Failed to sync color case entry: ${upsertError.message}`);
     }
 
@@ -353,7 +371,13 @@ async function syncDocklinkCases(req: Request): Promise<{ imported: number; upda
     }
   }
 
-  return { imported, updated };
+  return {
+    fetchedRows,
+    matchedRows,
+    imported,
+    updated,
+    skippedRows
+  };
 }
 
 integrationsRouter.post("/integrations/docklink/sync-color-cases", async (req: Request, res: Response) => {
@@ -371,16 +395,34 @@ integrationsRouter.post("/integrations/docklink/sync-color-cases", async (req: R
       });
     }
 
+    console.log("DockLink sync started");
     const result = await syncDocklinkCases(req);
+    console.log(
+      `DockLink sync completed: fetched=${result.fetchedRows}, matched=${result.matchedRows}, imported=${result.imported}, updated=${result.updated}, skipped=${result.skippedRows}`
+    );
 
     return res.json({
       success: true,
-      message: `Synced DockLink cases: ${result.imported} imported, ${result.updated} updated`,
+      message:
+        `Synced DockLink cases: fetched=${result.fetchedRows}, matched=${result.matchedRows}, ` +
+        `imported=${result.imported}, updated=${result.updated}, skipped=${result.skippedRows}`,
       ...result
     });
   } catch (error) {
     console.error("DockLink sync error:", error);
     if (error instanceof HttpError) {
+      if (error.status === 200) {
+        return res.json({
+          success: true,
+          message: error.message,
+          fetchedRows: 0,
+          matchedRows: 0,
+          imported: 0,
+          updated: 0,
+          skippedRows: 0
+        });
+      }
+
       return res.status(error.status).json({ message: error.message });
     }
 

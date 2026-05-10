@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="GrowLink Apple touch icon">
+  <rect width="512" height="512" rx="112" fill="#f8fbf9" />
+  <rect x="92" y="92" width="328" height="328" rx="72" fill="#0f7660" />
+  <ellipse cx="250" cy="186" rx="68" ry="96" transform="rotate(-28 250 186)" fill="#d8f3eb" />
+  <path d="M256 176v174M256 240c-28-18-42-24-62-28M256 284c24-14 40-24 66-42" stroke="#ffffff" stroke-width="18" stroke-linecap="round" fill="none" />
+</svg>

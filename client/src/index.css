@@ -908,6 +908,10 @@ body {
   padding: 0.65rem 0.8rem;
 }
 
+.mobile-bottom-nav-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .mobile-bottom-link {
   border: 1px solid var(--border);
   border-radius: 10px;

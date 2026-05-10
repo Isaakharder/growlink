@@ -23,6 +23,7 @@ type EquipmentReading = {
   id: string;
   name: string;
   volume_ml: number | null;
+  dripper_count?: number;
 };
 
 const GROUP_TYPES: GroupType[] = ["phase", "zone", "color"];
@@ -206,7 +207,75 @@ mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 
-  return res.json(data ?? []);
+  const logs = data ?? [];
+  const feedValveIds = Array.from(
+    new Set(
+      logs.flatMap((log) =>
+        Array.isArray(log.feed_valve_ids)
+          ? log.feed_valve_ids.map((id: unknown) => String(id))
+          : []
+      )
+    )
+  );
+  const drainBucketIds = Array.from(
+    new Set(
+      logs.flatMap((log) =>
+        Array.isArray(log.drain_bucket_ids)
+          ? log.drain_bucket_ids.map((id: unknown) => String(id))
+          : []
+      )
+    )
+  );
+
+  const [feedEquipmentResult, drainEquipmentResult] = await Promise.all([
+    feedValveIds.length > 0
+      ? supabase
+          .from("irrigation_feed_valves")
+          .select("id, dripper_count")
+          .eq("organization_id", organizationId)
+          .in("id", feedValveIds)
+      : Promise.resolve({ data: [], error: null }),
+    drainBucketIds.length > 0
+      ? supabase
+          .from("irrigation_drain_buckets")
+          .select("id, dripper_count")
+          .eq("organization_id", organizationId)
+          .in("id", drainBucketIds)
+      : Promise.resolve({ data: [], error: null })
+  ]);
+
+  if (feedEquipmentResult.error) {
+    return res.status(500).json({ message: feedEquipmentResult.error.message });
+  }
+
+  if (drainEquipmentResult.error) {
+    return res.status(500).json({ message: drainEquipmentResult.error.message });
+  }
+
+  const feedDripperCountById = new Map(
+    (feedEquipmentResult.data ?? []).map((entry) => [String(entry.id), entry.dripper_count])
+  );
+  const drainDripperCountById = new Map(
+    (drainEquipmentResult.data ?? []).map((entry) => [String(entry.id), entry.dripper_count])
+  );
+
+  const enrichedLogs = logs.map((log) => ({
+    ...log,
+    feed_valve_readings: Array.isArray(log.feed_valve_readings)
+      ? log.feed_valve_readings.map((reading: Record<string, unknown>) => ({
+          ...reading,
+          dripper_count: feedDripperCountById.get(String(reading.id)) ?? 1
+        }))
+      : [],
+    drain_bucket_readings: Array.isArray(log.drain_bucket_readings)
+      ? log.drain_bucket_readings.map((reading: Record<string, unknown>) => ({
+          ...reading,
+          dripper_count: drainDripperCountById.get(String(reading.id)) ?? 1
+        }))
+      : []
+  }));
+
+  return res.json(enrichedLogs);
 });
 
 mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
