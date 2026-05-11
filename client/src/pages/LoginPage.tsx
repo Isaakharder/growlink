@@ -1,38 +1,75 @@
 import { FormEvent, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
+type View = "login" | "forgot";
+
 export function LoginPage() {
+  const navigate = useNavigate();
+  const [view, setView] = useState<View>("login");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+  const [forgotSent, setForgotSent] = useState(false);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     setSubmitting(true);
     setError(null);
-
     try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) {
         setError(signInError.message);
         return;
       }
-
+      navigate("/", { replace: true });
     } catch (submitError) {
       setError(
-        submitError instanceof Error
-          ? submitError.message
-          : "Unable to log in right now."
+        submitError instanceof Error ? submitError.message : "Unable to log in right now."
       );
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleForgotSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setForgotSubmitting(true);
+    setForgotError(null);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+        redirectTo: window.location.origin + "/set-password"
+      });
+      if (resetError) {
+        setForgotError(resetError.message);
+        return;
+      }
+      setForgotSent(true);
+    } catch (submitError) {
+      setForgotError(
+        submitError instanceof Error ? submitError.message : "Unable to send reset email right now."
+      );
+    } finally {
+      setForgotSubmitting(false);
+    }
+  }
+
+  function switchToForgot() {
+    setForgotEmail(email);
+    setForgotError(null);
+    setForgotSent(false);
+    setView("forgot");
+  }
+
+  function switchToLogin() {
+    setError(null);
+    setView("login");
   }
 
   return (
@@ -48,39 +85,85 @@ export function LoginPage() {
           </div>
         </div>
 
-        <form className="login-form" onSubmit={handleSubmit}>
-          <label>
-            Email
-            <input
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-          </label>
+        {view === "login" && (
+          <form className="login-form" onSubmit={handleSubmit}>
+            <label>
+              Email
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+              />
+            </label>
 
-          <label>
-            Password
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-          </label>
+            <label>
+              Password
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+            </label>
 
-          {error && (
-            <p className="login-error" role="alert" aria-live="polite">
-              {error}
+            {error && (
+              <p className="login-error" role="alert" aria-live="polite">
+                {error}
+              </p>
+            )}
+
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Logging in..." : "Log in"}
+            </button>
+
+            <button type="button" className="login-secondary-action" onClick={switchToForgot}>
+              Forgot password?
+            </button>
+          </form>
+        )}
+
+        {view === "forgot" && !forgotSent && (
+          <form className="login-form" onSubmit={handleForgotSubmit}>
+            <label>
+              Email
+              <input
+                type="email"
+                autoComplete="email"
+                value={forgotEmail}
+                onChange={(event) => setForgotEmail(event.target.value)}
+                required
+              />
+            </label>
+
+            {forgotError && (
+              <p className="login-error" role="alert" aria-live="polite">
+                {forgotError}
+              </p>
+            )}
+
+            <button type="submit" disabled={forgotSubmitting}>
+              {forgotSubmitting ? "Sending..." : "Send reset link"}
+            </button>
+
+            <button type="button" className="login-secondary-action" onClick={switchToLogin}>
+              Back to login
+            </button>
+          </form>
+        )}
+
+        {view === "forgot" && forgotSent && (
+          <>
+            <p role="status" aria-live="polite">
+              Check your email for a reset link.
             </p>
-          )}
-
-          <button type="submit" disabled={submitting}>
-            {submitting ? "Logging in..." : "Log in"}
-          </button>
-        </form>
+            <button type="button" className="login-secondary-action" onClick={switchToLogin}>
+              Back to login
+            </button>
+          </>
+        )}
       </section>
     </div>
   );

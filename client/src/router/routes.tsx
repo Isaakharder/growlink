@@ -14,8 +14,18 @@ import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
+import { LoginPage } from "../pages/LoginPage";
+import { SetPasswordPage } from "../pages/SetPasswordPage";
 
 export const appRouter = createBrowserRouter([
+  {
+    path: "/login",
+    element: <LoginPage />
+  },
+  {
+    path: "/set-password",
+    element: <SetPasswordPage />
+  },
   {
     path: "/",
     element: <RequireAuth />,

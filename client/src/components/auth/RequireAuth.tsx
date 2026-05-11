@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../../lib/supabase";
 
 export function RequireAuth() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
+  const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
     let mounted = true;
@@ -21,7 +23,12 @@ export function RequireAuth() {
 
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      // Invited users have no last_sign_in_at on their very first authentication.
+      // Redirect them to /set-password before they can access the app.
+      if (event === "SIGNED_IN" && nextSession?.user && !nextSession.user.last_sign_in_at) {
+        setNeedsPasswordSetup(true);
+      }
       setSession(nextSession);
       setLoading(false);
     });
@@ -40,11 +47,12 @@ export function RequireAuth() {
     );
   }
 
-  // No session: return null so AppRoot can re-render to LoginPage.
-  // AppRoot holds the same onAuthStateChange subscription and will
-  // unmount the router, replacing it with LoginPage.
   if (!session) {
-    return null;
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  if (needsPasswordSetup) {
+    return <Navigate to="/set-password" replace />;
   }
 
   return <Outlet />;
