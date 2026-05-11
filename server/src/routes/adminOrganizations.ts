@@ -57,7 +57,12 @@ adminOrganizationsRouter.post(
     // 2. Invite the owner — creates auth user and sends Supabase invite email
     const { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(
       email,
-      fullName ? { data: { full_name: fullName } } : undefined
+      {
+        data: {
+          ...(fullName ? { full_name: fullName } : {}),
+          mustSetPassword: true
+        }
+      }
     );
 
     if (inviteError || !inviteData?.user) {

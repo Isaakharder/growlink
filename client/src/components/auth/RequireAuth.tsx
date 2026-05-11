@@ -6,7 +6,6 @@ import { supabase } from "../../lib/supabase";
 export function RequireAuth() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
-  const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
@@ -23,16 +22,7 @@ export function RequireAuth() {
 
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      // Supabase sets last_sign_in_at on invite redemption, so it can't signal
-      // first-time users. Instead rely on user_metadata: invited_at is stamped
-      // by the invite and password_set is cleared once the user saves a password.
-      const isInviteSignIn =
-        event === "SIGNED_IN" &&
-        !!nextSession?.user?.user_metadata?.invited_at &&
-        !nextSession?.user?.user_metadata?.password_set;
-
-      if (isInviteSignIn) setNeedsPasswordSetup(true);
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setLoading(false);
     });
@@ -55,7 +45,7 @@ export function RequireAuth() {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (needsPasswordSetup) {
+  if (session.user.user_metadata?.mustSetPassword === true) {
     return <Navigate to="/set-password" replace />;
   }
 
