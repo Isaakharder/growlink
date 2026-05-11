@@ -3,7 +3,23 @@
     "allow": [
       "Bash(dir \"c:\\\\growlink\" /b)",
       "Bash(npm run *)",
-      "Bash(npx supabase *)"
+      "Bash(npx supabase *)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\growlink\\\\client\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\growlink\\\\client\\\\public\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\growlink\\\\client\\\\src\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\growlink\\\\client\\\\src\\\\router\" -Force -Recurse | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "Bash(Get-ChildItem -Path c:\\\\growlink -Filter \"*.html\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "Bash(ls \"/c/Users/Isaak/Downloads/\" | grep -i \"WEEK\\\\|pdf\\\\|Flow\" 2>/dev/null | head -20)",
+      "Read(//c/Users/Isaak/Downloads//**)",
+      "Bash(npm install *)",
+      "Bash(node -e ' *)",
+      "Bash(node --input-type=module)",
+      "Bash(cat)",
+      "Bash(node /tmp/dump_pdf.mjs)",
+      "Bash(node --experimental-vm-modules /tmp/dump_pdf.mjs)",
+      "Bash(node dump_pdf.mjs)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('exports', {}\\), indent=2\\)\\)\")"
     ]
   }
 }

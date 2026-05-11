@@ -1,11 +1,16 @@
 import { FormEvent, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 type View = "login" | "forgot";
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const from =
+    typeof (location.state as { from?: unknown } | null)?.from === "string"
+      ? ((location.state as { from: string }).from)
+      : undefined;
   const [view, setView] = useState<View>("login");
 
   const [email, setEmail] = useState("");
@@ -28,7 +33,7 @@ export function LoginPage() {
         setError(signInError.message);
         return;
       }
-      navigate("/", { replace: true });
+      navigate(from ?? "/", { replace: true });
     } catch (submitError) {
       setError(
         submitError instanceof Error ? submitError.message : "Unable to log in right now."

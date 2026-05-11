@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat > *)",
+      "Bash(node /c/growlink/server/node_modules/pdf-parse/bin/cli.mjs text \"C:/Users/Isaak/Downloads/lots week 18/WEEK 18 2.pdf\")",
+      "Bash(npm uninstall *)",
+      "Bash(node -e \"const m = require\\('/c/growlink/server/node_modules/pdf-parse/dist/pdf-parse/cjs/index.cjs'\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(node -e \"const m = require\\('C:/growlink/server/node_modules/pdf-parse/dist/pdf-parse/cjs/index.cjs'\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(mkdir -p /c/growlink/server/test-fixtures && cp \"/c/Users/Isaak/Downloads/lots week 18/WEEK 18 2.pdf\" \"/c/growlink/server/test-fixtures/WEEK 18 2.pdf\" && echo \"Copied OK\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
+    ],
+    "additionalDirectories": [
+      "C:\\growlink\\server",
+      "C:\\Users\\Isaak\\Downloads\\lots week 18"
+    ]
+  }
+}

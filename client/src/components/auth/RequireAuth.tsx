@@ -42,7 +42,13 @@ export function RequireAuth() {
   }
 
   if (!session) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location.pathname + location.search }}
+      />
+    );
   }
 
   if (session.user.user_metadata?.mustSetPassword === true) {

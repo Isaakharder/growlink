@@ -55,9 +55,14 @@ adminOrganizationsRouter.post(
     const organizationId: string = org.id;
 
     // 2. Invite the owner — creates auth user and sends Supabase invite email
+    const inviteRedirectTo = process.env.SUPABASE_INVITE_REDIRECT_TO;
     const { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(
       email,
       {
+        redirectTo:
+          typeof inviteRedirectTo === "string" && inviteRedirectTo.trim().length > 0
+            ? inviteRedirectTo.trim()
+            : undefined,
         data: {
           ...(fullName ? { full_name: fullName } : {}),
           mustSetPassword: true
@@ -66,6 +71,14 @@ adminOrganizationsRouter.post(
     );
 
     if (inviteError || !inviteData?.user) {
+      // Temporary debug logging to capture the exact Supabase Admin API error.
+      console.error("Supabase inviteUserByEmail exact error:", {
+        message: inviteError?.message,
+        status: inviteError?.status,
+        code: inviteError?.code,
+        name: inviteError?.name,
+        full: inviteError
+      });
       // Roll back org so we don't leave an orphaned organization row
       await supabase.from("organizations").delete().eq("id", organizationId);
       return sendSafeError(
