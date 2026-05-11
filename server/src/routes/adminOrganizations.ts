@@ -9,6 +9,34 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function hasRedirectConfigurationError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  const raw = error as {
+    message?: unknown;
+    code?: unknown;
+    details?: unknown;
+  };
+
+  const parts = [raw.message, raw.code, raw.details]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    parts.includes("redirect") &&
+    (parts.includes("not allowed") ||
+      parts.includes("invalid") ||
+      parts.includes("url"))
+  );
+}
+
+function getSupabaseErrorDetails(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const maybeDetails = (error as { details?: unknown }).details;
+  return typeof maybeDetails === "string" ? maybeDetails : undefined;
+}
+
 adminOrganizationsRouter.post(
   "/admin/organizations/create",
   requireAdminUser,
@@ -56,19 +84,36 @@ adminOrganizationsRouter.post(
 
     // 2. Invite the owner — creates auth user and sends Supabase invite email
     const inviteRedirectTo = process.env.SUPABASE_INVITE_REDIRECT_TO;
-    const { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(
+    const inviteDataPayload = {
+      ...(fullName ? { full_name: fullName } : {}),
+      mustSetPassword: true
+    };
+
+    const inviteOptions: { redirectTo?: string; data: Record<string, unknown> } = {
+      redirectTo:
+        typeof inviteRedirectTo === "string" && inviteRedirectTo.trim().length > 0
+          ? inviteRedirectTo.trim()
+          : undefined,
+      data: inviteDataPayload
+    };
+
+    let { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(
       email,
-      {
-        redirectTo:
-          typeof inviteRedirectTo === "string" && inviteRedirectTo.trim().length > 0
-            ? inviteRedirectTo.trim()
-            : undefined,
-        data: {
-          ...(fullName ? { full_name: fullName } : {}),
-          mustSetPassword: true
-        }
-      }
+      inviteOptions
     );
+
+    if (inviteError && inviteOptions.redirectTo && hasRedirectConfigurationError(inviteError)) {
+      console.warn(
+        "Supabase inviteUserByEmail failed due to redirectTo configuration, retrying without redirectTo.",
+        { redirectTo: inviteOptions.redirectTo }
+      );
+
+      const retry = await supabase.auth.admin.inviteUserByEmail(email, {
+        data: inviteDataPayload
+      });
+      inviteData = retry.data;
+      inviteError = retry.error;
+    }
 
     if (inviteError || !inviteData?.user) {
       // Temporary debug logging to capture the exact Supabase Admin API error.
@@ -76,6 +121,7 @@ adminOrganizationsRouter.post(
         message: inviteError?.message,
         status: inviteError?.status,
         code: inviteError?.code,
+        details: getSupabaseErrorDetails(inviteError),
         name: inviteError?.name,
         full: inviteError
       });
