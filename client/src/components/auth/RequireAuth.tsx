@@ -24,11 +24,15 @@ export function RequireAuth() {
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      // Invited users have no last_sign_in_at on their very first authentication.
-      // Redirect them to /set-password before they can access the app.
-      if (event === "SIGNED_IN" && nextSession?.user && !nextSession.user.last_sign_in_at) {
-        setNeedsPasswordSetup(true);
-      }
+      // Supabase sets last_sign_in_at on invite redemption, so it can't signal
+      // first-time users. Instead rely on user_metadata: invited_at is stamped
+      // by the invite and password_set is cleared once the user saves a password.
+      const isInviteSignIn =
+        event === "SIGNED_IN" &&
+        !!nextSession?.user?.user_metadata?.invited_at &&
+        !nextSession?.user?.user_metadata?.password_set;
+
+      if (isInviteSignIn) setNeedsPasswordSetup(true);
       setSession(nextSession);
       setLoading(false);
     });

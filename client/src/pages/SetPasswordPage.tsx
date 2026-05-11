@@ -106,6 +106,9 @@ export function SetPasswordPage() {
         return;
       }
 
+      // Mark password as set so RequireAuth won't redirect this user again.
+      await supabase.auth.updateUser({ data: { password_set: true } });
+
       setSuccess(true);
       redirectTimerRef.current = window.setTimeout(() => {
         navigate("/", { replace: true });
