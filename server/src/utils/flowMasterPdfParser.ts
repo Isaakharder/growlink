@@ -4,6 +4,7 @@ import { PDFParse } from "pdf-parse";
 
 export type FlowMasterParseResult = {
   sourceFile: string;
+  lotNumber: string | null;
   varietyName: string | null;
   startTime: string | null;
   startDate: string | null;
@@ -26,6 +27,21 @@ const SIZE_LABEL_MAP: Record<string, string> = {
   XL: "XL",
   XXL: "XXL",
 };
+
+const IGNORED_NON_MARKET_SIZE_ROWS = new Set([
+  "underweight",
+  "overweight",
+  "undersized",
+  "oversized",
+  "waste",
+  "culls",
+  "reject",
+  "garbage"
+]);
+
+function normalizeSizeLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z]/g, "");
+}
 
 function toIsoYearWeek(dateStr: string): { isoYear: number; isoWeek: number } | null {
   const d = new Date(dateStr + "T00:00:00Z");
@@ -50,6 +66,9 @@ function extractFromText(text: string, sourceFile: string): FlowMasterParseResul
   const warnings: string[] = [];
   const unknownSizes: string[] = [];
   const sizeKg: Record<string, number> = {};
+
+  const lotMatch = text.match(/Product\s+Distribution\s+Lot\s+([A-Za-z0-9-]+)/i);
+  const lotNumber = lotMatch?.[1]?.trim() ?? null;
 
   let varietyName: string | null = null;
   let startTime: string | null = null;
@@ -105,6 +124,11 @@ function extractFromText(text: string, sourceFile: string): FlowMasterParseResul
       // Skip "Market N" aggregate rows
       if (label.startsWith("Market")) continue;
 
+      // Ignore known non-market rows (waste/culls/reject/etc.) completely.
+      if (IGNORED_NON_MARKET_SIZE_ROWS.has(normalizeSizeLabel(label))) {
+        continue;
+      }
+
       // Size row layout: [label, avgG, pieces, weightKg, pct%]
       const kgStr = cols[3];
       if (!kgStr) continue;
@@ -128,6 +152,9 @@ function extractFromText(text: string, sourceFile: string): FlowMasterParseResul
 
   if (!varietyName) warnings.push("Variety not found in PDF.");
   if (!startTime) warnings.push("Start time not found in PDF.");
+  if (!lotNumber) {
+    warnings.push("Lot number missing. Duplicate detection may be limited.");
+  }
   if (Object.keys(sizeKg).length === 0) warnings.push("Size table could not be parsed.");
 
   if (totalKg !== null && Object.keys(sizeKg).length > 0) {
@@ -144,6 +171,7 @@ function extractFromText(text: string, sourceFile: string): FlowMasterParseResul
 
   return {
     sourceFile,
+    lotNumber,
     varietyName,
     startTime,
     startDate,

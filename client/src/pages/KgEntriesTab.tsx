@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 
 type YieldSizeStatus = "active" | "inactive";
@@ -51,6 +51,85 @@ type WeekOption = {
 
 const OPTIONS_URL = "/api/yield-entry-options";
 const ENTRIES_URL = "/api/yield-entries";
+const PDF_PREVIEW_URL = "/api/pdf-import/preview";
+const PDF_IMPORT_URL = "/api/pdf-import/import";
+
+type PdfPreviewFileSuccess = {
+  filename: string;
+  success: true;
+  lotNumber: string | null;
+  alreadyImported: boolean;
+  skipped: boolean;
+  variety: string | null;
+  matchedVariety: {
+    found: boolean;
+    varietyId: string | null;
+    varietyName: string | null;
+  };
+  startTime: string | null;
+  startDate: string | null;
+  isoWeek: number | null;
+  isoYear: number | null;
+  totalKg: number | null;
+  averageFruitWeightG: number | null;
+  sizeBreakdown: Record<string, number>;
+  sizeMappingStatus: {
+    mappedCount: number;
+    unmappedCount: number;
+    mapped: Array<{
+      pdfSize: string;
+      growlinkSize: string;
+    }>;
+    unmapped: string[];
+  };
+  duplicateStatus: {
+    found: boolean;
+  };
+  unknownSizes: string[];
+  warnings: string[];
+};
+
+type PdfPreviewFileFailure = {
+  filename: string;
+  success: false;
+  error: {
+    message: string;
+  };
+};
+
+type PdfPreviewFile = PdfPreviewFileSuccess | PdfPreviewFileFailure;
+
+type GroupedPdfPreviewCard = {
+  key: string;
+  matchedVarietyId: string | null;
+  varietyName: string;
+  isoWeek: number | null;
+  isoYear: number | null;
+  sourceFiles: string[];
+  sourceReadings: Array<{
+    filename: string;
+    lotNumber: string | null;
+    startDate: string | null;
+    startTime: string | null;
+    printedTotalKg: number | null;
+    computedTotalKg: number;
+    skipped: boolean;
+    skipReason: string | null;
+  }>;
+  totalKg: number;
+  averageFruitWeightG: number | null;
+  printedTotalKg: number | null;
+  sizeBreakdown: Record<string, number>;
+  warnings: string[];
+  unknownSizes: string[];
+  hasMatchedVariety: boolean;
+  duplicateFound: boolean;
+  mappedCount: number;
+  unmappedCount: number;
+  hasImportableReadings: boolean;
+};
+
+const KNOWN_SIZE_ORDER = ["Small", "Medium", "Large", "SXL", "XL", "XXL"];
 
 function getWeekStartSunday(year: number, week: number) {
   const jan1 = new Date(year, 0, 1);
@@ -105,6 +184,20 @@ function numberOrZero(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function sortSizeNames(a: string, b: string): number {
+  const ia = KNOWN_SIZE_ORDER.indexOf(a);
+  const ib = KNOWN_SIZE_ORDER.indexOf(b);
+
+  if (ia >= 0 && ib >= 0) return ia - ib;
+  if (ia >= 0) return -1;
+  if (ib >= 0) return 1;
+  return a.localeCompare(b);
+}
+
+function calculateComputedTotalKg(sizeBreakdown: Record<string, number>): number {
+  return Object.values(sizeBreakdown).reduce((sum, kg) => sum + kg, 0);
+}
+
 export function KgEntriesTab() {
   const currentYear = new Date().getFullYear();
   const [varieties, setVarieties] = useState<VarietyOption[]>([]);
@@ -114,6 +207,16 @@ export function KgEntriesTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
+  const [pdfPreviewUploading, setPdfPreviewUploading] = useState(false);
+  const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
+  const [pdfPreviewFiles, setPdfPreviewFiles] = useState<PdfPreviewFile[]>([]);
+  const [pdfImportAllRunning, setPdfImportAllRunning] = useState(false);
+  const [pdfImportStatus, setPdfImportStatus] = useState<string | null>(null);
+  const [pdfImportedCardKeys, setPdfImportedCardKeys] = useState<Set<string>>(new Set());
+  const [pdfCardImportingKeys, setPdfCardImportingKeys] = useState<Set<string>>(new Set());
+  const [pdfCardImportErrors, setPdfCardImportErrors] = useState<Record<string, string>>({});
+  const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<YieldEntryFormState>({
     variety_id: "",
@@ -239,6 +342,24 @@ export function KgEntriesTab() {
       window.removeEventListener("keydown", onEscape);
     };
   }, [isEntryModalOpen]);
+
+  useEffect(() => {
+    if (!isPdfPreviewOpen) {
+      return;
+    }
+
+    function onEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closePdfPreviewModal();
+      }
+    }
+
+    window.addEventListener("keydown", onEscape);
+
+    return () => {
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [isPdfPreviewOpen]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -417,6 +538,97 @@ export function KgEntriesTab() {
     }
   }
 
+  async function handlePdfPreviewUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+  }
+
+  function closePdfPreviewModal() {
+    setIsPdfPreviewOpen(false);
+    setPdfPreviewFiles([]);
+    setPdfPreviewUploading(false);
+    setPdfPreviewError(null);
+    setPdfImportAllRunning(false);
+    setPdfImportStatus(null);
+    setPdfImportedCardKeys(new Set());
+    setPdfCardImportingKeys(new Set());
+    setPdfCardImportErrors({});
+
+    if (pdfFileInputRef.current) {
+      pdfFileInputRef.current.value = "";
+    }
+  }
+
+  async function handlePdfFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = event.target.files;
+
+    if (!selectedFiles || selectedFiles.length === 0) {
+      return;
+    }
+
+    setPdfPreviewError(null);
+    setPdfImportStatus(null);
+    setPdfImportedCardKeys(new Set());
+    setPdfCardImportingKeys(new Set());
+    setPdfCardImportErrors({});
+    setPdfPreviewUploading(true);
+
+    const formData = new FormData();
+    for (const file of Array.from(selectedFiles)) {
+      formData.append("files", file);
+    }
+
+    try {
+      const response = await apiFetch(PDF_PREVIEW_URL, {
+        method: "POST",
+        body: formData
+      });
+
+      if (!response.ok) {
+        let message = `PDF preview failed (${response.status})`;
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) {
+            message = body.message;
+          }
+        } catch {
+          // Ignore non-JSON error body.
+        }
+        throw new Error(message);
+      }
+
+      const body = (await response.json()) as {
+        success: boolean;
+        files?: PdfPreviewFile[];
+      };
+
+      if (!body.success || !Array.isArray(body.files)) {
+        throw new Error("PDF preview response was invalid.");
+      }
+
+      setPdfPreviewFiles(body.files);
+    } catch (uploadError) {
+      setPdfPreviewFiles([]);
+      setPdfPreviewError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : "Failed to upload and parse PDF files."
+      );
+    } finally {
+      setPdfPreviewUploading(false);
+      event.target.value = "";
+    }
+  }
+
+  async function refreshEntriesAfterImport() {
+    const entriesResponse = await apiFetch(ENTRIES_URL);
+    if (!entriesResponse.ok) {
+      return;
+    }
+
+    const entriesData = (await entriesResponse.json()) as YieldEntry[];
+    setEntries(entriesData);
+  }
+
   interface ColorGroupData {
     color: VarietyColor;
     totalKg: number;
@@ -489,6 +701,353 @@ export function KgEntriesTab() {
     return result;
   }, [entries, form.year, form.week, varieties]);
 
+  const pdfPreviewFailures = useMemo(
+    () => pdfPreviewFiles.filter((file): file is PdfPreviewFileFailure => !file.success),
+    [pdfPreviewFiles]
+  );
+
+  const groupedPdfPreviewCards = useMemo(() => {
+    const grouped = new Map<string, GroupedPdfPreviewCard>();
+
+    for (const file of pdfPreviewFiles) {
+      if (!file.success) continue;
+
+      const computedTotalKg = calculateComputedTotalKg(file.sizeBreakdown);
+
+      const normalizedWarnings = file.warnings.filter(
+        (warning) =>
+          !warning.startsWith("Total kg mismatch:") &&
+          !warning.startsWith("Printed total kg differed from size total.")
+      );
+
+      const varietyKey = file.matchedVariety.varietyId ?? file.variety ?? "unknown-variety";
+      const weekKey = file.isoWeek === null ? "unknown-week" : String(file.isoWeek);
+      const yearKey = file.isoYear === null ? "unknown-year" : String(file.isoYear);
+      const key = `${varietyKey}::${weekKey}::${yearKey}`;
+
+      const existing = grouped.get(key);
+      const skipReason =
+        file.alreadyImported
+          ? file.lotNumber
+            ? `Lot ${file.lotNumber} was already imported and will be skipped.`
+            : "This run was already imported and will be skipped."
+          : file.skipped
+            ? file.lotNumber
+              ? `Duplicate file/run detected for Lot ${file.lotNumber}. It was only counted once.`
+              : "Duplicate file/run detected in this upload. It was only counted once."
+            : null;
+
+      const sourceReading = {
+        filename: file.filename,
+        lotNumber: file.lotNumber,
+        startDate: file.startDate,
+        startTime: file.startTime,
+        printedTotalKg: file.totalKg,
+        computedTotalKg,
+        skipped: file.skipped,
+        skipReason
+      };
+
+      if (!existing) {
+        grouped.set(key, {
+          key,
+          matchedVarietyId: file.matchedVariety.varietyId,
+          varietyName: file.matchedVariety.varietyName ?? file.variety ?? "Unknown variety",
+          isoWeek: file.isoWeek,
+          isoYear: file.isoYear,
+          sourceFiles: [file.filename],
+          sourceReadings: [sourceReading],
+          totalKg: file.skipped ? 0 : computedTotalKg,
+          averageFruitWeightG: null,
+          printedTotalKg: file.skipped ? null : file.totalKg,
+          sizeBreakdown: file.skipped ? {} : { ...file.sizeBreakdown },
+          warnings: [...normalizedWarnings],
+          unknownSizes: file.skipped ? [] : [...file.unknownSizes],
+          hasMatchedVariety: file.matchedVariety.found,
+          duplicateFound: file.duplicateStatus.found,
+          mappedCount: file.skipped ? 0 : file.sizeMappingStatus.mappedCount,
+          unmappedCount: file.skipped ? 0 : file.sizeMappingStatus.unmappedCount,
+          hasImportableReadings: !file.skipped
+        });
+      } else {
+        existing.sourceFiles.push(file.filename);
+        existing.sourceReadings.push(sourceReading);
+        existing.totalKg += file.skipped ? 0 : computedTotalKg;
+        existing.matchedVarietyId = existing.matchedVarietyId ?? file.matchedVariety.varietyId;
+        existing.printedTotalKg =
+          file.skipped
+            ? existing.printedTotalKg
+            : (existing.printedTotalKg === null
+              ? file.totalKg
+              : existing.printedTotalKg + (file.totalKg ?? 0));
+        existing.hasMatchedVariety = existing.hasMatchedVariety || file.matchedVariety.found;
+        existing.duplicateFound = existing.duplicateFound || file.duplicateStatus.found;
+        existing.mappedCount += file.skipped ? 0 : file.sizeMappingStatus.mappedCount;
+        existing.unmappedCount += file.skipped ? 0 : file.sizeMappingStatus.unmappedCount;
+        existing.hasImportableReadings = existing.hasImportableReadings || !file.skipped;
+
+        if (!file.skipped) {
+          for (const [size, kg] of Object.entries(file.sizeBreakdown)) {
+            existing.sizeBreakdown[size] = (existing.sizeBreakdown[size] ?? 0) + kg;
+          }
+
+          existing.unknownSizes.push(...file.unknownSizes);
+        }
+
+        existing.warnings.push(...normalizedWarnings);
+      }
+    }
+
+    const weightedNumeratorByKey = new Map<string, number>();
+    const weightedDenominatorByKey = new Map<string, number>();
+
+    for (const file of pdfPreviewFiles) {
+      if (!file.success) continue;
+      if (file.skipped) continue;
+
+      const varietyKey = file.matchedVariety.varietyId ?? file.variety ?? "unknown-variety";
+      const weekKey = file.isoWeek === null ? "unknown-week" : String(file.isoWeek);
+      const yearKey = file.isoYear === null ? "unknown-year" : String(file.isoYear);
+      const key = `${varietyKey}::${weekKey}::${yearKey}`;
+
+      const computedTotalKg = calculateComputedTotalKg(file.sizeBreakdown);
+
+      if (
+        file.averageFruitWeightG !== null &&
+        Number.isFinite(file.averageFruitWeightG) &&
+        Number.isFinite(computedTotalKg) &&
+        computedTotalKg > 0
+      ) {
+        weightedNumeratorByKey.set(
+          key,
+          (weightedNumeratorByKey.get(key) ?? 0) + file.averageFruitWeightG * computedTotalKg
+        );
+        weightedDenominatorByKey.set(
+          key,
+          (weightedDenominatorByKey.get(key) ?? 0) + computedTotalKg
+        );
+      }
+    }
+
+    const cards = Array.from(grouped.values()).map((group) => {
+      const numerator = weightedNumeratorByKey.get(group.key) ?? 0;
+      const denominator = weightedDenominatorByKey.get(group.key) ?? 0;
+
+      return {
+        ...group,
+        averageFruitWeightG:
+          denominator > 0 ? numerator / denominator : null,
+        warnings: Array.from(new Set(group.warnings)),
+        unknownSizes: Array.from(new Set(group.unknownSizes))
+      };
+    });
+
+    cards.sort((a, b) => {
+      if (a.isoYear !== b.isoYear) {
+        return (b.isoYear ?? -1) - (a.isoYear ?? -1);
+      }
+      if (a.isoWeek !== b.isoWeek) {
+        return (b.isoWeek ?? -1) - (a.isoWeek ?? -1);
+      }
+      return a.varietyName.localeCompare(b.varietyName);
+    });
+
+    return cards;
+  }, [pdfPreviewFiles]);
+
+  const pdfCardValidationByKey = useMemo(() => {
+    const result: Record<string, string | null> = {};
+
+    for (const group of groupedPdfPreviewCards) {
+      if (!group.matchedVarietyId || !group.hasMatchedVariety) {
+        result[group.key] = "Variety must be matched before import.";
+        continue;
+      }
+
+      if (!group.hasImportableReadings) {
+        result[group.key] = "All source readings in this card were skipped.";
+        continue;
+      }
+
+      if (group.unmappedCount > 0 || group.unknownSizes.length > 0) {
+        result[group.key] = "All sizes must be mapped before import.";
+        continue;
+      }
+
+      if (group.isoYear === null || group.isoWeek === null) {
+        result[group.key] = "ISO year and ISO week are required before import.";
+        continue;
+      }
+
+      if (!Number.isFinite(group.totalKg)) {
+        result[group.key] = "Total kg from sizes is missing.";
+        continue;
+      }
+
+      result[group.key] = null;
+    }
+
+    return result;
+  }, [groupedPdfPreviewCards]);
+
+  const hasPendingImportCards = useMemo(
+    () =>
+      groupedPdfPreviewCards.some(
+        (group) => !pdfImportedCardKeys.has(group.key) && !pdfCardValidationByKey[group.key]
+      ),
+    [groupedPdfPreviewCards, pdfImportedCardKeys, pdfCardValidationByKey]
+  );
+
+  async function importGroupedCard(
+    group: GroupedPdfPreviewCard,
+    mode: "create" | "append"
+  ): Promise<boolean> {
+    const validationError = pdfCardValidationByKey[group.key];
+    if (validationError) {
+      setPdfCardImportErrors((current) => ({
+        ...current,
+        [group.key]: validationError
+      }));
+      return false;
+    }
+
+    if (!group.matchedVarietyId || group.isoYear === null || group.isoWeek === null) {
+      setPdfCardImportErrors((current) => ({
+        ...current,
+        [group.key]: "Card data is incomplete for import."
+      }));
+      return false;
+    }
+
+    setPdfCardImportErrors((current) => {
+      const next = { ...current };
+      delete next[group.key];
+      return next;
+    });
+    setPdfCardImportingKeys((current) => new Set(current).add(group.key));
+
+    try {
+      const importableSourceRuns = group.sourceReadings
+        .filter((reading) => !reading.skipped && reading.lotNumber)
+        .map((reading) => ({
+          lotNumber: reading.lotNumber as string,
+          startTime: reading.startTime,
+          sourceFilename: reading.filename
+        }));
+
+      if (importableSourceRuns.length === 0) {
+        throw new Error("No new lot readings are available to import for this preview card.");
+      }
+
+      const response = await apiFetch(PDF_IMPORT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          mode,
+          varietyId: group.matchedVarietyId,
+          isoYear: group.isoYear,
+          isoWeek: group.isoWeek,
+          sizeBreakdown: group.sizeBreakdown,
+          averageFruitWeightG: group.averageFruitWeightG,
+          sourceRuns: importableSourceRuns
+        })
+      });
+
+      if (!response.ok) {
+        let message = `Import failed (${response.status})`;
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) {
+            message = body.message;
+          }
+        } catch {
+          // Ignore non-JSON body.
+        }
+
+        throw new Error(message);
+      }
+
+      setPdfImportedCardKeys((current) => new Set(current).add(group.key));
+      await refreshEntriesAfterImport();
+      return true;
+    } catch (error) {
+      setPdfCardImportErrors((current) => ({
+        ...current,
+        [group.key]: error instanceof Error ? error.message : "Import failed."
+      }));
+      return false;
+    } finally {
+      setPdfCardImportingKeys((current) => {
+        const next = new Set(current);
+        next.delete(group.key);
+        return next;
+      });
+    }
+  }
+
+  async function handleImportCard(group: GroupedPdfPreviewCard) {
+    setPdfImportStatus(null);
+
+    await importGroupedCard(group, group.duplicateFound ? "append" : "create");
+  }
+
+  async function handleImportAllCards() {
+    setPdfImportStatus(null);
+    setPdfImportAllRunning(true);
+
+    let importedCount = 0;
+    let failedCount = 0;
+    let skippedInvalidCount = 0;
+    let appendedCount = 0;
+
+    for (const group of groupedPdfPreviewCards) {
+      if (pdfImportedCardKeys.has(group.key)) {
+        continue;
+      }
+
+      const validationError = pdfCardValidationByKey[group.key];
+      if (validationError) {
+        skippedInvalidCount += 1;
+        setPdfCardImportErrors((current) => ({
+          ...current,
+          [group.key]: validationError
+        }));
+        continue;
+      }
+
+      const mode: "create" | "append" = group.duplicateFound ? "append" : "create";
+      const ok = await importGroupedCard(group, mode);
+      if (ok) {
+        if (mode === "append") {
+          appendedCount += 1;
+        } else {
+          importedCount += 1;
+        }
+      } else {
+        failedCount += 1;
+      }
+    }
+
+    const statusParts: string[] = [];
+    if (importedCount > 0) {
+      statusParts.push(`Imported ${importedCount} card${importedCount === 1 ? "" : "s"}.`);
+    }
+
+    if (appendedCount > 0) {
+      statusParts.push(`Added ${appendedCount} card${appendedCount === 1 ? "" : "s"} to existing weeks.`);
+    }
+
+    if (skippedInvalidCount > 0) {
+      statusParts.push(`Skipped ${skippedInvalidCount} invalid card${skippedInvalidCount === 1 ? "" : "s"}.`);
+    }
+
+    if (failedCount > 0) {
+      statusParts.push(`${failedCount} card import${failedCount === 1 ? "" : "s"} failed.`);
+    }
+
+    setPdfImportStatus(statusParts.length > 0 ? statusParts.join(" ") : "No importable cards found.");
+    setPdfImportAllRunning(false);
+  }
+
   return (
     <div>
       {colorGroups.length > 0 && (
@@ -555,7 +1114,7 @@ export function KgEntriesTab() {
             <button
               type="button"
               className="cases-entry-open-button"
-              onClick={() => alert("PDF Upload coming soon")}
+              onClick={() => setIsPdfPreviewOpen(true)}
               disabled={loading}
             >
               PDF Upload
@@ -629,6 +1188,248 @@ export function KgEntriesTab() {
           )}
         </div>
       </div>
+
+      {isPdfPreviewOpen ? (
+        <div className="modal-overlay" onClick={closePdfPreviewModal}>
+          <div
+            className="variety-modal pdf-preview-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pdf-import-preview-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="pdf-preview-modal-header">
+              <h2 id="pdf-import-preview-title">PDF Import Preview</h2>
+              <div className="pdf-preview-header-actions">
+                <button
+                  type="button"
+                  className="cases-entry-open-button"
+                  onClick={handleImportAllCards}
+                  disabled={pdfImportAllRunning || !hasPendingImportCards}
+                >
+                  {pdfImportAllRunning ? "Importing..." : "Import All"}
+                </button>
+                <button
+                  type="button"
+                  className="cases-entry-open-button"
+                  onClick={closePdfPreviewModal}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <p className="pdf-preview-subtitle">
+              Review parsed PDF data before importing.
+            </p>
+
+            <form className="pdf-preview-form" onSubmit={handlePdfPreviewUpload}>
+              <input
+                ref={pdfFileInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                multiple
+                onChange={handlePdfFileInputChange}
+                disabled={pdfPreviewUploading}
+              />
+            </form>
+
+            {pdfPreviewError && <p className="form-error">{pdfPreviewError}</p>}
+            {pdfImportStatus && <p className="pdf-preview-subtitle">{pdfImportStatus}</p>}
+            {pdfPreviewUploading && <p>Parsing PDFs...</p>}
+
+            {!pdfPreviewUploading && groupedPdfPreviewCards.length === 0 && pdfPreviewFailures.length === 0 && (
+              <p className="pdf-preview-subtitle">Upload one or more PDFs to see grouped preview cards.</p>
+            )}
+
+            {groupedPdfPreviewCards.length > 0 && (
+              <div className="pdf-preview-grid">
+                {groupedPdfPreviewCards.map((group) => (
+                  <article key={group.key} className="pdf-preview-card">
+                    <div className="pdf-preview-card-top">
+                      <h3>
+                        {group.varietyName} · Week {group.isoWeek ?? "-"} · {group.isoYear ?? "-"}
+                      </h3>
+
+                      <div className="pdf-preview-status-row">
+                        <span
+                          className={`pdf-preview-status-pill ${
+                            group.hasMatchedVariety ? "ok" : "warn"
+                          }`}
+                        >
+                          {group.hasMatchedVariety ? "Variety Matched" : "Variety Not Found"}
+                        </span>
+                        <span
+                          className={`pdf-preview-status-pill ${
+                            group.unmappedCount === 0 ? "ok" : "warn"
+                          }`}
+                        >
+                          {group.unmappedCount === 0 ? "Sizes Mapped" : "Size Setup Needed"}
+                        </span>
+                        <span
+                          className={`pdf-preview-status-pill ${
+                            group.duplicateFound ? "warn" : "ok"
+                          }`}
+                        >
+                          {group.duplicateFound ? "Existing Week Has Data" : "No Weekly Entry"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <dl className="pdf-preview-metric-grid">
+                      <div className="pdf-preview-metric-cell">
+                        <dt>PDF Count (Importable)</dt>
+                        <dd>{group.sourceReadings.filter((reading) => !reading.skipped).length}</dd>
+                      </div>
+                      <div className="pdf-preview-metric-cell">
+                        <dt>Total kg from sizes</dt>
+                        <dd>{roundTo(group.totalKg, 2)}</dd>
+                      </div>
+                      <div className="pdf-preview-metric-cell">
+                        <dt>Average Fruit Weight (g)</dt>
+                        <dd>
+                          {group.averageFruitWeightG === null
+                            ? "-"
+                            : roundTo(group.averageFruitWeightG, 2)}
+                        </dd>
+                      </div>
+                      <div className="pdf-preview-metric-cell">
+                        <dt>Mapped Size Rows</dt>
+                        <dd>{group.mappedCount}</dd>
+                      </div>
+                    </dl>
+
+                    <div className="pdf-preview-size-section">
+                      <h4>Source Readings</h4>
+                      <ul className="pdf-source-readings-list">
+                        {group.sourceReadings.map((reading) => (
+                          <li
+                            key={`${group.key}-${reading.filename}`}
+                            className={reading.skipped ? "pdf-source-reading-skipped" : undefined}
+                          >
+                            {reading.filename}
+                            {reading.lotNumber ? ` · Lot ${reading.lotNumber}` : " · Lot missing"}
+                            {reading.startTime
+                              ? ` · ${reading.startTime}`
+                              : reading.startDate
+                                ? ` · ${reading.startDate}`
+                                : ""}
+                            {` · ${Math.round(reading.computedTotalKg).toLocaleString("en-US")} kg`}
+                            {reading.skipped
+                              ? ` · Skipped${reading.skipReason ? ` (${reading.skipReason})` : ""}`
+                              : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="pdf-preview-size-section">
+                      <h4>Size Breakdown</h4>
+                      {Object.keys(group.sizeBreakdown).length === 0 ? (
+                        <p>-</p>
+                      ) : (
+                        <ul className="pdf-size-pill-grid">
+                          {Object.entries(group.sizeBreakdown)
+                            .sort(([sizeA], [sizeB]) => sortSizeNames(sizeA, sizeB))
+                            .map(([size, kg]) => (
+                              <li key={`${group.key}-${size}`} className="pdf-size-pill">
+                                {size}: {roundTo(kg, 2)}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    {group.unknownSizes.length > 0 && (
+                      <div className="pdf-preview-size-section">
+                        <h4>Unknown Sizes</h4>
+                        <ul>
+                          {group.unknownSizes.map((size) => (
+                            <li key={`${group.key}-${size}`}>{size}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {group.warnings.length > 0 && (
+                      <div className="pdf-preview-size-section">
+                        <h4>Warnings</h4>
+                        <ul className="pdf-preview-warning-list">
+                          {group.warnings.map((warning, index) => (
+                            <li key={`${group.key}-warning-${index}`}>{warning}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {pdfCardImportErrors[group.key] && (
+                      <div className="pdf-preview-size-section">
+                        <h4>Import Status</h4>
+                        <ul className="pdf-preview-warning-list">
+                          <li>{pdfCardImportErrors[group.key]}</li>
+                        </ul>
+                      </div>
+                    )}
+
+                    <div className="pdf-preview-card-footer">
+                      <button
+                        type="button"
+                        className="cases-entry-open-button"
+                        onClick={() => void handleImportCard(group)}
+                        disabled={
+                          pdfImportedCardKeys.has(group.key) ||
+                          pdfCardImportingKeys.has(group.key) ||
+                          Boolean(pdfCardValidationByKey[group.key])
+                        }
+                      >
+                        {pdfImportedCardKeys.has(group.key)
+                          ? "Imported"
+                          : pdfCardImportingKeys.has(group.key)
+                            ? "Importing..."
+                            : !group.hasImportableReadings
+                              ? "No New Lots"
+                            : group.duplicateFound
+                              ? "Add to Existing Week"
+                              : "Import"}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {pdfPreviewFailures.length > 0 && (
+              <div className="pdf-preview-size-section pdf-preview-failure-section">
+                <h4>Files That Failed to Parse</h4>
+                <ul className="pdf-preview-warning-list">
+                  {pdfPreviewFailures.map((file) => (
+                    <li key={`failed-${file.filename}`}>
+                      {file.filename}: {file.error.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="form-actions">
+              <button
+                type="button"
+                onClick={handleImportAllCards}
+                disabled={pdfImportAllRunning || !hasPendingImportCards}
+              >
+                {pdfImportAllRunning ? "Importing..." : "Import All"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={closePdfPreviewModal}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {isEntryModalOpen ? (
         <div className="modal-overlay" onClick={closeEntryModal}>

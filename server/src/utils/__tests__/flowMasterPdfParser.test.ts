@@ -9,6 +9,7 @@ test("parses variety, dates, and ISO week", async () => {
   const result = await parseFlowMasterPdf(FIXTURE);
 
   assert.strictEqual(result.sourceFile, "WEEK 18 2.pdf");
+  assert.strictEqual(result.lotNumber, "2604290067");
   assert.strictEqual(result.varietyName, "Silverstone");
   assert.strictEqual(result.startTime, "2026-04-29 10:01");
   assert.strictEqual(result.startDate, "2026-04-29");
