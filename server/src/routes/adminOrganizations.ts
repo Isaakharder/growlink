@@ -5,6 +5,31 @@ import { requireAdminUser } from "../middleware/requireAdminUser";
 
 const adminOrganizationsRouter = Router();
 
+adminOrganizationsRouter.get(
+  "/admin/organizations",
+  requireAdminUser,
+  async (_req: Request, res: Response) => {
+    const { data: organizations, error } = await supabase
+      .from("organizations")
+      .select("id, name, created_at")
+      .order("name", { ascending: true });
+
+    if (error) {
+      return sendSafeError(
+        res, 500,
+        "Failed to load organizations.",
+        "Admin organization list error:",
+        error
+      );
+    }
+
+    return res.json({
+      success: true,
+      organizations: organizations ?? []
+    });
+  }
+);
+
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }

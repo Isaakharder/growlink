@@ -10,6 +10,64 @@ function hashUploadKey(rawKey: string): string {
   return createHash("sha256").update(rawKey).digest("hex");
 }
 
+adminUploadKeysRouter.get(
+  "/admin/upload-keys",
+  requireAdminUser,
+  async (_req: Request, res: Response) => {
+    const { data: keys, error: keysError } = await supabase
+      .from("organization_upload_keys")
+      .select("id, organization_id, label, status, created_at, last_used_at")
+      .order("created_at", { ascending: false });
+
+    if (keysError) {
+      return sendSafeError(
+        res, 500,
+        "Failed to load upload keys.",
+        "Upload key list error:",
+        keysError
+      );
+    }
+
+    const organizationIds = Array.from(
+      new Set((keys ?? []).map(key => key.organization_id).filter(Boolean))
+    );
+
+    const organizationsById = new Map<string, string>();
+    if (organizationIds.length > 0) {
+      const { data: organizations, error: orgError } = await supabase
+        .from("organizations")
+        .select("id, name")
+        .in("id", organizationIds);
+
+      if (orgError) {
+        return sendSafeError(
+          res, 500,
+          "Failed to resolve organization names.",
+          "Upload key organization lookup error:",
+          orgError
+        );
+      }
+
+      for (const org of organizations ?? []) {
+        organizationsById.set(org.id, org.name);
+      }
+    }
+
+    return res.json({
+      success: true,
+      keys: (keys ?? []).map(key => ({
+        id: key.id,
+        organizationId: key.organization_id,
+        organizationName: organizationsById.get(key.organization_id) ?? "Unknown",
+        label: key.label,
+        status: key.status,
+        createdAt: key.created_at,
+        lastUsedAt: key.last_used_at
+      }))
+    });
+  }
+);
+
 adminUploadKeysRouter.post(
   "/admin/upload-keys",
   requireAdminUser,
@@ -81,6 +139,57 @@ adminUploadKeysRouter.post(
       createdAt: inserted.created_at,
       key: rawKey
     });
+  }
+);
+
+adminUploadKeysRouter.post(
+  "/admin/upload-keys/:id/revoke",
+  requireAdminUser,
+  async (req: Request, res: Response) => {
+    const keyId = req.params.id;
+
+    if (typeof keyId !== "string" || keyId.trim().length === 0) {
+      return res.status(400).json({ message: "Upload key id is required." });
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from("organization_upload_keys")
+      .select("id, status")
+      .eq("id", keyId.trim())
+      .maybeSingle();
+
+    if (existingError) {
+      return sendSafeError(
+        res, 500,
+        "Failed to load upload key.",
+        "Upload key revoke lookup error:",
+        existingError
+      );
+    }
+
+    if (!existing) {
+      return res.status(404).json({ message: "Upload key not found." });
+    }
+
+    if (existing.status === "revoked") {
+      return res.json({ success: true, id: existing.id, status: "revoked" });
+    }
+
+    const { error: revokeError } = await supabase
+      .from("organization_upload_keys")
+      .update({ status: "revoked" })
+      .eq("id", existing.id);
+
+    if (revokeError) {
+      return sendSafeError(
+        res, 500,
+        "Failed to revoke upload key.",
+        "Upload key revoke update error:",
+        revokeError
+      );
+    }
+
+    return res.json({ success: true, id: existing.id, status: "revoked" });
   }
 );
 
