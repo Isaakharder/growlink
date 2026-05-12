@@ -9,7 +9,9 @@
       "Bash(mkdir -p /c/growlink/server/test-fixtures && cp \"/c/Users/Isaak/Downloads/lots week 18/WEEK 18 2.pdf\" \"/c/growlink/server/test-fixtures/WEEK 18 2.pdf\" && echo \"Copied OK\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(Get-ChildItem -Directory)",
+      "Bash(Select-Object Name)"
     ],
     "additionalDirectories": [
       "C:\\growlink\\server",

@@ -107,12 +107,12 @@ type ExistingImportRun = {
   lot_number: string;
 };
 
-type ActiveYieldSizeWithId = {
+export type ActiveYieldSizeWithId = {
   id: string;
   name: string;
 };
 
-type VarietyForCalc = {
+export type VarietyForCalc = {
   id: string;
   area_m2: number;
   case_kg: number;
@@ -135,11 +135,11 @@ const KNOWN_SIZE_TARGET_TO_LABEL = Object.entries(KNOWN_SIZE_LABEL_MAP).reduce<R
   {}
 );
 
-function normalizeName(value: string): string {
+export function normalizeName(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function parseFlowMasterStartTimeToIso(value: string | null): string | null {
+export function parseFlowMasterStartTimeToIso(value: string | null): string | null {
   if (!value) return null;
   const normalized = value.trim().replace(" ", "T") + ":00Z";
   const d = new Date(normalized);
@@ -149,7 +149,7 @@ function parseFlowMasterStartTimeToIso(value: string | null): string | null {
   return d.toISOString();
 }
 
-function calculateTotals(sizeKg: Record<string, number>, variety: VarietyForCalc) {
+export function calculateTotals(sizeKg: Record<string, number>, variety: VarietyForCalc) {
   const total_kg = Object.values(sizeKg).reduce((sum, value) => sum + value, 0);
   const kg_per_m2 = variety.area_m2 > 0 ? total_kg / variety.area_m2 : 0;
   const total_cases = variety.case_kg > 0 ? total_kg / variety.case_kg : 0;
@@ -264,7 +264,7 @@ function parsePdfImportPayload(input: unknown): PdfImportPayload {
   };
 }
 
-function mapSizeNamesToIds(
+export function mapSizeNamesToIds(
   sizeBreakdown: Record<string, number>,
   activeSizes: ActiveYieldSizeWithId[]
 ): Record<string, number> {

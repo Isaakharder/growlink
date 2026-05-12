@@ -2,6 +2,8 @@ import cors from "cors";
 import express from "express";
 import { requireOrganizationContext } from "./middleware/requireOrganizationContext";
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
+import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
+import { agentRouter } from "./routes/agentRoutes";
 import { greenhouseSetupRouter } from "./routes/greenhouseSetup";
 import { healthRouter } from "./routes/health";
 import { integrationsRouter } from "./routes/integrations";
@@ -53,7 +55,7 @@ app.use(
         callback(null, false);
       }
     },
-    allowedHeaders: ["Authorization", "Content-Type"],
+    allowedHeaders: ["Authorization", "Content-Type", "X-Upload-Key"],
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: false,
   })
@@ -63,6 +65,8 @@ app.use(express.json());
 
 app.use("/api", healthRouter);
 app.use("/api", adminOrganizationsRouter);
+app.use("/api", adminUploadKeysRouter);
+app.use("/api", agentRouter);
 app.use("/api", requireOrganizationContext);
 app.use("/api", pdfImportRouter);
 app.use("/api", greenhouseSetupRouter);
