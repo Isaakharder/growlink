@@ -132,6 +132,15 @@ type ColorYieldSummary = {
   totalKg: number;
   totalAreaM2: number;
   kgPerM2: number | null;
+  harvestedKgPerM2: number | null;
+  exportedKg: number;
+  exportedKgPerM2: number | null;
+};
+
+type ColorCaseEntryRecord = {
+  color: VarietyColor | string | null;
+  total_cases: number;
+  case_weight_kg: number;
 };
 
 type YieldTrendPoint = {
@@ -160,6 +169,7 @@ const IRRIGATION_SETUP_URL = "/api/irrigation-setup";
 const IRRIGATION_LOGS_URL = "/api/irrigation/logs?days=365";
 const YIELD_ENTRIES_URL = "/api/yield-entries";
 const VARIETIES_URL = "/api/varieties";
+const COLOR_CASE_ENTRIES_URL = "/api/color-case-entries";
 
 /**
  * Generate an organization-scoped storage key for dashboard preferences.
@@ -319,6 +329,36 @@ function normalizeYieldEntries(input: unknown): YieldEntryRecord[] {
       total_kg: totalKg,
       week: normalizedWeek,
       year: normalizedYear
+    });
+  }
+
+  return result;
+}
+
+function normalizeColorCaseEntries(input: unknown): ColorCaseEntryRecord[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const result: ColorCaseEntryRecord[] = [];
+
+  for (const rawEntry of input) {
+    if (!rawEntry || typeof rawEntry !== "object") {
+      continue;
+    }
+
+    const entry = rawEntry as Record<string, unknown>;
+    const totalCases = readNumberField(entry, ["total_cases", "totalCases"]);
+    const caseWeightKg = readNumberField(entry, ["case_weight_kg", "caseWeightKg"]);
+
+    if (totalCases === null || caseWeightKg === null || totalCases < 0 || caseWeightKg < 0) {
+      continue;
+    }
+
+    result.push({
+      color: (entry.color as VarietyColor | string | null) ?? null,
+      total_cases: totalCases,
+      case_weight_kg: caseWeightKg
     });
   }
 
@@ -632,9 +672,10 @@ export function DashboardPage() {
       setYieldError(null);
 
       try {
-        const [entriesRes, varietiesRes] = await Promise.all([
+        const [entriesRes, varietiesRes, colorCaseEntriesRes] = await Promise.all([
           apiFetch(YIELD_ENTRIES_URL),
-          apiFetch(VARIETIES_URL)
+          apiFetch(VARIETIES_URL),
+          apiFetch(COLOR_CASE_ENTRIES_URL)
         ]);
 
         if (!entriesRes.ok) {
@@ -645,17 +686,26 @@ export function DashboardPage() {
           throw new Error("Failed to fetch varieties");
         }
 
+        if (!colorCaseEntriesRes.ok) {
+          throw new Error("Failed to fetch color case entries");
+        }
+
         const entriesRaw = (await entriesRes.json()) as unknown;
         const entries = normalizeYieldEntries(entriesRaw);
         const varieties = (await varietiesRes.json()) as VarietyRecord[];
+        const colorCaseEntriesRaw = (await colorCaseEntriesRes.json()) as unknown;
+        const colorCaseEntries = normalizeColorCaseEntries(colorCaseEntriesRaw);
         const activeVarieties = (varieties ?? []).filter(
           (variety) => variety.status === "active"
         );
         const varietyById = new Map<string, VarietyRecord>();
-        const totalsByColor = new Map<VarietyColor, { totalKg: number; totalAreaM2: number }>();
+        const totalsByColor = new Map<
+          VarietyColor,
+          { totalKg: number; exportedKg: number; totalAreaM2: number }
+        >();
 
         for (const color of COLOR_ORDER) {
-          totalsByColor.set(color, { totalKg: 0, totalAreaM2: 0 });
+          totalsByColor.set(color, { totalKg: 0, exportedKg: 0, totalAreaM2: 0 });
         }
 
         for (const variety of activeVarieties) {
@@ -685,14 +735,38 @@ export function DashboardPage() {
           bucket.totalKg += totalKg;
         }
 
+        for (const entry of colorCaseEntries ?? []) {
+          const color = normalizeColor(entry.color);
+          const totalCases = Number(entry.total_cases);
+          const caseWeightKg = Number(entry.case_weight_kg);
+
+          if (!color || !Number.isFinite(totalCases) || !Number.isFinite(caseWeightKg)) {
+            continue;
+          }
+
+          if (totalCases < 0 || caseWeightKg < 0) {
+            continue;
+          }
+
+          const bucket = totalsByColor.get(color)!;
+          bucket.exportedKg += totalCases * caseWeightKg;
+        }
+
         const nextSummary = COLOR_ORDER.map((color) => {
           const bucket = totalsByColor.get(color)!;
+          const harvestedKgPerM2 =
+            bucket.totalAreaM2 > 0 ? bucket.totalKg / bucket.totalAreaM2 : null;
+          const exportedKgPerM2 =
+            bucket.totalAreaM2 > 0 ? bucket.exportedKg / bucket.totalAreaM2 : null;
+
           return {
             color,
             totalKg: bucket.totalKg,
             totalAreaM2: bucket.totalAreaM2,
-            kgPerM2:
-              bucket.totalAreaM2 > 0 ? bucket.totalKg / bucket.totalAreaM2 : null
+            kgPerM2: harvestedKgPerM2,
+            harvestedKgPerM2,
+            exportedKg: bucket.exportedKg,
+            exportedKgPerM2
           };
         });
 
@@ -1115,9 +1189,26 @@ export function DashboardPage() {
                   <span className={`color-badge ${entry.color}`}>
                     {entry.color.charAt(0).toUpperCase() + entry.color.slice(1)}
                   </span>
-                  <span className="dashboard-yield-color-value">
-                    {entry.kgPerM2 === null ? "—" : `${roundTo(entry.kgPerM2, 2)} kg/m2`}
-                  </span>
+
+                  <div className="dashboard-yield-color-metrics">
+                    <div className="dashboard-yield-color-metric">
+                      <span className="dashboard-yield-color-metric-label">Harvested</span>
+                      <span className="dashboard-yield-color-metric-value">
+                        {entry.harvestedKgPerM2 === null
+                          ? "—"
+                          : `${roundTo(entry.harvestedKgPerM2, 2)} kg/m2`}
+                      </span>
+                    </div>
+
+                    <div className="dashboard-yield-color-metric">
+                      <span className="dashboard-yield-color-metric-label">Shipped Cases</span>
+                      <span className="dashboard-yield-color-metric-value">
+                        {entry.exportedKgPerM2 === null
+                          ? "—"
+                          : `${roundTo(entry.exportedKgPerM2, 2)} kg/m2`}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

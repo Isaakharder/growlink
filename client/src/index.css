@@ -427,7 +427,25 @@ body {
   gap: 0.45rem;
 }
 
-.dashboard-yield-color-value {
+.dashboard-yield-color-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.dashboard-yield-color-metric {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.dashboard-yield-color-metric-label {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.dashboard-yield-color-metric-value {
   color: var(--text);
   font-size: 0.92rem;
   font-weight: 700;
@@ -1474,8 +1492,197 @@ body {
   min-width: max-content;
 }
 
+.yield-analytics-summary-table thead th {
+  background: #f3f6f5;
+  color: #2b3934;
+  font-weight: 700;
+  border-bottom: 1px solid #d5dfdb;
+}
+
+.yield-analytics-summary-table tbody tr:nth-child(odd) td {
+  background: #fcfdfc;
+}
+
+.yield-analytics-summary-table tbody tr:nth-child(even) td {
+  background: #f7faf9;
+}
+
 .yield-analytics-chart-wrapper {
   margin-top: 1rem;
+}
+
+.yield-analytics-summary-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.yield-analytics-summary-header h2 {
+  margin: 0;
+}
+
+.yield-analytics-summary-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 0.62rem;
+}
+
+.yield-analytics-filter-label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.yield-analytics-filter-label select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.1;
+  padding: 0.28rem 2.45rem 0.28rem 0.48rem;
+  height: 30px;
+  min-width: 100px;
+  max-width: 188px;
+}
+
+.yield-analytics-export-menu {
+  position: relative;
+}
+
+.yield-analytics-export-button,
+.yield-analytics-export-dropdown button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.yield-analytics-export-button {
+  font-size: 0.82rem;
+  line-height: 1.1;
+  height: 30px;
+  padding: 0.28rem 0.58rem;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.yield-analytics-export-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  min-width: 150px;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+
+.yield-analytics-export-dropdown button {
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+}
+
+.yield-analytics-export-modal {
+  width: min(1120px, 100%);
+}
+
+.yield-analytics-export-modal-header h2 {
+  margin: 0;
+}
+
+.yield-analytics-export-summary-row {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.yield-analytics-export-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.1;
+  padding: 0.26rem 0.55rem;
+}
+
+.yield-analytics-export-preview-shell {
+  margin-top: 0.65rem;
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+}
+
+.yield-analytics-export-preview-label {
+  margin: 0;
+  width: min(900px, 100%);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.yield-analytics-export-paper {
+  width: min(900px, 100%);
+  background: #ffffff;
+  border: 1px solid #d8e1dd;
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(16, 24, 40, 0.08);
+  padding: 0.85rem 0.9rem;
+}
+
+.yield-analytics-export-paper-header h3 {
+  margin: 0;
+  font-size: 1.02rem;
+  color: #1a2723;
+}
+
+.yield-analytics-export-paper-header p {
+  margin: 0.25rem 0 0;
+  color: #4d5f58;
+  font-size: 0.84rem;
+}
+
+.yield-analytics-export-preview-table-wrapper {
+  margin-top: 0.6rem;
+  max-height: 48vh;
+}
+
+.yield-analytics-export-modal-actions {
+  margin-top: 0.65rem;
+  justify-content: flex-end;
+}
+
+@media (max-width: 980px) {
+  .yield-analytics-summary-header {
+    align-items: flex-start;
+  }
+
+  .yield-analytics-summary-toolbar {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .yield-analytics-export-preview-label,
+  .yield-analytics-export-paper {
+    width: 100%;
+  }
 }
 
 .status-badge {
