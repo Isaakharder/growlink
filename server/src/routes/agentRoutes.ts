@@ -7,8 +7,10 @@ import {
   parseFlowMasterStartTimeToIso,
   calculateTotals,
   mapSizeNamesToIds,
+  canonicalizeSizeName,
   type ActiveYieldSizeWithId,
-  type VarietyForCalc
+  type VarietyForCalc,
+  type SizeMappingResult
 } from "./pdfImport";
 
 const agentRouter = Router();
@@ -225,6 +227,11 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
       const variety = varietyByName.get(parsed.varietyName);
       if (!variety) {
+        console.warn("[agent/pdf-import] variety not matched", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          pdfVarietyName: parsed.varietyName
+        });
         results.push({
           filename: file.filename,
           status: "error",
@@ -233,7 +240,19 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         continue;
       }
 
+      console.log("[agent/pdf-import] variety matched", {
+        organizationId,
+        lotNumber: parsed.lotNumber,
+        varietyId: variety.id,
+        varietyName: variety.name
+      });
+
       if (parsed.isoYear === null || parsed.isoWeek === null) {
+        console.warn("[agent/pdf-import] could not determine iso year/week", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          startTime: parsed.startTime
+        });
         results.push({
           filename: file.filename,
           status: "error",
@@ -242,14 +261,47 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         continue;
       }
 
-      let sizeKgById: Record<string, number>;
-      try {
-        sizeKgById = mapSizeNamesToIds(parsed.sizeKg, activeSizes);
-      } catch (err) {
+      const availableCanonical = activeSizes.map((s) => canonicalizeSizeName(s.name));
+
+      for (const pdfLabel of Object.keys(parsed.sizeKg)) {
+        console.log("[agent/pdf-import] size normalized", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          pdfLabel,
+          canonicalLabel: canonicalizeSizeName(pdfLabel)
+        });
+      }
+
+      const { mapped: sizeKgById, matched: sizeMatched, skipped: sizeSkipped }: SizeMappingResult =
+        mapSizeNamesToIds(parsed.sizeKg, activeSizes);
+
+      for (const m of sizeMatched) {
+        console.log("[agent/pdf-import] size matched", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          pdfLabel: m.pdfLabel,
+          canonicalLabel: m.canonicalLabel,
+          sizeId: m.sizeId,
+          sizeName: m.sizeName
+        });
+      }
+
+      for (const s of sizeSkipped) {
+        console.warn("[agent/pdf-import] unknown size skipped", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          pdfLabel: s.pdfLabel,
+          canonicalLabel: s.canonicalLabel,
+          availableCanonical
+        });
+      }
+
+      if (Object.keys(sizeKgById).length === 0) {
+        const pdfLabels = sizeSkipped.map((s) => s.pdfLabel).join(", ");
         results.push({
           filename: file.filename,
           status: "error",
-          reason: err instanceof Error ? err.message : "Size mapping failed."
+          reason: `No sizes could be matched to active sizes. PDF sizes: ${pdfLabels || "none"}.`
         });
         continue;
       }
@@ -269,6 +321,17 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         .eq("week", parsed.isoWeek);
 
       if (existingError) {
+        console.error("[agent/pdf-import] existing yield_entries lookup failed", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          varietyId: variety.id,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          code: existingError.code,
+          message: existingError.message,
+          details: existingError.details,
+          hint: existingError.hint
+        });
         results.push({
           filename: file.filename,
           status: "error",
@@ -279,21 +342,56 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
       const startTimeIso = parseFlowMasterStartTimeToIso(parsed.startTime);
 
+      console.log("[agent/pdf-import] processing lot", {
+        organizationId,
+        lotNumber: parsed.lotNumber,
+        varietyId: variety.id,
+        varietyName: variety.name,
+        isoYear: parsed.isoYear,
+        isoWeek: parsed.isoWeek,
+        existingEntryCount: (existingEntries ?? []).length
+      });
+
       if ((existingEntries ?? []).length === 0) {
         // Create
         const totals = calculateTotals(sizeKgById, varietyForCalc);
 
-        const { error: insertError } = await supabase.from("yield_entries").insert({
-          organization_id: organizationId,
-          variety_id: variety.id,
-          year: parsed.isoYear,
-          week: parsed.isoWeek,
-          size_kg: sizeKgById,
-          average_fruit_weight_g: parsed.averageFruitWeightG,
-          ...totals
+        console.log("[agent/pdf-import] inserting new yield_entry", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          varietyId: variety.id,
+          varietyName: variety.name,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          totalKg: totals.total_kg
         });
 
-        if (insertError) {
+        const { data: insertedEntry, error: insertError } = await supabase
+          .from("yield_entries")
+          .insert({
+            organization_id: organizationId,
+            variety_id: variety.id,
+            year: parsed.isoYear,
+            week: parsed.isoWeek,
+            size_kg: sizeKgById,
+            average_fruit_weight_g: parsed.averageFruitWeightG,
+            ...totals
+          })
+          .select("id")
+          .single();
+
+        if (insertError || !insertedEntry) {
+          console.error("[agent/pdf-import] yield_entry insert failed", {
+            organizationId,
+            lotNumber: parsed.lotNumber,
+            varietyId: variety.id,
+            isoYear: parsed.isoYear,
+            isoWeek: parsed.isoWeek,
+            code: insertError?.code,
+            message: insertError?.message,
+            details: insertError?.details,
+            hint: insertError?.hint
+          });
           results.push({
             filename: file.filename,
             status: "error",
@@ -301,6 +399,17 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           });
           continue;
         }
+
+        console.log("[agent/pdf-import] yield_entry created", {
+          entryId: insertedEntry.id,
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          varietyId: variety.id,
+          varietyName: variety.name,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          totalKg: totals.total_kg
+        });
 
         const { error: runInsertError } = await supabase
           .from("yield_import_runs")
@@ -316,6 +425,15 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           });
 
         if (runInsertError) {
+          console.error("[agent/pdf-import] yield_import_runs insert failed after yield_entry create", {
+            organizationId,
+            lotNumber: parsed.lotNumber,
+            entryId: insertedEntry.id,
+            code: runInsertError.code,
+            message: runInsertError.message,
+            details: runInsertError.details,
+            hint: runInsertError.hint
+          });
           results.push({
             filename: file.filename,
             status: "error",
@@ -375,7 +493,20 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
         const mergedTotals = calculateTotals(mergedSizeKg, varietyForCalc);
 
-        const { error: updateError } = await supabase
+        console.log("[agent/pdf-import] appending to existing yield_entry", {
+          entryId: existingEntry.id,
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          varietyId: variety.id,
+          varietyName: variety.name,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          existingTotalKg,
+          incomingTotalKg,
+          mergedTotalKg: mergedTotals.total_kg
+        });
+
+        const { data: updatedEntry, error: updateError } = await supabase
           .from("yield_entries")
           .update({
             size_kg: mergedSizeKg,
@@ -384,9 +515,23 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
             updated_at: new Date().toISOString()
           })
           .eq("id", existingEntry.id)
-          .eq("organization_id", organizationId);
+          .eq("organization_id", organizationId)
+          .select("id")
+          .single();
 
-        if (updateError) {
+        if (updateError || !updatedEntry) {
+          console.error("[agent/pdf-import] yield_entry update failed", {
+            entryId: existingEntry.id,
+            organizationId,
+            lotNumber: parsed.lotNumber,
+            varietyId: variety.id,
+            isoYear: parsed.isoYear,
+            isoWeek: parsed.isoWeek,
+            code: updateError?.code,
+            message: updateError?.message,
+            details: updateError?.details,
+            hint: updateError?.hint
+          });
           results.push({
             filename: file.filename,
             status: "error",
@@ -394,6 +539,17 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           });
           continue;
         }
+
+        console.log("[agent/pdf-import] yield_entry updated", {
+          entryId: updatedEntry.id,
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          varietyId: variety.id,
+          varietyName: variety.name,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          mergedTotalKg: mergedTotals.total_kg
+        });
 
         const { error: runInsertError } = await supabase
           .from("yield_import_runs")
@@ -409,6 +565,15 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           });
 
         if (runInsertError) {
+          console.error("[agent/pdf-import] yield_import_runs insert failed after yield_entry update", {
+            organizationId,
+            lotNumber: parsed.lotNumber,
+            entryId: updatedEntry.id,
+            code: runInsertError.code,
+            message: runInsertError.message,
+            details: runInsertError.details,
+            hint: runInsertError.hint
+          });
           results.push({
             filename: file.filename,
             status: "error",
@@ -428,6 +593,14 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           totalKg: mergedTotals.total_kg
         });
       } else {
+        console.warn("[agent/pdf-import] multiple existing entries found, skipping", {
+          organizationId,
+          lotNumber: parsed.lotNumber,
+          varietyId: variety.id,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          existingEntryCount: (existingEntries ?? []).length
+        });
         results.push({
           filename: file.filename,
           status: "error",

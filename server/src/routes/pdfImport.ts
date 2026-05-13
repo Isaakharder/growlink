@@ -139,6 +139,38 @@ export function normalizeName(value: string): string {
   return value.trim().toLowerCase();
 }
 
+// Stripped + lowercased aliases → canonical matching key.
+// Handles short codes (SM/MD/LG) and full names interchangeably.
+const SIZE_ALIAS_MAP: Record<string, string> = {
+  sm: "sm",
+  small: "sm",
+  md: "md",
+  med: "md",
+  medium: "md",
+  lg: "lg",
+  large: "lg",
+  xl: "xl",
+  extralarge: "xl",
+  xlarge: "xl",
+  sxl: "sxl",
+  superxl: "sxl",
+  xxl: "xxl",
+  doublexl: "xxl",
+  "24ct": "24ct",
+  "24count": "24ct"
+};
+
+export function canonicalizeSizeName(value: string): string {
+  const stripped = value.trim().toLowerCase().replace(/[\s\-_]/g, "");
+  return SIZE_ALIAS_MAP[stripped] ?? stripped;
+}
+
+export type SizeMappingResult = {
+  mapped: Record<string, number>;
+  matched: Array<{ pdfLabel: string; canonicalLabel: string; sizeId: string; sizeName: string }>;
+  skipped: Array<{ pdfLabel: string; canonicalLabel: string }>;
+};
+
 export function parseFlowMasterStartTimeToIso(value: string | null): string | null {
   if (!value) return null;
   const normalized = value.trim().replace(" ", "T") + ":00Z";
@@ -267,24 +299,28 @@ function parsePdfImportPayload(input: unknown): PdfImportPayload {
 export function mapSizeNamesToIds(
   sizeBreakdown: Record<string, number>,
   activeSizes: ActiveYieldSizeWithId[]
-): Record<string, number> {
-  const byNormalizedName = new Map<string, ActiveYieldSizeWithId>();
+): SizeMappingResult {
+  const byCanonical = new Map<string, ActiveYieldSizeWithId>();
   for (const size of activeSizes) {
-    byNormalizedName.set(normalizeName(size.name), size);
+    byCanonical.set(canonicalizeSizeName(size.name), size);
   }
 
   const mapped: Record<string, number> = {};
+  const matched: SizeMappingResult["matched"] = [];
+  const skipped: SizeMappingResult["skipped"] = [];
 
   for (const [sizeName, kg] of Object.entries(sizeBreakdown)) {
-    const matchedSize = byNormalizedName.get(normalizeName(sizeName));
-    if (!matchedSize) {
-      throw new Error(`Unknown size: ${sizeName}. Add this active size before importing.`);
+    const canonical = canonicalizeSizeName(sizeName);
+    const matchedSize = byCanonical.get(canonical);
+    if (matchedSize) {
+      mapped[matchedSize.id] = kg;
+      matched.push({ pdfLabel: sizeName, canonicalLabel: canonical, sizeId: matchedSize.id, sizeName: matchedSize.name });
+    } else {
+      skipped.push({ pdfLabel: sizeName, canonicalLabel: canonical });
     }
-
-    mapped[matchedSize.id] = kg;
   }
 
-  return mapped;
+  return { mapped, matched, skipped };
 }
 
 function parseUploadedFiles(req: Request): Express.Multer.File[] {
@@ -376,9 +412,9 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
       activeVarietyByExactName.set(variety.name, variety);
     }
 
-    const activeYieldSizeNameByNormalized = new Map<string, string>();
+    const activeYieldSizeNameByCanonical = new Map<string, string>();
     for (const size of activeYieldSizes) {
-      activeYieldSizeNameByNormalized.set(normalizeName(size.name), size.name);
+      activeYieldSizeNameByCanonical.set(canonicalizeSizeName(size.name), size.name);
     }
 
     const existingEntryKeySet = new Set<string>();
@@ -487,8 +523,8 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
           const mapped: Array<{ pdfSize: string; growlinkSize: string }> = [];
 
           for (const parsedSizeName of Object.keys(parsed.sizeKg)) {
-            const normalizedParsedSize = normalizeName(parsedSizeName);
-            const activeSizeName = activeYieldSizeNameByNormalized.get(normalizedParsedSize);
+            const canonical = canonicalizeSizeName(parsedSizeName);
+            const activeSizeName = activeYieldSizeNameByCanonical.get(canonical);
             const pdfSizeLabel =
               KNOWN_SIZE_TARGET_TO_LABEL[parsedSizeName] ?? parsedSizeName;
 
@@ -684,15 +720,16 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
   }
 
   const activeSizes = (activeSizesResult.data ?? []) as ActiveYieldSizeWithId[];
-  let sizeKgById: Record<string, number>;
+  const sizeMappingResult = mapSizeNamesToIds(payload.sizeBreakdown, activeSizes);
 
-  try {
-    sizeKgById = mapSizeNamesToIds(payload.sizeBreakdown, activeSizes);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Size mapping failed.";
-    return res.status(400).json({ message });
+  if (sizeMappingResult.skipped.length > 0) {
+    const unknownNames = sizeMappingResult.skipped.map((s) => s.pdfLabel).join(", ");
+    return res.status(400).json({
+      message: `Unknown size(s): ${unknownNames}. Add these active sizes before importing.`
+    });
   }
 
+  const sizeKgById = sizeMappingResult.mapped;
   const totals = calculateTotals(sizeKgById, varietyResult.data as VarietyForCalc);
 
   if (payload.mode === "append" && existingEntryCount === 1) {
