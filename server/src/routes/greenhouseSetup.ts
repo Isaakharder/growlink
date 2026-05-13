@@ -4,7 +4,9 @@ import { sendSafeError } from "../utils/safeError";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
-type RowPattern = "all" | "odd" | "even";
+type RowPattern = "all" | "every_other";
+type LegacyRowPattern = RowPattern | "odd" | "even";
+type AssignmentPattern = "all" | "every_other";
 
 type GreenhouseGroupPayload = {
   type: GroupType;
@@ -34,11 +36,13 @@ type GreenhouseVarietyAssignmentPayload = {
   variety_id: string;
   start_row: number;
   end_row: number;
+  assignment_pattern: AssignmentPattern;
 };
 
 const GROUP_TYPES: GroupType[] = ["phase", "zone", "color"];
 const STATUS_TYPES: StatusType[] = ["active", "inactive"];
-const ROW_PATTERNS: RowPattern[] = ["all", "odd", "even"];
+const LEGACY_ROW_PATTERNS: LegacyRowPattern[] = ["all", "every_other", "odd", "even"];
+const ASSIGNMENT_PATTERNS: AssignmentPattern[] = ["all", "every_other"];
 
 function parseName(value: unknown) {
   const name = typeof value === "string" ? value.trim() : "";
@@ -69,11 +73,36 @@ function parseType(value: unknown): GroupType {
 
 function parsePattern(value: unknown): RowPattern {
   const pattern = typeof value === "string" ? value.toLowerCase() : "";
-  if (!ROW_PATTERNS.includes(pattern as RowPattern)) {
-    throw new Error("row_pattern must be all, odd, or even");
+  if (!LEGACY_ROW_PATTERNS.includes(pattern as LegacyRowPattern)) {
+    throw new Error("row_pattern must be all or every_other");
   }
 
-  return pattern as RowPattern;
+  return pattern === "all" ? "all" : "every_other";
+}
+
+function normalizeRowPattern(value: unknown): RowPattern {
+  return value === "all" ? "all" : "every_other";
+}
+
+function toStoredRowPattern(pattern: RowPattern, startRow: number): LegacyRowPattern {
+  if (pattern === "all") {
+    return "all";
+  }
+
+  return startRow % 2 === 0 ? "even" : "odd";
+}
+
+function parseAssignmentPattern(value: unknown): AssignmentPattern {
+  if (value === null || value === undefined || value === "") {
+    return "all";
+  }
+
+  const pattern = typeof value === "string" ? value.toLowerCase() : "";
+  if (!ASSIGNMENT_PATTERNS.includes(pattern as AssignmentPattern)) {
+    throw new Error("assignment_pattern must be all or every_other");
+  }
+
+  return pattern as AssignmentPattern;
 }
 
 function parseInteger(
@@ -189,22 +218,16 @@ function validateVarietyAssignmentPayload(
     group_id,
     variety_id,
     start_row,
-    end_row
+    end_row,
+    assignment_pattern: parseAssignmentPattern(body.assignment_pattern)
   };
 }
 
 function generateRowNumbers(startRow: number, endRow: number, pattern: RowPattern) {
   const rowNumbers: number[] = [];
+  const rowStep = pattern === "every_other" ? 2 : 1;
 
-  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
-    if (pattern === "odd" && rowNumber % 2 === 0) {
-      continue;
-    }
-
-    if (pattern === "even" && rowNumber % 2 !== 0) {
-      continue;
-    }
-
+  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += rowStep) {
     rowNumbers.push(rowNumber);
   }
 
@@ -241,7 +264,8 @@ async function ensureAssignmentRangeWithinGeneratedRows(
   groupId: string,
   organizationId: string,
   startRow: number,
-  endRow: number
+  endRow: number,
+  assignmentPattern: AssignmentPattern
 ) {
   const { data, error } = await supabase
     .from("greenhouse_rows")
@@ -258,7 +282,8 @@ async function ensureAssignmentRangeWithinGeneratedRows(
 
   const generatedRows = new Set((data ?? []).map((row) => row.row_number as number));
 
-  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
+  const rowStep = assignmentPattern === "every_other" ? 2 : 1;
+  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += rowStep) {
     if (!generatedRows.has(rowNumber)) {
       throw new Error(
         `Row range ${startRow}-${endRow} is outside the selected group's generated rows`
@@ -357,7 +382,10 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
 
   return res.json({
     groups: groupsResult.data ?? [],
-    rowSections: sectionsResult.data ?? [],
+    rowSections: (sectionsResult.data ?? []).map((section) => ({
+      ...section,
+      row_pattern: normalizeRowPattern(section.row_pattern)
+    })),
     rows: rowsResult.data ?? [],
     varietyAssignments: assignmentsResult.data ?? [],
     varieties: varietiesResult.data ?? []
@@ -446,7 +474,11 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
 
   const { data: sectionData, error: sectionError } = await supabase
     .from("greenhouse_row_sections")
-    .insert({ ...payload, organization_id: organizationId })
+    .insert({
+      ...payload,
+      row_pattern: toStoredRowPattern(payload.row_pattern, payload.start_row),
+      organization_id: organizationId
+    })
     .select("*")
     .single();
 
@@ -466,7 +498,10 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
     return sendSafeError(res, 500, "Failed to generate greenhouse rows.", "Greenhouse row upsert error:", error);
   }
 
-  return res.status(201).json(sectionData);
+  return res.status(201).json({
+    ...sectionData,
+    row_pattern: normalizeRowPattern((sectionData as { row_pattern: unknown }).row_pattern)
+  });
 });
 
 greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
@@ -484,7 +519,11 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
 
   const { data: updatedSection, error: sectionError } = await supabase
     .from("greenhouse_row_sections")
-    .update({ ...payload, updated_at: new Date().toISOString() })
+    .update({
+      ...payload,
+      row_pattern: toStoredRowPattern(payload.row_pattern, payload.start_row),
+      updated_at: new Date().toISOString()
+    })
     .eq("id", id)
     .eq("organization_id", organizationId)
     .select("*")
@@ -529,7 +568,12 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
     return sendSafeError(res, 500, "Failed to update greenhouse rows.", "Greenhouse row upsert error:", error);
   }
 
-  return res.json(updatedSection);
+  return res.json({
+    ...updatedSection,
+    row_pattern: normalizeRowPattern(
+      (updatedSection as { row_pattern: unknown }).row_pattern
+    )
+  });
 });
 
 greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) => {
@@ -598,7 +642,8 @@ greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) =
       payload.group_id,
       organizationId,
       payload.start_row,
-      payload.end_row
+      payload.end_row,
+      payload.assignment_pattern
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
@@ -631,7 +676,8 @@ greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res
       payload.group_id,
       organizationId,
       payload.start_row,
-      payload.end_row
+      payload.end_row,
+      payload.assignment_pattern
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";

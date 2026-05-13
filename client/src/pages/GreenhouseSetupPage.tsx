@@ -3,7 +3,9 @@ import { apiFetch } from "../lib/api";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
-type RowPattern = "all" | "odd" | "even";
+type RowPattern = "all" | "every_other";
+type LegacyRowPattern = RowPattern | "odd" | "even";
+type AssignmentPattern = "all" | "every_other";
 
 type GreenhouseGroup = {
   id: string;
@@ -19,7 +21,7 @@ type GreenhouseRowSection = {
   group_id: string;
   start_row: number;
   end_row: number;
-  row_pattern: RowPattern;
+  row_pattern: LegacyRowPattern;
   slab_count: number;
   plants_per_slab: number;
   stems_per_plant: number;
@@ -45,6 +47,7 @@ type GreenhouseVarietyAssignment = {
   variety_id: string;
   start_row: number;
   end_row: number;
+  assignment_pattern: AssignmentPattern | null;
   created_at: string;
   updated_at: string;
 };
@@ -91,6 +94,7 @@ type AssignmentFormState = {
   variety_id: string;
   start_row: string;
   end_row: string;
+  assignment_pattern: AssignmentPattern;
 };
 
 const SETUP_URL = "/api/greenhouse-setup";
@@ -107,8 +111,7 @@ const TYPE_LABELS: Record<GroupType, string> = {
 
 const PATTERN_LABELS: Record<RowPattern, string> = {
   all: "All rows",
-  odd: "Odd rows only",
-  even: "Even rows only"
+  every_other: "Every other row"
 };
 
 const INITIAL_GROUP_FORM: GroupFormState = {
@@ -131,7 +134,8 @@ const INITIAL_ASSIGNMENT_FORM: AssignmentFormState = {
   group_id: "",
   variety_id: "",
   start_row: "1",
-  end_row: "1"
+  end_row: "1",
+  assignment_pattern: "all"
 };
 
 const ROW_PREVIEW_LIMIT = 2;
@@ -147,17 +151,38 @@ function roundTo(value: number, decimals: number) {
 }
 
 function countPatternRows(startRow: number, endRow: number, pattern: RowPattern) {
+  const rowStep = pattern === "every_other" ? 2 : 1;
   let total = 0;
-  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
-    if (pattern === "odd" && rowNumber % 2 === 0) {
-      continue;
-    }
-    if (pattern === "even" && rowNumber % 2 !== 0) {
-      continue;
-    }
+  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += rowStep) {
     total += 1;
   }
   return total;
+}
+
+function normalizeRowPattern(pattern: LegacyRowPattern | null | undefined): RowPattern {
+  return pattern === "all" ? "all" : "every_other";
+}
+
+function getAssignmentPattern(
+  assignment: Pick<GreenhouseVarietyAssignment, "assignment_pattern">
+): AssignmentPattern {
+  return assignment.assignment_pattern === "every_other" ? "every_other" : "all";
+}
+
+function formatAssignmentRange(assignment: GreenhouseVarietyAssignment) {
+  const rangeLabel = `${assignment.start_row} - ${assignment.end_row}`;
+  return getAssignmentPattern(assignment) === "every_other"
+    ? `${rangeLabel} every other`
+    : rangeLabel;
+}
+
+function getAssignmentTotalRows(assignment: GreenhouseVarietyAssignment) {
+  const pattern = getAssignmentPattern(assignment);
+  if (pattern === "all") {
+    return assignment.end_row - assignment.start_row + 1;
+  }
+
+  return Math.floor((assignment.end_row - assignment.start_row) / 2) + 1;
 }
 
 export function GreenhouseSetupPage() {
@@ -278,7 +303,12 @@ export function GreenhouseSetupPage() {
 
       const data = (await response.json()) as SetupResponse;
       setGroups(data.groups ?? []);
-      setRowSections(data.rowSections ?? []);
+      setRowSections(
+        (data.rowSections ?? []).map((section) => ({
+          ...section,
+          row_pattern: normalizeRowPattern(section.row_pattern)
+        }))
+      );
       setRows(data.rows ?? []);
       setVarietyAssignments(data.varietyAssignments ?? []);
       setVarieties(data.varieties ?? []);
@@ -407,7 +437,7 @@ export function GreenhouseSetupPage() {
       group_id: section.group_id,
       start_row: String(section.start_row),
       end_row: String(section.end_row),
-      row_pattern: section.row_pattern,
+      row_pattern: normalizeRowPattern(section.row_pattern),
       slab_count: String(section.slab_count),
       plants_per_slab: String(section.plants_per_slab),
       stems_per_plant: String(section.stems_per_plant)
@@ -437,7 +467,8 @@ export function GreenhouseSetupPage() {
       group_id: assignment.group_id,
       variety_id: assignment.variety_id,
       start_row: String(assignment.start_row),
-      end_row: String(assignment.end_row)
+      end_row: String(assignment.end_row),
+      assignment_pattern: getAssignmentPattern(assignment)
     });
     setAssignmentModalOpen(true);
   }
@@ -572,7 +603,8 @@ export function GreenhouseSetupPage() {
       group_id: assignmentForm.group_id,
       variety_id: assignmentForm.variety_id,
       start_row: Number(assignmentForm.start_row),
-      end_row: Number(assignmentForm.end_row)
+      end_row: Number(assignmentForm.end_row),
+      assignment_pattern: assignmentForm.assignment_pattern
     };
 
     if (!payload.group_id) {
@@ -595,10 +627,11 @@ export function GreenhouseSetupPage() {
       return;
     }
 
-    for (let rowNumber = payload.start_row; rowNumber <= payload.end_row; rowNumber += 1) {
+    const rowStep = payload.assignment_pattern === "every_other" ? 2 : 1;
+    for (let rowNumber = payload.start_row; rowNumber <= payload.end_row; rowNumber += rowStep) {
       if (!selectedGroupRowNumbers.has(rowNumber)) {
         setError(
-          `Row range must stay inside this group's generated rows. Missing row ${rowNumber}.`
+          `Selected rows must stay inside this group's generated rows. Missing row ${rowNumber}.`
         );
         return;
       }
@@ -875,7 +908,7 @@ export function GreenhouseSetupPage() {
               <tbody>
                 {selectedGroupAssignments.map((assignment) => {
                   const variety = varietiesById[assignment.variety_id];
-                  const totalRows = assignment.end_row - assignment.start_row + 1;
+                  const totalRows = getAssignmentTotalRows(assignment);
 
                   return (
                     <tr key={assignment.id}>
@@ -890,7 +923,7 @@ export function GreenhouseSetupPage() {
                         )}
                       </td>
                       <td>
-                        {assignment.start_row} - {assignment.end_row}
+                        {formatAssignmentRange(assignment)}
                       </td>
                       <td>{totalRows}</td>
                       <td>
@@ -1195,8 +1228,7 @@ export function GreenhouseSetupPage() {
                   }
                 >
                   <option value="all">All rows</option>
-                  <option value="odd">Odd rows only</option>
-                  <option value="even">Even rows only</option>
+                  <option value="every_other">Every other row</option>
                 </select>
               </label>
 
@@ -1325,6 +1357,22 @@ export function GreenhouseSetupPage() {
                   }
                   required
                 />
+              </label>
+
+              <label>
+                Assignment pattern
+                <select
+                  value={assignmentForm.assignment_pattern}
+                  onChange={(event) =>
+                    setAssignmentForm((current) => ({
+                      ...current,
+                      assignment_pattern: event.target.value as AssignmentPattern
+                    }))
+                  }
+                >
+                  <option value="all">All rows</option>
+                  <option value="every_other">Every other row</option>
+                </select>
               </label>
 
               <div className="form-actions">
