@@ -28,6 +28,18 @@ type UploadKeyRow = {
   lastUsedAt: string | null;
 };
 
+type FlowMasterImportRunRow = {
+  id: string;
+  lotNumber: string;
+  sourceFilename: string | null;
+  varietyId: string | null;
+  varietyName: string | null;
+  isoYear: number | null;
+  isoWeek: number | null;
+  startTime: string | null;
+  importedAt: string;
+};
+
 type CreatedKeyState = {
   key: string;
   label: string;
@@ -64,10 +76,16 @@ export function AdminOrganizationsPage() {
   const [createdKey, setCreatedKey] = useState<CreatedKeyState | null>(null);
   const [revokeBusyId, setRevokeBusyId] = useState<string | null>(null);
   const [managementError, setManagementError] = useState<string | null>(null);
+  const [importRuns, setImportRuns] = useState<FlowMasterImportRunRow[]>([]);
+  const [importRunsLoading, setImportRunsLoading] = useState(true);
+  const [importRunsError, setImportRunsError] = useState<string | null>(null);
+  const [selectedImportRunIds, setSelectedImportRunIds] = useState<Set<string>>(new Set());
+  const [deleteImportRunsBusy, setDeleteImportRunsBusy] = useState(false);
 
   useEffect(() => {
     void loadOrganizations();
     void loadKeys();
+    void loadImportRuns();
   }, []);
 
   async function loadOrganizations() {
@@ -113,6 +131,39 @@ export function AdminOrganizationsPage() {
       setManagementError("Network error while loading upload keys.");
     } finally {
       setKeysLoading(false);
+    }
+  }
+
+  async function loadImportRuns() {
+    setImportRunsLoading(true);
+    try {
+      const res = await apiFetch("/api/admin/flowmaster/import-runs");
+      const body = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        runs?: FlowMasterImportRunRow[];
+      };
+
+      if (!res.ok) {
+        setImportRunsError(getResponseMessage(body, "Failed to load FlowMaster import runs."));
+        setImportRunsLoading(false);
+        return;
+      }
+
+      const safeRuns = Array.isArray(body.runs) ? body.runs : [];
+      setImportRuns(safeRuns);
+      setSelectedImportRunIds((prev) => {
+        const next = new Set<string>();
+        const validIds = new Set(safeRuns.map((run) => run.id));
+        for (const id of prev) {
+          if (validIds.has(id)) next.add(id);
+        }
+        return next;
+      });
+      setImportRunsError(null);
+    } catch {
+      setImportRunsError("Network error while loading FlowMaster import runs.");
+    } finally {
+      setImportRunsLoading(false);
     }
   }
 
@@ -234,9 +285,72 @@ export function AdminOrganizationsPage() {
     }
   }
 
+  function toggleImportRunSelection(id: string) {
+    setSelectedImportRunIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAllImportRuns() {
+    setSelectedImportRunIds((prev) => {
+      if (prev.size === importRuns.length) {
+        return new Set();
+      }
+      return new Set(importRuns.map((run) => run.id));
+    });
+  }
+
+  async function handleDeleteSelectedImportRuns() {
+    if (selectedImportRunIds.size === 0 || deleteImportRunsBusy) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This only deletes import history. It does not delete yield data. This lot may import again if FlowMaster sends it."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeleteImportRunsBusy(true);
+    setImportRunsError(null);
+
+    try {
+      const ids = Array.from(selectedImportRunIds);
+      const res = await apiFetch("/api/admin/flowmaster/import-runs/delete", {
+        method: "POST",
+        body: JSON.stringify({ ids })
+      });
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+
+      if (!res.ok) {
+        setImportRunsError(getResponseMessage(body, "Failed to delete selected import runs."));
+        setDeleteImportRunsBusy(false);
+        return;
+      }
+
+      setSelectedImportRunIds(new Set());
+      await loadImportRuns();
+    } catch {
+      setImportRunsError("Network error while deleting import runs.");
+    } finally {
+      setDeleteImportRunsBusy(false);
+    }
+  }
+
   function handleReset() {
     setState({ kind: "idle" });
   }
+
+  const allImportRunsSelected =
+    importRuns.length > 0 && selectedImportRunIds.size === importRuns.length;
 
   return (
     <div style={{ maxWidth: 920, margin: "0 auto", padding: "1.5rem 1rem 2rem" }}>
@@ -464,6 +578,99 @@ export function AdminOrganizationsPage() {
           )}
         </div>
       </section>
+
+      <section style={sectionStyle}>
+        <h2 style={titleStyle}>FlowMaster Import Runs</h2>
+        <p style={descriptionStyle}>
+          Manage lot-level import history for this organization. Deleting import runs allows FlowMaster to re-import matching lots.
+        </p>
+        <p style={warningTextStyle}>
+          Deleting import history does not delete already-imported KG yield data.
+        </p>
+
+        {importRunsError && <p style={errorBannerStyle}>{importRunsError}</p>}
+
+        <div style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", marginBottom: "0.6rem", flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0, fontSize: "1rem", color: "var(--text)" }}>Import History</h3>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                onClick={() => void loadImportRuns()}
+                disabled={importRunsLoading || deleteImportRunsBusy}
+                style={secondaryButtonStyle}
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteSelectedImportRuns()}
+                disabled={selectedImportRunIds.size === 0 || deleteImportRunsBusy}
+                style={smallDangerButtonStyle}
+              >
+                {deleteImportRunsBusy
+                  ? "Deleting..."
+                  : `Delete selected (${selectedImportRunIds.size})`}
+              </button>
+            </div>
+          </div>
+
+          {importRunsLoading ? (
+            <p style={{ margin: "0.25rem 0", color: "var(--text-muted)", fontSize: "0.875rem" }}>Loading import runs...</p>
+          ) : importRuns.length === 0 ? (
+            <p style={{ margin: "0.25rem 0", color: "var(--text-muted)", fontSize: "0.875rem" }}>
+              No import runs found for this organization.
+            </p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={tableHeaderStyle}>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all import runs"
+                        checked={allImportRunsSelected}
+                        onChange={toggleSelectAllImportRuns}
+                      />
+                    </th>
+                    <th style={tableHeaderStyle}>Lot Number</th>
+                    <th style={tableHeaderStyle}>Source Filename</th>
+                    <th style={tableHeaderStyle}>Variety</th>
+                    <th style={tableHeaderStyle}>ISO Year/Week</th>
+                    <th style={tableHeaderStyle}>Start Time</th>
+                    <th style={tableHeaderStyle}>Imported At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importRuns.map((run) => (
+                    <tr key={run.id}>
+                      <td style={tableCellStyle}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select lot ${run.lotNumber}`}
+                          checked={selectedImportRunIds.has(run.id)}
+                          onChange={() => toggleImportRunSelection(run.id)}
+                        />
+                      </td>
+                      <td style={tableCellStyle}>{run.lotNumber}</td>
+                      <td style={tableCellStyle}>{run.sourceFilename ?? "-"}</td>
+                      <td style={tableCellStyle}>{run.varietyName ?? "-"}</td>
+                      <td style={tableCellStyle}>
+                        {run.isoYear !== null && run.isoWeek !== null
+                          ? `${run.isoYear}-W${String(run.isoWeek).padStart(2, "0")}`
+                          : "-"}
+                      </td>
+                      <td style={tableCellStyle}>{formatDateTime(run.startTime)}</td>
+                      <td style={tableCellStyle}>{formatDateTime(run.importedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -484,6 +691,17 @@ const descriptionStyle: CSSProperties = {
   fontSize: "0.85rem",
   marginBottom: "0.8rem",
   marginTop: 0
+};
+
+const warningTextStyle: CSSProperties = {
+  marginTop: "-0.35rem",
+  marginBottom: "0.8rem",
+  padding: "0.55rem 0.7rem",
+  background: "#fff7e6",
+  border: "1px solid #f2d39b",
+  borderRadius: 6,
+  fontSize: "0.82rem",
+  color: "#7f5a00"
 };
 
 const cardStyle: CSSProperties = {

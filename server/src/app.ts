@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { requireOrganizationContext } from "./middleware/requireOrganizationContext";
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
+import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportRuns";
 import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
 import { agentRouter } from "./routes/agentRoutes";
 import { greenhouseSetupRouter } from "./routes/greenhouseSetup";
@@ -65,6 +66,7 @@ app.use(express.json());
 
 app.use("/api", healthRouter);
 app.use("/api", adminOrganizationsRouter);
+app.use("/api", adminFlowMasterImportRunsRouter);
 app.use("/api", adminUploadKeysRouter);
 app.use("/api", agentRouter);
 app.use("/api", requireOrganizationContext);
