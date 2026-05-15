@@ -17,10 +17,10 @@ type ImportRunRow = {
 
 const adminFlowMasterImportRunsRouter = Router();
 
-adminFlowMasterImportRunsRouter.use(requireAdminUser, requireOrganizationContext);
-
 adminFlowMasterImportRunsRouter.get(
   "/admin/flowmaster/import-runs",
+  requireAdminUser,
+  requireOrganizationContext,
   async (req: Request, res: Response) => {
     const organizationId = req.organizationId;
 
@@ -94,6 +94,8 @@ adminFlowMasterImportRunsRouter.get(
 
 adminFlowMasterImportRunsRouter.post(
   "/admin/flowmaster/import-runs/delete",
+  requireAdminUser,
+  requireOrganizationContext,
   async (req: Request, res: Response) => {
     const organizationId = req.organizationId;
     const rawIds = (req.body as { ids?: unknown })?.ids;
