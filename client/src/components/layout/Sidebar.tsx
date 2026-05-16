@@ -39,7 +39,7 @@ const navItems: NavItem[] = [
     label: "Pest Control",
     base: "/pest-control",
     children: [
-      { label: "Operate", to: "/pest-control/operate" },
+      { label: "Planner", to: "/pest-control/planner" },
       { label: "Inventory", to: "/pest-control/inventory" },
       { label: "Records", to: "/pest-control/records" }
     ]

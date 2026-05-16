@@ -507,6 +507,7 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
     .single();
 
   if (sectionError || !sectionData) {
+    console.error("row section save error", sectionError);
     return sendSafeError(res, 500, "Failed to create row section.", "Greenhouse row section insert error:", sectionError ?? new Error("No data returned"));
   }
 
@@ -554,6 +555,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
     .single();
 
   if (sectionError || !updatedSection) {
+    console.error("row section save error", sectionError);
     return sendSafeError(res, 500, "Failed to update row section.", "Greenhouse row section update error:", sectionError ?? new Error("No data returned"));
   }
 

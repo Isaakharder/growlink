@@ -294,6 +294,11 @@ export function GreenhouseSetupPage() {
     [selectedGroupRows]
   );
 
+  const selectedGroupRowNumbersSorted = useMemo(
+    () => selectedGroupRows.map((row) => row.row_number),
+    [selectedGroupRows]
+  );
+
   const varietiesById = useMemo(() => {
     return varieties.reduce<Record<string, Variety>>((accumulator, variety) => {
       accumulator[variety.id] = variety;
@@ -337,7 +342,8 @@ export function GreenhouseSetupPage() {
       m2: roundTo(totalM2, 2),
       ft2: roundTo(m2ToFt2(totalM2), 1),
       plants: totalPlants,
-      slabs: totalSlabs
+      slabs: totalSlabs,
+      plantsPerM2: totalM2 > 0 ? roundTo(totalPlants / totalM2, 2) : null
     };
   }, [selectedGroupRows]);
 
@@ -356,7 +362,8 @@ export function GreenhouseSetupPage() {
       m2: roundTo(totalM2, 2),
       ft2: roundTo(m2ToFt2(totalM2), 1),
       plants: totalPlants,
-      slabs: totalSlabs
+      slabs: totalSlabs,
+      plantsPerM2: totalM2 > 0 ? roundTo(totalPlants / totalM2, 2) : null
     };
   }, [rows, rowSections]);
 
@@ -588,12 +595,16 @@ export function GreenhouseSetupPage() {
       return;
     }
 
+    const firstRow = selectedGroupRowNumbersSorted[0];
+    const defaultRow = firstRow !== undefined ? String(firstRow) : "1";
     setError(null);
     setEditingAssignmentId(null);
     setAssignmentForm({
       ...INITIAL_ASSIGNMENT_FORM,
       group_id: selectedGroup.id,
-      variety_id: activeVarieties[0]?.id ?? ""
+      variety_id: activeVarieties[0]?.id ?? "",
+      start_row: defaultRow,
+      end_row: defaultRow
     });
     setAssignmentModalOpen(true);
   }
@@ -1020,6 +1031,12 @@ export function GreenhouseSetupPage() {
                     <span className="greenhouse-stat-label">ft²</span>
                     <span className="greenhouse-stat-value">{selectedGroupTotals.ft2.toLocaleString()}</span>
                   </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Plants / m²</span>
+                    <span className="greenhouse-stat-value">
+                      {selectedGroupTotals.plantsPerM2 !== null ? selectedGroupTotals.plantsPerM2.toLocaleString() : "—"}
+                    </span>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -1051,6 +1068,12 @@ export function GreenhouseSetupPage() {
               <div className="greenhouse-stat-item">
                 <span className="greenhouse-stat-label">ft²</span>
                 <span className="greenhouse-stat-value">{greenhouseTotals.ft2.toLocaleString()}</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Plants / m²</span>
+                <span className="greenhouse-stat-value">
+                  {greenhouseTotals.plantsPerM2 !== null ? greenhouseTotals.plantsPerM2.toLocaleString() : "—"}
+                </span>
               </div>
             </div>
           </div>
@@ -1084,7 +1107,7 @@ export function GreenhouseSetupPage() {
                 <button
                   type="button"
                   onClick={openAddAssignmentModal}
-                  disabled={activeVarieties.length === 0}
+                  disabled={activeVarieties.length === 0 || selectedGroupRows.length === 0}
                 >
                   + Assign Variety
                 </button>
@@ -1093,6 +1116,10 @@ export function GreenhouseSetupPage() {
 
             {selectedGroup && activeVarieties.length === 0 ? (
               <p>There are no active varieties available to assign.</p>
+            ) : null}
+
+            {selectedGroup && selectedGroupRows.length === 0 ? (
+              <p>Add row sections before assigning varieties.</p>
             ) : null}
 
             {selectedGroup && selectedGroupAssignments.length === 0 ? (
@@ -1613,10 +1640,7 @@ export function GreenhouseSetupPage() {
 
               <label>
                 Start row
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
+                <select
                   value={assignmentForm.start_row}
                   onChange={(event) =>
                     setAssignmentForm((current) => ({
@@ -1625,15 +1649,18 @@ export function GreenhouseSetupPage() {
                     }))
                   }
                   required
-                />
+                >
+                  {selectedGroupRowNumbersSorted.map((rowNumber) => (
+                    <option key={rowNumber} value={String(rowNumber)}>
+                      {rowNumber}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <label>
                 End row
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
+                <select
                   value={assignmentForm.end_row}
                   onChange={(event) =>
                     setAssignmentForm((current) => ({
@@ -1642,7 +1669,13 @@ export function GreenhouseSetupPage() {
                     }))
                   }
                   required
-                />
+                >
+                  {selectedGroupRowNumbersSorted.map((rowNumber) => (
+                    <option key={rowNumber} value={String(rowNumber)}>
+                      {rowNumber}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <label>

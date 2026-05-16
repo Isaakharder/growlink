@@ -12,6 +12,9 @@ import { MobileHomePage } from "../pages/MobileHomePage";
 import { MobileIrrigationLogPage } from "../pages/MobileIrrigationLogPage";
 import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
+import { PestControlSetupPage } from "../pages/PestControlSetupPage";
+import { PestInventoryPage } from "../pages/PestInventoryPage";
+import { PestPlannerPage } from "../pages/PestPlannerPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
 import { LoginPage } from "../pages/LoginPage";
@@ -54,22 +57,16 @@ export const appRouter = createBrowserRouter([
             element: <IrrigationPage />
           },
           {
+            path: "pest-control/planner",
+            element: <PestPlannerPage />
+          },
+          {
             path: "pest-control/operate",
-            element: (
-              <PagePlaceholder
-                title="Pest Control Operate"
-                description="Daily pest control operational actions and execution workflows will appear here."
-              />
-            )
+            element: <Navigate to="/pest-control/planner" replace />
           },
           {
             path: "pest-control/inventory",
-            element: (
-              <PagePlaceholder
-                title="Pest Control Inventory"
-                description="Inventory counts, usage records, and replenishment tracking for pest control materials belong here."
-              />
-            )
+            element: <PestInventoryPage />
           },
           {
             path: "pest-control/records",
@@ -82,7 +79,7 @@ export const appRouter = createBrowserRouter([
           },
           {
             path: "pest-control",
-            element: <Navigate to="/pest-control/operate" replace />
+            element: <Navigate to="/pest-control/planner" replace />
           },
           {
             path: "daily-yield",
@@ -104,12 +101,7 @@ export const appRouter = createBrowserRouter([
           },
           {
             path: "setup/pest-control",
-            element: (
-              <PagePlaceholder
-                title="Pest Control Setup"
-                description="Configuration for pest control categories, defaults, and setup metadata will be managed here."
-              />
-            )
+            element: <PestControlSetupPage />
           },
           {
             path: "setup/greenhouse",

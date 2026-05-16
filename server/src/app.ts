@@ -6,6 +6,7 @@ import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportR
 import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
 import { agentRouter } from "./routes/agentRoutes";
 import { greenhouseSetupRouter } from "./routes/greenhouseSetup";
+import { pestControlRouter } from "./routes/pestControl";
 import { healthRouter } from "./routes/health";
 import { integrationsRouter } from "./routes/integrations";
 import { irrigationSetupRouter } from "./routes/irrigationSetup";
@@ -72,6 +73,7 @@ app.use("/api", agentRouter);
 app.use("/api", requireOrganizationContext);
 app.use("/api", pdfImportRouter);
 app.use("/api", greenhouseSetupRouter);
+app.use("/api", pestControlRouter);
 app.use("/api", integrationsRouter);
 app.use("/api", irrigationSetupRouter);
 app.use("/api", varietiesRouter);
