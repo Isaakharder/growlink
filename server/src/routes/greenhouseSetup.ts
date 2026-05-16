@@ -22,6 +22,8 @@ type GreenhouseRowSectionPayload = {
   slab_count: number;
   plants_per_slab: number;
   stems_per_plant: number;
+  width_meters: number | null;
+  length_meters: number | null;
 };
 
 type GreenhouseRowPayload = {
@@ -29,6 +31,8 @@ type GreenhouseRowPayload = {
   slab_count: number;
   plants_per_slab: number;
   stems_per_plant: number;
+  width_meters: number | null;
+  length_meters: number | null;
 };
 
 type GreenhouseVarietyAssignmentPayload = {
@@ -105,6 +109,20 @@ function parseAssignmentPattern(value: unknown): AssignmentPattern {
   return pattern as AssignmentPattern;
 }
 
+function parseOptionalPositiveNumber(value: unknown, fieldName: string): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${fieldName} must be a valid number`);
+  }
+  if (parsed <= 0) {
+    throw new Error(`${fieldName} must be greater than 0`);
+  }
+  return parsed;
+}
+
 function parseInteger(
   value: unknown,
   fieldName: string,
@@ -170,7 +188,9 @@ function validateRowSectionPayload(input: unknown): GreenhouseRowSectionPayload 
     row_pattern: parsePattern(body.row_pattern),
     slab_count: parseInteger(body.slab_count, "slab_count", 0),
     plants_per_slab: parseInteger(body.plants_per_slab, "plants_per_slab", 0),
-    stems_per_plant: parseInteger(body.stems_per_plant, "stems_per_plant", 0, true)
+    stems_per_plant: parseInteger(body.stems_per_plant, "stems_per_plant", 0, true),
+    width_meters: parseOptionalPositiveNumber(body.width_meters, "width_meters"),
+    length_meters: parseOptionalPositiveNumber(body.length_meters, "length_meters")
   };
 }
 
@@ -185,7 +205,9 @@ function validateRowPayload(input: unknown): GreenhouseRowPayload {
     row_number: parseInteger(body.row_number, "row_number", 1),
     slab_count: parseInteger(body.slab_count, "slab_count", 0),
     plants_per_slab: parseInteger(body.plants_per_slab, "plants_per_slab", 0),
-    stems_per_plant: parseInteger(body.stems_per_plant, "stems_per_plant", 0, true)
+    stems_per_plant: parseInteger(body.stems_per_plant, "stems_per_plant", 0, true),
+    width_meters: parseOptionalPositiveNumber(body.width_meters, "width_meters"),
+    length_meters: parseOptionalPositiveNumber(body.length_meters, "length_meters")
   };
 }
 
@@ -312,6 +334,8 @@ async function upsertRowsFromSection(
     slab_count: payload.slab_count,
     plants_per_slab: payload.plants_per_slab,
     stems_per_plant: payload.stems_per_plant,
+    width_meters: payload.width_meters,
+    length_meters: payload.length_meters,
     updated_at: now
   }));
 

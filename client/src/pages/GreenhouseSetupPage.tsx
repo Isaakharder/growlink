@@ -25,6 +25,8 @@ type GreenhouseRowSection = {
   slab_count: number;
   plants_per_slab: number;
   stems_per_plant: number;
+  width_meters: number | null;
+  length_meters: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -37,6 +39,8 @@ type GreenhouseRow = {
   slab_count: number;
   plants_per_slab: number;
   stems_per_plant: number;
+  width_meters: number | null;
+  length_meters: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -81,12 +85,29 @@ type RowSectionFormState = {
   slab_count: string;
   plants_per_slab: string;
   stems_per_plant: string;
+  width_meters: string;
+  length_meters: string;
 };
 
 type RowDraft = {
   slab_count: string;
   plants_per_slab: string;
   stems_per_plant: string;
+  width_meters: string;
+  length_meters: string;
+};
+
+type VarietyAreaSummary = {
+  assignmentId: string;
+  varietyId: string;
+  varietyName: string;
+  varietyColor: string;
+  rowRange: string;
+  rowCount: number;
+  m2: number;
+  ft2: number;
+  plants: number;
+  slabs: number;
 };
 
 type AssignmentFormState = {
@@ -127,7 +148,9 @@ const INITIAL_SECTION_FORM: RowSectionFormState = {
   row_pattern: "all",
   slab_count: "0",
   plants_per_slab: "0",
-  stems_per_plant: "1"
+  stems_per_plant: "1",
+  width_meters: "",
+  length_meters: ""
 };
 
 const INITIAL_ASSIGNMENT_FORM: AssignmentFormState = {
@@ -148,6 +171,24 @@ function parseNumber(value: string) {
 function roundTo(value: number, decimals: number) {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+const SQ_FT_PER_M2 = 10.7639;
+
+function parseNullableNumber(value: string): number | null {
+  if (value === "" || value === null || value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function rowAreaM2(row: { width_meters: number | null; length_meters: number | null }): number {
+  return (row.width_meters ?? 0) * (row.length_meters ?? 0);
+}
+
+function m2ToFt2(m2: number): number {
+  return m2 * SQ_FT_PER_M2;
 }
 
 function countPatternRows(startRow: number, endRow: number, pattern: RowPattern) {
@@ -219,6 +260,7 @@ export function GreenhouseSetupPage() {
   const [expandedRowsByGroupId, setExpandedRowsByGroupId] = useState<Record<string, boolean>>(
     {}
   );
+  const [activeTab, setActiveTab] = useState<"rows" | "varieties">("rows");
 
   const selectedGroup = useMemo(
     () => groups.find((group) => group.id === selectedGroupId) ?? null,
@@ -264,6 +306,96 @@ export function GreenhouseSetupPage() {
     [varieties]
   );
 
+  const groupsById = useMemo(() => {
+    return groups.reduce<Record<string, GreenhouseGroup>>((acc, group) => {
+      acc[group.id] = group;
+      return acc;
+    }, {});
+  }, [groups]);
+
+  const rowsByGroupAndNumber = useMemo(() => {
+    const map: Record<string, Record<number, GreenhouseRow>> = {};
+    for (const row of rows) {
+      if (!map[row.group_id]) {
+        map[row.group_id] = {};
+      }
+      map[row.group_id][row.row_number] = row;
+    }
+    return map;
+  }, [rows]);
+
+  const selectedGroupTotals = useMemo(() => {
+    let totalM2 = 0;
+    let totalPlants = 0;
+    let totalSlabs = 0;
+    for (const row of selectedGroupRows) {
+      totalM2 += rowAreaM2(row);
+      totalSlabs += row.slab_count;
+      totalPlants += row.slab_count * row.plants_per_slab;
+    }
+    return {
+      m2: roundTo(totalM2, 2),
+      ft2: roundTo(m2ToFt2(totalM2), 1),
+      plants: totalPlants,
+      slabs: totalSlabs
+    };
+  }, [selectedGroupRows]);
+
+  const greenhouseTotals = useMemo(() => {
+    let totalM2 = 0;
+    let totalPlants = 0;
+    let totalSlabs = 0;
+    for (const row of rows) {
+      totalM2 += rowAreaM2(row);
+      totalSlabs += row.slab_count;
+      totalPlants += row.slab_count * row.plants_per_slab;
+    }
+    return {
+      rows: rows.length,
+      sections: rowSections.length,
+      m2: roundTo(totalM2, 2),
+      ft2: roundTo(m2ToFt2(totalM2), 1),
+      plants: totalPlants,
+      slabs: totalSlabs
+    };
+  }, [rows, rowSections]);
+
+  const varietyAreaSummaries = useMemo((): VarietyAreaSummary[] => {
+    return varietyAssignments
+      .filter((assignment) => assignment.group_id === selectedGroupId)
+      .map((assignment): VarietyAreaSummary => {
+        const variety = varietiesById[assignment.variety_id];
+        const pattern = getAssignmentPattern(assignment);
+        const step = pattern === "every_other" ? 2 : 1;
+        const groupRows = rowsByGroupAndNumber[assignment.group_id] ?? {};
+        let totalM2 = 0;
+        let totalPlants = 0;
+        let totalSlabs = 0;
+        let rowCount = 0;
+        for (let r = assignment.start_row; r <= assignment.end_row; r += step) {
+          const row = groupRows[r];
+          if (row) {
+            totalM2 += rowAreaM2(row);
+            totalSlabs += row.slab_count;
+            totalPlants += row.slab_count * row.plants_per_slab;
+            rowCount++;
+          }
+        }
+        return {
+          assignmentId: assignment.id,
+          varietyId: assignment.variety_id,
+          varietyName: variety?.name ?? "Unknown variety",
+          varietyColor: variety?.color ?? "",
+          rowRange: formatAssignmentRange(assignment),
+          rowCount,
+          m2: roundTo(totalM2, 2),
+          ft2: roundTo(m2ToFt2(totalM2), 1),
+          plants: totalPlants,
+          slabs: totalSlabs
+        };
+      });
+  }, [varietyAssignments, selectedGroupId, rowsByGroupAndNumber, varietiesById]);
+
   const isRowsExpanded = selectedGroupId
     ? expandedRowsByGroupId[selectedGroupId] === true
     : false;
@@ -286,7 +418,9 @@ export function GreenhouseSetupPage() {
       return (
         Number(draft.slab_count) !== row.slab_count ||
         Number(draft.plants_per_slab) !== row.plants_per_slab ||
-        Number(draft.stems_per_plant) !== row.stems_per_plant
+        Number(draft.stems_per_plant) !== row.stems_per_plant ||
+        parseNullableNumber(draft.width_meters) !== row.width_meters ||
+        parseNullableNumber(draft.length_meters) !== row.length_meters
       );
     });
   }, [selectedGroupRows, rowDrafts]);
@@ -319,7 +453,9 @@ export function GreenhouseSetupPage() {
           draft[row.id] = {
             slab_count: String(row.slab_count),
             plants_per_slab: String(row.plants_per_slab),
-            stems_per_plant: String(row.stems_per_plant)
+            stems_per_plant: String(row.stems_per_plant),
+            width_meters: row.width_meters !== null ? String(row.width_meters) : "",
+            length_meters: row.length_meters !== null ? String(row.length_meters) : ""
           };
         }
         return draft;
@@ -440,7 +576,9 @@ export function GreenhouseSetupPage() {
       row_pattern: normalizeRowPattern(section.row_pattern),
       slab_count: String(section.slab_count),
       plants_per_slab: String(section.plants_per_slab),
-      stems_per_plant: String(section.stems_per_plant)
+      stems_per_plant: String(section.stems_per_plant),
+      width_meters: section.width_meters !== null ? String(section.width_meters) : "",
+      length_meters: section.length_meters !== null ? String(section.length_meters) : ""
     });
     setRowSectionModalOpen(true);
   }
@@ -532,7 +670,9 @@ export function GreenhouseSetupPage() {
       row_pattern: rowSectionForm.row_pattern,
       slab_count: Number(rowSectionForm.slab_count),
       plants_per_slab: Number(rowSectionForm.plants_per_slab),
-      stems_per_plant: Number(rowSectionForm.stems_per_plant)
+      stems_per_plant: Number(rowSectionForm.stems_per_plant),
+      width_meters: parseNullableNumber(rowSectionForm.width_meters),
+      length_meters: parseNullableNumber(rowSectionForm.length_meters)
     };
 
     if (!payload.group_id) {
@@ -680,7 +820,9 @@ export function GreenhouseSetupPage() {
       row_number: row.row_number,
       slab_count: Number(draft.slab_count),
       plants_per_slab: Number(draft.plants_per_slab),
-      stems_per_plant: Number(draft.stems_per_plant)
+      stems_per_plant: Number(draft.stems_per_plant),
+      width_meters: parseNullableNumber(draft.width_meters),
+      length_meters: parseNullableNumber(draft.length_meters)
     };
 
     if (!Number.isInteger(payload.slab_count) || payload.slab_count < 0) {
@@ -838,275 +980,385 @@ export function GreenhouseSetupPage() {
           ) : null}
         </div>
 
-        <div className="coming-soon-card greenhouse-selected-group-card">
-          <h2>Selected Group</h2>
-          {!selectedGroup ? <p>Select a group from the table to view details.</p> : null}
-          {selectedGroup ? (
-            <dl className="greenhouse-selected-group-details">
-              <div>
-                <dt>Name</dt>
-                <dd>{selectedGroup.name}</dd>
+        <div className="greenhouse-right-column">
+          <div className="coming-soon-card greenhouse-selected-group-card">
+            <h2>Selected Group</h2>
+            {!selectedGroup ? <p>Select a group from the table to view details.</p> : null}
+            {selectedGroup ? (
+              <div className="greenhouse-group-compact">
+                <div className="greenhouse-group-identity">
+                  <div className="greenhouse-group-name">{selectedGroup.name}</div>
+                  <div className="greenhouse-group-meta">
+                    <span className="greenhouse-group-type">{TYPE_LABELS[selectedGroup.type]}</span>
+                    <span className={`status-badge ${selectedGroup.status}`}>
+                      {selectedGroup.status === "active" ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                </div>
+                <div className="greenhouse-group-stats">
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Rows</span>
+                    <span className="greenhouse-stat-value">{selectedGroupRows.length.toLocaleString()}</span>
+                  </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Sections</span>
+                    <span className="greenhouse-stat-value">{selectedGroupSections.length.toLocaleString()}</span>
+                  </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Plants</span>
+                    <span className="greenhouse-stat-value">{selectedGroupTotals.plants.toLocaleString()}</span>
+                  </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Slabs</span>
+                    <span className="greenhouse-stat-value">{selectedGroupTotals.slabs.toLocaleString()}</span>
+                  </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">m²</span>
+                    <span className="greenhouse-stat-value">{selectedGroupTotals.m2.toLocaleString()}</span>
+                  </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">ft²</span>
+                    <span className="greenhouse-stat-value">{selectedGroupTotals.ft2.toLocaleString()}</span>
+                  </div>
+                </div>
               </div>
-              <div>
-                <dt>Type</dt>
-                <dd>{TYPE_LABELS[selectedGroup.type]}</dd>
+            ) : null}
+          </div>
+
+          <div className="coming-soon-card">
+            <h2>Total Greenhouse</h2>
+            <div className="greenhouse-group-stats greenhouse-total-stats">
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Rows</span>
+                <span className="greenhouse-stat-value">{greenhouseTotals.rows.toLocaleString()}</span>
               </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{selectedGroup.status === "active" ? "Active" : "Inactive"}</dd>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Sections</span>
+                <span className="greenhouse-stat-value">{greenhouseTotals.sections.toLocaleString()}</span>
               </div>
-              <div>
-                <dt>Total generated rows</dt>
-                <dd>{selectedGroupRows.length}</dd>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Plants</span>
+                <span className="greenhouse-stat-value">{greenhouseTotals.plants.toLocaleString()}</span>
               </div>
-              <div>
-                <dt>Total row sections</dt>
-                <dd>{selectedGroupSections.length}</dd>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Slabs</span>
+                <span className="greenhouse-stat-value">{greenhouseTotals.slabs.toLocaleString()}</span>
               </div>
-            </dl>
-          ) : null}
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">m²</span>
+                <span className="greenhouse-stat-value">{greenhouseTotals.m2.toLocaleString()}</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">ft²</span>
+                <span className="greenhouse-stat-value">{greenhouseTotals.ft2.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="coming-soon-card">
-        <h2>3. Variety Assignments</h2>
+        <div className="greenhouse-tabs">
+          <button
+            type="button"
+            className={`greenhouse-tab-button${activeTab === "rows" ? " active" : ""}`}
+            onClick={() => setActiveTab("rows")}
+          >
+            Rows &amp; Sections
+          </button>
+          <button
+            type="button"
+            className={`greenhouse-tab-button${activeTab === "varieties" ? " active" : ""}`}
+            onClick={() => setActiveTab("varieties")}
+          >
+            Linked Varieties
+          </button>
+        </div>
 
-        {!selectedGroup ? <p>Select a greenhouse group to manage variety assignments.</p> : null}
+        {activeTab === "varieties" ? (
+          <div className="greenhouse-tab-content">
+            {!selectedGroup ? <p>Select a greenhouse group to manage variety assignments.</p> : null}
 
-        {selectedGroup ? (
-          <div className="varieties-toolbar greenhouse-toolbar">
-            <button
-              type="button"
-              onClick={openAddAssignmentModal}
-              disabled={activeVarieties.length === 0}
-            >
-              + Assign Variety
-            </button>
-          </div>
-        ) : null}
+            {selectedGroup ? (
+              <div className="varieties-toolbar greenhouse-toolbar">
+                <button
+                  type="button"
+                  onClick={openAddAssignmentModal}
+                  disabled={activeVarieties.length === 0}
+                >
+                  + Assign Variety
+                </button>
+              </div>
+            ) : null}
 
-        {selectedGroup && activeVarieties.length === 0 ? (
-          <p>There are no active varieties available to assign.</p>
-        ) : null}
+            {selectedGroup && activeVarieties.length === 0 ? (
+              <p>There are no active varieties available to assign.</p>
+            ) : null}
 
-        {selectedGroup && selectedGroupAssignments.length === 0 ? (
-          <p>No variety assignments yet for this group.</p>
-        ) : null}
+            {selectedGroup && selectedGroupAssignments.length === 0 ? (
+              <p>No variety assignments yet for this group.</p>
+            ) : null}
 
-        {selectedGroup && selectedGroupAssignments.length > 0 ? (
-          <div className="varieties-table-wrapper">
-            <table className="varieties-table">
-              <thead>
-                <tr>
-                  <th>Variety</th>
-                  <th>Color</th>
-                  <th>Row range</th>
-                  <th>Total rows</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedGroupAssignments.map((assignment) => {
-                  const variety = varietiesById[assignment.variety_id];
-                  const totalRows = getAssignmentTotalRows(assignment);
-
-                  return (
-                    <tr key={assignment.id}>
-                      <td>{variety?.name ?? "Unknown variety"}</td>
-                      <td>
-                        {variety?.color ? (
-                          <span className={`color-badge ${variety.color}`}>
-                            {variety.color}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                      <td>
-                        {formatAssignmentRange(assignment)}
-                      </td>
-                      <td>{totalRows}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            onClick={() => openEditAssignmentModal(assignment)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="danger"
-                            onClick={() =>
-                              void deleteItem(
-                                `${ASSIGNMENTS_URL}/${assignment.id}`,
-                                "variety assignment"
-                              )
-                            }
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
+            {selectedGroup && selectedGroupAssignments.length > 0 ? (
+              <div className="varieties-table-wrapper">
+                <table className="varieties-table">
+                  <thead>
+                    <tr>
+                      <th>Variety</th>
+                      <th>Color</th>
+                      <th>Row range</th>
+                      <th>m²</th>
+                      <th>ft²</th>
+                      <th>Plants</th>
+                      <th>Slabs</th>
+                      <th>Actions</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </div>
+                  </thead>
+                  <tbody>
+                    {varietyAreaSummaries.map((summary) => {
+                      const assignment = selectedGroupAssignments.find(
+                        (a) => a.id === summary.assignmentId
+                      );
+                      if (!assignment) return null;
 
-      <div className="coming-soon-card">
-        <h2>4. Rows</h2>
-
-        {!selectedGroup ? <p>Select a greenhouse group to view rows.</p> : null}
-
-        {selectedGroup ? (
-          <div className="varieties-toolbar greenhouse-toolbar">
-            <button type="button" onClick={() => setEditRowsMode((value) => !value)}>
-              {editRowsMode ? "Disable Edit Rows" : "Edit Rows"}
-            </button>
-            <button type="button" onClick={openAddRowSectionModal}>
-              + Add Row Section
-            </button>
-            {editRowsMode ? (
-              <button
-                type="button"
-                onClick={() => void saveAllChangedRows()}
-                disabled={savingRows || changedRows.length === 0}
-              >
-                {savingRows
-                  ? "Saving..."
-                  : `Save All Changed Rows${
-                      changedRows.length > 0 ? ` (${changedRows.length})` : ""
-                    }`}
-              </button>
+                      return (
+                        <tr key={summary.assignmentId}>
+                          <td>{summary.varietyName}</td>
+                          <td>
+                            {summary.varietyColor ? (
+                              <span className={`color-badge ${summary.varietyColor}`}>
+                                {summary.varietyColor}
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                          <td>{summary.rowRange}</td>
+                          <td>{summary.m2 > 0 ? summary.m2 : "-"}</td>
+                          <td>{summary.ft2 > 0 ? summary.ft2 : "-"}</td>
+                          <td>{summary.plants > 0 ? summary.plants : "-"}</td>
+                          <td>{summary.slabs > 0 ? summary.slabs : "-"}</td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                type="button"
+                                onClick={() => openEditAssignmentModal(assignment)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="danger"
+                                onClick={() =>
+                                  void deleteItem(
+                                    `${ASSIGNMENTS_URL}/${assignment.id}`,
+                                    "variety assignment"
+                                  )
+                                }
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             ) : null}
           </div>
         ) : null}
 
-        {selectedGroup && selectedGroupRows.length === 0 ? (
-          <p>No generated rows for this group yet.</p>
-        ) : null}
+        {activeTab === "rows" ? (
+          <div className="greenhouse-tab-content">
+            {!selectedGroup ? <p>Select a greenhouse group to view rows.</p> : null}
 
-        {selectedGroup && selectedGroupRows.length > 0 ? (
-          <div className="greenhouse-rows-summary">
-            {isRowsExpanded
-              ? `Showing all ${selectedGroupRows.length} rows`
-              : `Showing ${Math.min(ROW_PREVIEW_LIMIT, selectedGroupRows.length)} of ${selectedGroupRows.length} rows`}
-          </div>
-        ) : null}
+            {selectedGroup ? (
+              <div className="varieties-toolbar greenhouse-toolbar">
+                <button type="button" onClick={() => setEditRowsMode((value) => !value)}>
+                  {editRowsMode ? "Disable Edit Rows" : "Edit Rows"}
+                </button>
+                <button type="button" onClick={openAddRowSectionModal}>
+                  + Add Row Section
+                </button>
+                {editRowsMode ? (
+                  <button
+                    type="button"
+                    onClick={() => void saveAllChangedRows()}
+                    disabled={savingRows || changedRows.length === 0}
+                  >
+                    {savingRows
+                      ? "Saving..."
+                      : `Save All Changed Rows${
+                          changedRows.length > 0 ? ` (${changedRows.length})` : ""
+                        }`}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
-        {selectedGroup && selectedGroupRows.length > ROW_PREVIEW_LIMIT ? (
-          <button type="button" className="greenhouse-link-button" onClick={toggleRowsExpanded}>
-            {isRowsExpanded ? "Collapse rows" : "Show all rows"}
-          </button>
-        ) : null}
+            {selectedGroup && selectedGroupRows.length === 0 ? (
+              <p>No generated rows for this group yet.</p>
+            ) : null}
 
-        {selectedGroup && selectedGroupRows.length > 0 ? (
-          <div className="varieties-table-wrapper">
-            <table className="varieties-table">
-              <thead>
-                <tr>
-                  <th>Row number</th>
-                  <th>Slabs per row</th>
-                  <th>Plants per slab</th>
-                  <th>Stems per plant</th>
-                  <th>Total plants</th>
-                  <th>Total stems</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((row) => {
-                  const draft = rowDrafts[row.id] ?? {
-                    slab_count: String(row.slab_count),
-                    plants_per_slab: String(row.plants_per_slab),
-                    stems_per_plant: String(row.stems_per_plant)
-                  };
+            {selectedGroup && selectedGroupRows.length > 0 ? (
+              <div className="greenhouse-rows-summary">
+                {isRowsExpanded
+                  ? `Showing all ${selectedGroupRows.length} rows`
+                  : `Showing ${Math.min(ROW_PREVIEW_LIMIT, selectedGroupRows.length)} of ${selectedGroupRows.length} rows`}
+              </div>
+            ) : null}
 
-                  const slabCount = parseNumber(draft.slab_count);
-                  const plantsPerSlab = parseNumber(draft.plants_per_slab);
-                  const stemsPerPlant = parseNumber(draft.stems_per_plant);
-                  const totalPlants = slabCount * plantsPerSlab;
-                  const totalStems = totalPlants * stemsPerPlant;
+            {selectedGroup && selectedGroupRows.length > ROW_PREVIEW_LIMIT ? (
+              <button type="button" className="greenhouse-link-button" onClick={toggleRowsExpanded}>
+                {isRowsExpanded ? "Collapse rows" : "Show all rows"}
+              </button>
+            ) : null}
 
-                  return (
-                    <tr key={row.id}>
-                      <td>{row.row_number}</td>
-                      <td>
-                        {editRowsMode ? (
-                          <input
-                            className="greenhouse-table-input"
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={draft.slab_count}
-                            onChange={(event) =>
-                              setRowDrafts((current) => ({
-                                ...current,
-                                [row.id]: {
-                                  ...draft,
-                                  slab_count: event.target.value
-                                }
-                              }))
-                            }
-                          />
-                        ) : (
-                          row.slab_count
-                        )}
-                      </td>
-                      <td>
-                        {editRowsMode ? (
-                          <input
-                            className="greenhouse-table-input"
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={draft.plants_per_slab}
-                            onChange={(event) =>
-                              setRowDrafts((current) => ({
-                                ...current,
-                                [row.id]: {
-                                  ...draft,
-                                  plants_per_slab: event.target.value
-                                }
-                              }))
-                            }
-                          />
-                        ) : (
-                          row.plants_per_slab
-                        )}
-                      </td>
-                      <td>
-                        {editRowsMode ? (
-                          <input
-                            className="greenhouse-table-input"
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            value={draft.stems_per_plant}
-                            onChange={(event) =>
-                              setRowDrafts((current) => ({
-                                ...current,
-                                [row.id]: {
-                                  ...draft,
-                                  stems_per_plant: event.target.value
-                                }
-                              }))
-                            }
-                          />
-                        ) : (
-                          row.stems_per_plant
-                        )}
-                      </td>
-                      <td>{roundTo(totalPlants, 2)}</td>
-                      <td>{roundTo(totalStems, 2)}</td>
+            {selectedGroup && selectedGroupRows.length > 0 ? (
+              <div className="varieties-table-wrapper">
+                <table className="varieties-table">
+                  <thead>
+                    <tr>
+                      <th>Row #</th>
+                      <th>Slabs</th>
+                      <th>Plants/slab</th>
+                      <th>Stems/plant</th>
+                      <th>Width (m)</th>
+                      <th>Length (m)</th>
+                      <th>m²</th>
+                      <th>Total plants</th>
+                      <th>Total stems</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((row) => {
+                      const draft = rowDrafts[row.id] ?? {
+                        slab_count: String(row.slab_count),
+                        plants_per_slab: String(row.plants_per_slab),
+                        stems_per_plant: String(row.stems_per_plant),
+                        width_meters: row.width_meters !== null ? String(row.width_meters) : "",
+                        length_meters: row.length_meters !== null ? String(row.length_meters) : ""
+                      };
+
+                      const slabCount = parseNumber(draft.slab_count);
+                      const plantsPerSlab = parseNumber(draft.plants_per_slab);
+                      const stemsPerPlant = parseNumber(draft.stems_per_plant);
+                      const totalPlants = slabCount * plantsPerSlab;
+                      const totalStems = totalPlants * stemsPerPlant;
+                      const draftWidth = parseNullableNumber(draft.width_meters);
+                      const draftLength = parseNullableNumber(draft.length_meters);
+                      const areaM2 = roundTo((draftWidth ?? 0) * (draftLength ?? 0), 2);
+
+                      return (
+                        <tr key={row.id}>
+                          <td>{row.row_number}</td>
+                          <td>
+                            {editRowsMode ? (
+                              <input
+                                className="greenhouse-table-input"
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={draft.slab_count}
+                                onChange={(event) =>
+                                  setRowDrafts((current) => ({
+                                    ...current,
+                                    [row.id]: { ...draft, slab_count: event.target.value }
+                                  }))
+                                }
+                              />
+                            ) : (
+                              row.slab_count
+                            )}
+                          </td>
+                          <td>
+                            {editRowsMode ? (
+                              <input
+                                className="greenhouse-table-input"
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={draft.plants_per_slab}
+                                onChange={(event) =>
+                                  setRowDrafts((current) => ({
+                                    ...current,
+                                    [row.id]: { ...draft, plants_per_slab: event.target.value }
+                                  }))
+                                }
+                              />
+                            ) : (
+                              row.plants_per_slab
+                            )}
+                          </td>
+                          <td>
+                            {editRowsMode ? (
+                              <input
+                                className="greenhouse-table-input"
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                value={draft.stems_per_plant}
+                                onChange={(event) =>
+                                  setRowDrafts((current) => ({
+                                    ...current,
+                                    [row.id]: { ...draft, stems_per_plant: event.target.value }
+                                  }))
+                                }
+                              />
+                            ) : (
+                              row.stems_per_plant
+                            )}
+                          </td>
+                          <td>
+                            {editRowsMode ? (
+                              <input
+                                className="greenhouse-table-input"
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                value={draft.width_meters}
+                                onChange={(event) =>
+                                  setRowDrafts((current) => ({
+                                    ...current,
+                                    [row.id]: { ...draft, width_meters: event.target.value }
+                                  }))
+                                }
+                              />
+                            ) : (
+                              row.width_meters ?? "-"
+                            )}
+                          </td>
+                          <td>
+                            {editRowsMode ? (
+                              <input
+                                className="greenhouse-table-input"
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                value={draft.length_meters}
+                                onChange={(event) =>
+                                  setRowDrafts((current) => ({
+                                    ...current,
+                                    [row.id]: { ...draft, length_meters: event.target.value }
+                                  }))
+                                }
+                              />
+                            ) : (
+                              row.length_meters ?? "-"
+                            )}
+                          </td>
+                          <td>{areaM2 > 0 ? areaM2 : "-"}</td>
+                          <td>{roundTo(totalPlants, 2)}</td>
+                          <td>{roundTo(totalStems, 2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1280,6 +1532,40 @@ export function GreenhouseSetupPage() {
                     }))
                   }
                   required
+                />
+              </label>
+
+              <label>
+                Row width (m)
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={rowSectionForm.width_meters}
+                  placeholder="Optional"
+                  onChange={(event) =>
+                    setRowSectionForm((current) => ({
+                      ...current,
+                      width_meters: event.target.value
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Row length (m)
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={rowSectionForm.length_meters}
+                  placeholder="Optional"
+                  onChange={(event) =>
+                    setRowSectionForm((current) => ({
+                      ...current,
+                      length_meters: event.target.value
+                    }))
+                  }
                 />
               </label>
 

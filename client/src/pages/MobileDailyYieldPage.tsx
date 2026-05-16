@@ -837,16 +837,20 @@ export function MobileDailyYieldPage() {
         <div className="mobile-projection-meta">
           <p>Linked rows: {linkedRowsCount}</p>
           <p>Total linked stems: {roundTo(totalLinkedStems, 2)}</p>
-          <p>Avg kg per stem: {roundTo(avgKgPerStem, 6)}</p>
-          <p>Projected kg: {roundTo(projectedKg, 2)}</p>
-          <p>Projected full bins: {roundTo(projectedFullBins, 2)}</p>
-          <p>Projected cases: {roundTo(projectedCases, 2)}</p>
-          {canProject ? (
-            <p>
-              {usesKgPerCaseForCases
-                ? "Cases calculated from kg per case"
-                : "Cases calculated from cases per bin fallback"}
-            </p>
+          {sampleCount >= MINIMUM_SAMPLE_COUNT ? (
+            <>
+              <p>Avg kg per stem: {roundTo(avgKgPerStem, 6)}</p>
+              <p>Projected kg: {roundTo(projectedKg, 2)}</p>
+              <p>Projected full bins: {roundTo(projectedFullBins, 2)}</p>
+              <p>Projected cases: {roundTo(projectedCases, 2)}</p>
+              {canProject ? (
+                <p>
+                  {usesKgPerCaseForCases
+                    ? "Cases calculated from kg per case"
+                    : "Cases calculated from cases per bin fallback"}
+                </p>
+              ) : null}
+            </>
           ) : null}
         </div>
 
@@ -858,9 +862,19 @@ export function MobileDailyYieldPage() {
           <p>Kg per case cannot be negative.</p>
         ) : null}
 
-        {sampleCount < MINIMUM_SAMPLE_COUNT ? (
-          <p>Add at least 4 row samples for a better estimate.</p>
-        ) : (
+        {sampleCount === 1 ? (
+          <p className="mobile-projection-hint">
+            Must enter 4 more lines for more accurate projections.
+          </p>
+        ) : null}
+
+        {sampleCount >= 2 && sampleCount < MINIMUM_SAMPLE_COUNT ? (
+          <p className="mobile-projection-hint">
+            Enter at least 4 lines before showing projections. More lines will improve accuracy.
+          </p>
+        ) : null}
+
+        {sampleCount >= MINIMUM_SAMPLE_COUNT ? (
           <div className="mobile-projection-card">
             <p>Average kg per stem: {roundTo(avgKgPerStem, 6)}</p>
             <p>Projected kg: {roundTo(projectedKg, 2)}</p>
@@ -871,8 +885,13 @@ export function MobileDailyYieldPage() {
                 ? "Cases calculated from kg per case"
                 : "Cases calculated from cases per bin fallback"}
             </p>
+            {sampleCount < 6 ? (
+              <p className="mobile-projection-hint">
+                More lines will improve projection accuracy.
+              </p>
+            ) : null}
           </div>
-        )}
+        ) : null}
       </div>
     </section>
   );

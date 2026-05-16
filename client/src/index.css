@@ -1364,30 +1364,82 @@ body {
   margin-top: 0;
 }
 
+.greenhouse-right-column {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.greenhouse-right-column > .coming-soon-card {
+  margin-top: 0;
+}
+
 .greenhouse-selected-group-card {
   min-width: 0;
 }
 
-.greenhouse-selected-group-details {
-  margin: 0.9rem 0 0;
-  display: grid;
-  gap: 0.7rem;
+.greenhouse-total-stats {
+  margin-top: 0.75rem;
 }
 
-.greenhouse-selected-group-details div {
-  display: grid;
-  gap: 0.2rem;
+.greenhouse-group-compact {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+  margin-top: 0.75rem;
 }
 
-.greenhouse-selected-group-details dt {
-  margin: 0;
+.greenhouse-group-identity {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 45%;
+}
+
+.greenhouse-group-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  word-break: break-word;
+  margin-bottom: 0.35rem;
+}
+
+.greenhouse-group-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.greenhouse-group-type {
+  font-size: 0.8rem;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-weight: 500;
 }
 
-.greenhouse-selected-group-details dd {
-  margin: 0;
-  font-weight: 600;
+.greenhouse-group-stats {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem 0.75rem;
+  min-width: 0;
+}
+
+.greenhouse-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.greenhouse-stat-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.greenhouse-stat-value {
+  font-size: 0.95rem;
+  font-weight: 700;
 }
 
 .greenhouse-selected-row {
@@ -1429,6 +1481,68 @@ body {
   font-weight: 600;
   cursor: pointer;
   padding: 0;
+}
+
+.greenhouse-phase-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.greenhouse-phase-total-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.greenhouse-phase-total-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.greenhouse-phase-total-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.greenhouse-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 0;
+}
+
+.greenhouse-tab-button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.65rem 1.1rem;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.greenhouse-tab-button.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+
+.greenhouse-tab-button:hover:not(.active) {
+  color: var(--text);
+}
+
+.greenhouse-tab-content {
+  padding-top: 1rem;
 }
 
 .modal-overlay {
@@ -1987,6 +2101,13 @@ body {
   font-weight: 600;
 }
 
+.mobile-projection-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 .mobile-irrigation-page {
   display: grid;
   gap: 0.8rem;
@@ -2310,6 +2431,19 @@ body {
 
   .greenhouse-top-grid {
     grid-template-columns: 1fr;
+  }
+
+  .greenhouse-group-compact {
+    flex-direction: column;
+  }
+
+  .greenhouse-group-identity {
+    max-width: 100%;
+  }
+
+  .greenhouse-group-stats {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .color-groups-container {
