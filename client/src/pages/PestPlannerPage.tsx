@@ -42,6 +42,16 @@ type Chemical = {
   label_pdf_path: string | null;
 };
 
+type ApplicationType = "drench" | "spray";
+type RateUnit = "ml_per_acre" | "L_per_acre" | "ml_per_hectare" | "L_per_hectare";
+
+const RATE_UNIT_OPTIONS: { value: RateUnit; label: string }[] = [
+  { value: "ml_per_acre", label: "ml / acre" },
+  { value: "L_per_acre", label: "L / acre" },
+  { value: "ml_per_hectare", label: "ml / hectare" },
+  { value: "L_per_hectare", label: "L / hectare" }
+];
+
 const M2_TO_FT2 = 10.7639;
 const M2_TO_HECTARES = 1 / 10000;
 const M2_TO_ACRES = 1 / 4046.8564224;
@@ -63,14 +73,22 @@ export function PestPlannerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Target area selection
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
+  // ── Application details
+  const [applicationType, setApplicationType] = useState<ApplicationType | "">("");
+  const [rateValue, setRateValue] = useState("");
+  const [rateUnit, setRateUnit] = useState<RateUnit>("ml_per_acre");
+
+  // ── Sprayer
   const [sprayerId, setSprayerId] = useState("");
   const [nozzlesOpen, setNozzlesOpen] = useState("");
-  const [plannedWaterL, setPlannedWaterL] = useState("");
+
+  // ── Chemical
   const [chemicalId, setChemicalId] = useState("");
   const [labelLoading, setLabelLoading] = useState(false);
-
-  const selectAllRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     async function load() {
@@ -119,7 +137,8 @@ export function PestPlannerPage() {
   );
 
   const allSelected = groups.length > 0 && selectedGroupIds.length === groups.length;
-  const someSelected = selectedGroupIds.length > 0 && selectedGroupIds.length < groups.length;
+  const someSelected =
+    selectedGroupIds.length > 0 && selectedGroupIds.length < groups.length;
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -172,6 +191,18 @@ export function PestPlannerPage() {
     [areaByGroupId]
   );
 
+  // Sum of length_meters across every row in every selected group.
+  // This is the actual linear distance the sprayer travels.
+  const totalRowLengthMeters = useMemo(() => {
+    let total = 0;
+    for (const id of selectedGroupIds) {
+      for (const row of rowsByGroupId[id] ?? []) {
+        total += row.length_meters ?? 0;
+      }
+    }
+    return total;
+  }, [selectedGroupIds, rowsByGroupId]);
+
   const groupsWithNoDimensions = useMemo(
     () =>
       selectedGroupIds
@@ -187,6 +218,41 @@ export function PestPlannerPage() {
         .filter(Boolean),
     [selectedGroupIds, groups]
   );
+
+  // ── Application rate calculation ───────────────────────────────────────────
+
+  const chemicalNeededResult = useMemo(() => {
+    const rate = Number(rateValue);
+    if (!Number.isFinite(rate) || rate <= 0) return null;
+    if (totalM2 <= 0) return null;
+
+    const acres = totalM2 * M2_TO_ACRES;
+    const ha = totalM2 * M2_TO_HECTARES;
+
+    let ml: number;
+    let areaLabel: string;
+
+    switch (rateUnit) {
+      case "ml_per_acre":
+        ml = rate * acres;
+        areaLabel = `${roundTo(acres, 3)} acres`;
+        break;
+      case "L_per_acre":
+        ml = rate * acres * 1000;
+        areaLabel = `${roundTo(acres, 3)} acres`;
+        break;
+      case "ml_per_hectare":
+        ml = rate * ha;
+        areaLabel = `${roundTo(ha, 4)} ha`;
+        break;
+      case "L_per_hectare":
+        ml = rate * ha * 1000;
+        areaLabel = `${roundTo(ha, 4)} ha`;
+        break;
+    }
+
+    return { ml, L: ml / 1000, areaLabel };
+  }, [rateValue, rateUnit, totalM2]);
 
   // ── Sprayer derivations ────────────────────────────────────────────────────
 
@@ -213,6 +279,27 @@ export function PestPlannerPage() {
       return `Cannot exceed sprayer nozzle count (${selectedSprayer.nozzle_count}).`;
     return null;
   }, [nozzlesOpen, selectedSprayer]);
+
+  // Spray run calculations — only valid when sprayer + nozzles are set
+  // and row lengths are known. Returns null when any input is missing/invalid.
+  const sprayCalc = useMemo(() => {
+    if (!selectedSprayer || nozzlesOpenNum < 1 || nozzlesOpenError) return null;
+    if (totalRowLengthMeters <= 0) return null;
+
+    const speed = selectedSprayer.speed_m_per_min;           // m/min
+    const flowPerNozzle = selectedSprayer.nozzle_volume_l_per_min; // L/min per nozzle
+
+    const sprayTimeMinutes = totalRowLengthMeters / speed;
+    const totalFlowLPerMin = flowPerNozzle * nozzlesOpenNum;
+    const totalVolumeL = sprayTimeMinutes * totalFlowLPerMin;
+
+    return {
+      sprayTimeMinutes,
+      sprayTimeHours: sprayTimeMinutes / 60,
+      totalFlowLPerMin,
+      totalVolumeL
+    };
+  }, [selectedSprayer, nozzlesOpenNum, nozzlesOpenError, totalRowLengthMeters]);
 
   function handleSprayerChange(id: string) {
     setSprayerId(id);
@@ -267,336 +354,575 @@ export function PestPlannerPage() {
 
       {error ? <p className="form-error">{error}</p> : null}
 
-      {/* ── 1. Target Area ──────────────────────────────── */}
-      <div className="coming-soon-card">
-        <h2>1. Target Area</h2>
+      {/* ── 3-card top row ───────────────────────────────── */}
+      <div className="pest-planner-card-grid">
+        {/* ── 1. Target Area ──────────────────────────── */}
+        <div className="coming-soon-card">
+          <h2>1. Target Area</h2>
 
-        {groups.length === 0 ? (
-          <p>No greenhouse groups configured. Add groups in Greenhouse Setup.</p>
-        ) : (
-          <>
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                marginBottom: "0.5rem",
-                fontWeight: 600,
-                cursor: "pointer"
-              }}
-            >
-              <input
-                ref={selectAllRef}
-                type="checkbox"
-                checked={allSelected}
-                onChange={toggleAll}
-              />
-              All greenhouse groups
-            </label>
+          {groups.length === 0 ? (
+            <p>No greenhouse groups configured. Add groups in Greenhouse Setup.</p>
+          ) : (
+            <>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  marginTop: "0.75rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontSize: "0.9em"
+                }}
+              >
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                />
+                All greenhouse groups
+              </label>
 
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.3rem",
-                paddingLeft: "0.25rem"
-              }}
-            >
-              {groups.map((g) => (
-                <label
-                  key={g.id}
-                  style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedGroupIdsSet.has(g.id)}
-                    onChange={() => toggleGroup(g.id)}
-                  />
-                  {g.name}
-                  <span style={{ fontSize: "0.82em", color: "var(--color-text-muted, #888)" }}>
-                    {g.type}
-                  </span>
-                </label>
-              ))}
-            </div>
-
-            {selectedGroupIds.length === 0 ? (
-              <p style={{ marginTop: "0.75rem" }}>Select at least one greenhouse group.</p>
-            ) : (
-              <>
-                <p style={{ marginTop: "0.75rem", fontSize: "0.9em" }}>
-                  <strong>
-                    {selectedGroupIds.length} group
-                    {selectedGroupIds.length !== 1 ? "s" : ""} selected
-                  </strong>
-                  {selectedGroupNames.length <= 4
-                    ? `: ${selectedGroupNames.join(", ")}`
-                    : null}
-                </p>
-
-                {groupsWithNoDimensions.length > 0 ? (
-                  <p
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.25rem",
+                  paddingLeft: "0.25rem",
+                  marginTop: "0.35rem",
+                  maxHeight: "160px",
+                  overflowY: "auto"
+                }}
+              >
+                {groups.map((g) => (
+                  <label
+                    key={g.id}
                     style={{
-                      marginTop: "0.25rem",
-                      fontSize: "0.85em",
-                      color: "var(--color-text-muted, #888)"
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.4rem",
+                      cursor: "pointer",
+                      fontSize: "0.88em"
                     }}
                   >
-                    No row dimensions for{" "}
-                    {groupsWithNoDimensions.map((g) => g.name).join(", ")} — excluded from
-                    area total.
-                  </p>
-                ) : null}
-
-                {totalM2 > 0 ? (
-                  <div className="greenhouse-group-stats" style={{ marginTop: "0.75rem" }}>
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">m²</span>
-                      <span className="greenhouse-stat-value">
-                        {roundTo(totalM2, 2).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">ft²</span>
-                      <span className="greenhouse-stat-value">
-                        {roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">ha</span>
-                      <span className="greenhouse-stat-value">
-                        {roundTo(totalM2 * M2_TO_HECTARES, 4)}
-                      </span>
-                    </div>
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">acres</span>
-                      <span className="greenhouse-stat-value">
-                        {roundTo(totalM2 * M2_TO_ACRES, 4)}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <p style={{ marginTop: "0.5rem" }}>
-                    No row dimensions recorded for the selected groups. Add width and length
-                    to rows in Greenhouse Setup to enable area-based calculations.
-                  </p>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* ── 2. Sprayer ──────────────────────────────────── */}
-      <div className="coming-soon-card">
-        <h2>2. Sprayer</h2>
-
-        {sprayers.length === 0 ? (
-          <p>No sprayers configured. Add sprayers in Pest Control Setup.</p>
-        ) : (
-          <div className="varieties-form">
-            <label>
-              Sprayer
-              <select
-                value={sprayerId}
-                onChange={(event) => handleSprayerChange(event.target.value)}
-              >
-                <option value="">Select a sprayer…</option>
-                {sprayers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
+                    <input
+                      type="checkbox"
+                      checked={selectedGroupIdsSet.has(g.id)}
+                      onChange={() => toggleGroup(g.id)}
+                    />
+                    {g.name}
+                    <span style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
+                      {g.type}
+                    </span>
+                  </label>
                 ))}
-              </select>
-            </label>
+              </div>
 
-            {selectedSprayer ? (
-              <>
-                <div className="greenhouse-group-stats" style={{ marginTop: "0.5rem" }}>
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Nozzles</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedSprayer.nozzle_count}
-                    </span>
-                  </div>
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">L/min/nozzle</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedSprayer.nozzle_volume_l_per_min}
-                    </span>
-                  </div>
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">PSI</span>
-                    <span className="greenhouse-stat-value">{selectedSprayer.nozzle_psi}</span>
-                  </div>
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Speed (m/min)</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedSprayer.speed_m_per_min}
-                    </span>
-                  </div>
-                </div>
-
-                <label>
-                  Nozzles open
-                  <input
-                    type="number"
-                    min="1"
-                    max={selectedSprayer.nozzle_count}
-                    step="1"
-                    value={nozzlesOpen}
-                    onChange={(event) => setNozzlesOpen(event.target.value)}
-                  />
-                </label>
-
-                {nozzlesOpenError ? (
-                  <p className="form-error">{nozzlesOpenError}</p>
-                ) : null}
-
-                {flowLPerMin !== null && !nozzlesOpenError ? (
-                  <div className="greenhouse-group-stats" style={{ marginTop: "0.5rem" }}>
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">Flow rate</span>
-                      <span className="greenhouse-stat-value">
-                        {roundTo(flowLPerMin, 2)} L/min
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                <label>
-                  Planned water volume (L)
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={plannedWaterL}
-                    onChange={(event) => setPlannedWaterL(event.target.value)}
-                    placeholder="e.g. 500"
-                  />
-                </label>
-
-                <p style={{ fontSize: "0.85em", color: "var(--color-text-muted, #666)" }}>
-                  Spray width / boom width is required for exact L/ha. Add boom width to
-                  sprayer setup or enter target water volume manually.
+              {selectedGroupIds.length === 0 ? (
+                <p style={{ marginTop: "0.65rem", fontSize: "0.85em" }}>
+                  Select at least one group.
                 </p>
-              </>
-            ) : null}
-          </div>
-        )}
-      </div>
+              ) : (
+                <>
+                  <p style={{ marginTop: "0.6rem", fontSize: "0.82em" }}>
+                    <strong>
+                      {selectedGroupIds.length} group
+                      {selectedGroupIds.length !== 1 ? "s" : ""} selected
+                    </strong>
+                    {selectedGroupNames.length <= 3
+                      ? `: ${selectedGroupNames.join(", ")}`
+                      : null}
+                  </p>
 
-      {/* ── 3. Chemical ─────────────────────────────────── */}
-      <div className="coming-soon-card">
-        <h2>3. Chemical</h2>
+                  {groupsWithNoDimensions.length > 0 ? (
+                    <p
+                      style={{
+                        marginTop: "0.2rem",
+                        fontSize: "0.78em",
+                        color: "var(--text-muted)"
+                      }}
+                    >
+                      No dimensions for{" "}
+                      {groupsWithNoDimensions.map((g) => g.name).join(", ")}.
+                    </p>
+                  ) : null}
 
-        {availableChemicals.length === 0 ? (
-          <p>
-            No chemicals available. Add active chemicals with inventory in Pest Control
-            Inventory.
-          </p>
-        ) : (
-          <div className="varieties-form">
+                  {totalM2 > 0 ? (
+                    <div
+                      className="greenhouse-group-stats"
+                      style={{
+                        marginTop: "0.65rem",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
+                      }}
+                    >
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">m²</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2, 2).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">ft²</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">ha</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2 * M2_TO_HECTARES, 4)}
+                        </span>
+                      </div>
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">acres</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2 * M2_TO_ACRES, 4)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ marginTop: "0.5rem", fontSize: "0.82em" }}>
+                      No row dimensions recorded. Add width and length in Greenhouse Setup.
+                    </p>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* ── 2. Application Details ──────────────────── */}
+        <div className="coming-soon-card">
+          <h2>2. Application Details</h2>
+
+          <div className="varieties-form" style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}>
             <label>
-              Chemical
+              Application type
               <select
-                value={chemicalId}
-                onChange={(event) => setChemicalId(event.target.value)}
+                value={applicationType}
+                onChange={(event) =>
+                  setApplicationType(event.target.value as ApplicationType | "")
+                }
               >
-                <option value="">Select a chemical…</option>
-                {availableChemicals.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                    {c.chemical_type ? ` (${c.chemical_type})` : ""} —{" "}
-                    {c.inventory_qty} {c.inventory_unit} in stock
-                  </option>
-                ))}
+                <option value="">— Select —</option>
+                <option value="drench">Drench</option>
+                <option value="spray">Spray</option>
               </select>
             </label>
 
-            {selectedChemical ? (
-              <div className="greenhouse-group-stats" style={{ marginTop: "0.5rem" }}>
-                {selectedChemical.chemical_type ? (
+            {applicationType ? (
+              <p
+                style={{
+                  fontSize: "0.8em",
+                  color: "var(--text-muted)",
+                  margin: "0.1rem 0 0"
+                }}
+              >
+                {applicationType === "drench"
+                  ? "Drench — calculate product by area only"
+                  : "Spray — calculate product + water requirements"}
+              </p>
+            ) : null}
+
+            <label style={{ marginTop: applicationType ? "0.75rem" : undefined }}>
+              Application rate
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={rateValue}
+                  placeholder="e.g. 400"
+                  onChange={(event) => setRateValue(event.target.value)}
+                  style={{ flex: "1 1 80px", minWidth: 0 }}
+                />
+                <select
+                  value={rateUnit}
+                  onChange={(event) => setRateUnit(event.target.value as RateUnit)}
+                  style={{ flex: "1 1 120px", minWidth: 0 }}
+                >
+                  {RATE_UNIT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </label>
+          </div>
+
+          {/* Result card or placeholder */}
+          {chemicalNeededResult ? (
+            <div
+              style={{
+                background: "var(--brand-soft)",
+                border: "1px solid var(--brand)",
+                borderRadius: "10px",
+                padding: "0.9rem 1rem",
+                marginTop: "0.85rem",
+                textAlign: "center"
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "0.68rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--brand)",
+                  margin: 0
+                }}
+              >
+                Total Product Needed
+              </p>
+              <p
+                style={{
+                  fontSize: "1.75rem",
+                  fontWeight: 800,
+                  margin: "0.4rem 0 0",
+                  lineHeight: 1.1,
+                  color: "var(--text)"
+                }}
+              >
+                {roundTo(chemicalNeededResult.ml, 0).toLocaleString()} ml
+              </p>
+              <p
+                style={{
+                  fontSize: "1.05rem",
+                  fontWeight: 600,
+                  margin: "0.2rem 0 0",
+                  color: "var(--text)"
+                }}
+              >
+                {roundTo(chemicalNeededResult.L, 3)} L
+              </p>
+              <p
+                style={{
+                  fontSize: "0.78rem",
+                  marginTop: "0.45rem",
+                  color: "var(--text-muted)"
+                }}
+              >
+                Based on {chemicalNeededResult.areaLabel}
+              </p>
+            </div>
+          ) : (
+            <p
+              style={{
+                fontSize: "0.82em",
+                color: "var(--text-muted)",
+                marginTop: "0.65rem"
+              }}
+            >
+              {!applicationType
+                ? "Select application type, target area, and rate to calculate product needed."
+                : totalM2 === 0
+                ? "Add row dimensions in Greenhouse Setup to calculate product needed."
+                : "Enter an application rate to calculate product needed."}
+            </p>
+          )}
+        </div>
+
+        {/* ── 3. Chemical ─────────────────────────────── */}
+        <div className="coming-soon-card">
+          <h2>3. Chemical</h2>
+
+          {availableChemicals.length === 0 ? (
+            <p style={{ fontSize: "0.88em" }}>
+              No chemicals available. Add active chemicals with inventory in Pest Control
+              Inventory.
+            </p>
+          ) : (
+            <>
+              {/* Select sits in its own 1-column form so it never stretches to match details height */}
+              <div
+                className="varieties-form"
+                style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}
+              >
+                <label>
+                  Chemical
+                  <select
+                    value={chemicalId}
+                    onChange={(event) => setChemicalId(event.target.value)}
+                  >
+                    <option value="">Select a chemical…</option>
+                    {availableChemicals.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.chemical_type ? ` (${c.chemical_type})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {/* Details rendered outside the form so they never share a grid row with the select */}
+              {selectedChemical ? (
+                <div
+                  className="greenhouse-group-stats"
+                  style={{
+                    marginTop: "0.75rem",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
+                  }}
+                >
+                  {selectedChemical.chemical_type ? (
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Type</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedChemical.chemical_type.charAt(0).toUpperCase() +
+                          selectedChemical.chemical_type.slice(1)}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {selectedChemical.chemical_group ? (
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Group</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedChemical.chemical_group}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {selectedChemical.phi ? (
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">PHI</span>
+                      <span className="greenhouse-stat-value">{selectedChemical.phi}</span>
+                    </div>
+                  ) : null}
+
+                  {selectedChemical.active_ingredients ? (
+                    <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                      <span className="greenhouse-stat-label">Active ingredients</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedChemical.active_ingredients}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {selectedChemical.registration_number ? (
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Reg. No.</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedChemical.registration_number}
+                      </span>
+                    </div>
+                  ) : null}
+
                   <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Type</span>
+                    <span className="greenhouse-stat-label">In stock</span>
                     <span className="greenhouse-stat-value">
-                      {selectedChemical.chemical_type.charAt(0).toUpperCase() +
-                        selectedChemical.chemical_type.slice(1)}
+                      {selectedChemical.inventory_qty} {selectedChemical.inventory_unit}
                     </span>
                   </div>
-                ) : null}
 
-                {selectedChemical.chemical_group ? (
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Group</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedChemical.chemical_group}
-                    </span>
-                  </div>
-                ) : null}
-
-                {selectedChemical.phi ? (
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">PHI</span>
-                    <span className="greenhouse-stat-value">{selectedChemical.phi}</span>
-                  </div>
-                ) : null}
-
-                {selectedChemical.active_ingredients ? (
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Active ingredients</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedChemical.active_ingredients}
-                    </span>
-                  </div>
-                ) : null}
-
-                {selectedChemical.registration_number ? (
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Reg. No.</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedChemical.registration_number}
-                    </span>
-                  </div>
-                ) : null}
-
-                {selectedChemical.pest_target ? (
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Target</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedChemical.pest_target}
-                    </span>
-                  </div>
-                ) : null}
-
-                <div className="greenhouse-stat-item">
-                  <span className="greenhouse-stat-label">In stock</span>
-                  <span className="greenhouse-stat-value">
-                    {selectedChemical.inventory_qty} {selectedChemical.inventory_unit}
-                  </span>
+                  {selectedChemical.label_pdf_path ? (
+                    <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                      <span className="greenhouse-stat-label">Label</span>
+                      <span className="greenhouse-stat-value">
+                        <button
+                          type="button"
+                          className="secondary"
+                          style={{ fontSize: "0.78em", padding: "0.2rem 0.5rem" }}
+                          disabled={labelLoading}
+                          onClick={() => void viewChemicalLabel(selectedChemical.id)}
+                        >
+                          {labelLoading ? "Opening…" : "View PDF"}
+                        </button>
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
 
-                {selectedChemical.label_pdf_path ? (
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Label</span>
-                    <span className="greenhouse-stat-value">
-                      <button
-                        type="button"
-                        className="secondary"
-                        style={{ fontSize: "0.8em", padding: "0.2rem 0.5rem" }}
-                        disabled={labelLoading}
-                        onClick={() => void viewChemicalLabel(selectedChemical.id)}
-                      >
-                        {labelLoading ? "Opening…" : "View PDF"}
-                      </button>
-                    </span>
-                  </div>
+      {/* ── Sprayer & Water Details (Spray only) ─────────── */}
+      {applicationType === "spray" ? (
+        <div className="coming-soon-card">
+          <h2>Sprayer &amp; Water Details</h2>
+
+          {sprayers.length === 0 ? (
+            <p>No sprayers configured. Add sprayers in Pest Control Setup.</p>
+          ) : (
+            <>
+              {/* Sprayer select + nozzles open — 1-column to prevent stretch */}
+              <div
+                className="varieties-form"
+                style={{ gridTemplateColumns: "1fr" }}
+              >
+                <label>
+                  Sprayer
+                  <select
+                    value={sprayerId}
+                    onChange={(event) => handleSprayerChange(event.target.value)}
+                  >
+                    <option value="">Select a sprayer…</option>
+                    {sprayers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {selectedSprayer ? (
+                  <label>
+                    Nozzles open
+                    <input
+                      type="number"
+                      min="1"
+                      max={selectedSprayer.nozzle_count}
+                      step="1"
+                      value={nozzlesOpen}
+                      onChange={(event) => setNozzlesOpen(event.target.value)}
+                    />
+                  </label>
                 ) : null}
               </div>
-            ) : null}
-          </div>
-        )}
-      </div>
+
+              {selectedSprayer ? (
+                <>
+                  {/* Sprayer spec stats */}
+                  <div
+                    className="greenhouse-group-stats"
+                    style={{
+                      marginTop: "0.65rem",
+                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
+                    }}
+                  >
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Speed</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedSprayer.speed_m_per_min} m/min
+                      </span>
+                    </div>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">PSI</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedSprayer.nozzle_psi}
+                      </span>
+                    </div>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Nozzles (total)</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedSprayer.nozzle_count}
+                      </span>
+                    </div>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Flow/nozzle</span>
+                      <span className="greenhouse-stat-value">
+                        {selectedSprayer.nozzle_volume_l_per_min} L/min
+                      </span>
+                    </div>
+                  </div>
+
+                  {nozzlesOpenError ? (
+                    <p className="form-error" style={{ marginTop: "0.5rem" }}>
+                      {nozzlesOpenError}
+                    </p>
+                  ) : null}
+
+                  {/* Spray run summary */}
+                  <div
+                    style={{
+                      marginTop: "1rem",
+                      borderTop: "1px solid var(--border)",
+                      paddingTop: "0.85rem"
+                    }}
+                  >
+                    <p
+                      style={{
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        color: "var(--text-muted)",
+                        margin: "0 0 0.6rem"
+                      }}
+                    >
+                      Spray Run Estimate
+                    </p>
+
+                    {selectedGroupIds.length === 0 ? (
+                      <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                        Select target area in step 1.
+                      </p>
+                    ) : totalRowLengthMeters === 0 ? (
+                      <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                        Add row lengths in Greenhouse Setup to calculate spray time and
+                        volume.
+                      </p>
+                    ) : sprayCalc ? (
+                      <div
+                        className="greenhouse-group-stats"
+                        style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
+                      >
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">Total row length</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(totalRowLengthMeters, 1).toLocaleString()} m
+                          </span>
+                        </div>
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">Total flow rate</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(sprayCalc.totalFlowLPerMin, 2)} L/min
+                          </span>
+                        </div>
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">Spray time</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(sprayCalc.sprayTimeMinutes, 1)} min
+                          </span>
+                        </div>
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">Spray time (hrs)</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(sprayCalc.sprayTimeHours, 2)} hr
+                          </span>
+                        </div>
+                        <div
+                          className="greenhouse-stat-item"
+                          style={{ gridColumn: "1 / -1" }}
+                        >
+                          <span className="greenhouse-stat-label">
+                            Total spray volume
+                          </span>
+                          <span
+                            className="greenhouse-stat-value"
+                            style={{ fontSize: "1.1rem", color: "var(--brand)" }}
+                          >
+                            {roundTo(sprayCalc.totalVolumeL, 1).toLocaleString()} L
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                        Select a sprayer and set nozzles open to calculate spray run.
+                      </p>
+                    )}
+                  </div>
+
+                  <p
+                    style={{
+                      fontSize: "0.78em",
+                      color: "var(--text-muted)",
+                      marginTop: "0.6rem"
+                    }}
+                  >
+                    Estimates assume the sprayer travels every row at constant speed.
+                    Confirm actual volume requirements before filling tanks.
+                  </p>
+                </>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
 
       {/* ── Safety note ─────────────────────────────────── */}
       <div className="coming-soon-card">

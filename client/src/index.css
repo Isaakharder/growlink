@@ -2459,3 +2459,30 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Pest Control Planner ─────────────────────────────────────────────────── */
+
+.pest-planner-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1.25rem;
+}
+
+/* Cards inside the grid need margin-top: 0 because the grid gap handles spacing */
+.pest-planner-card-grid > .coming-soon-card {
+  margin-top: 0;
+  min-width: 0;
+}
+
+/* Prevent long values (chemical names, active ingredients) from overflowing */
+.pest-planner-card-grid .greenhouse-stat-value {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .pest-planner-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
