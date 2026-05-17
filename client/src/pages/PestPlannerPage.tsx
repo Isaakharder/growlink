@@ -15,13 +15,29 @@ type SetupRow = {
   length_meters: number | null;
 };
 
+type SprayerTank = { id: string; name: string; volume_liters: number };
+
 type Sprayer = {
   id: string;
   name: string;
   nozzle_count: number;
   nozzle_volume_l_per_min: number;
   nozzle_psi: number;
-  speed_m_per_min: number;
+  speed_m_per_min: number | null;
+  min_speed_m_per_min: number | null;
+  max_speed_m_per_min: number | null;
+  speed_step_m_per_min: number | null;
+  has_tank: boolean;
+  tank_volume_liters: number | null;
+  tank_id: string | null;
+  tank: SprayerTank | null;
+};
+
+type Tank = {
+  id: string;
+  name: string;
+  volume_liters: number;
+  active: boolean;
 };
 
 type ChemicalType = "fungicide" | "insecticide" | "herbicide" | "pesticide";
@@ -69,6 +85,7 @@ export function PestPlannerPage() {
   const [groups, setGroups] = useState<SetupGroup[]>([]);
   const [rows, setRows] = useState<SetupRow[]>([]);
   const [sprayers, setSprayers] = useState<Sprayer[]>([]);
+  const [tanks, setTanks] = useState<Tank[]>([]);
   const [chemicals, setChemicals] = useState<Chemical[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,10 +102,16 @@ export function PestPlannerPage() {
   // ── Sprayer
   const [sprayerId, setSprayerId] = useState("");
   const [nozzlesOpen, setNozzlesOpen] = useState("");
+  const [spraySpeed, setSpraySpeed] = useState("");
 
   // ── Chemical
   const [chemicalId, setChemicalId] = useState("");
   const [labelLoading, setLabelLoading] = useState(false);
+
+  // ── Save as To Do
+  const [instructions, setInstructions] = useState("");
+  const [todoSaving, setTodoSaving] = useState(false);
+  const [todoSavedMessage, setTodoSavedMessage] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -96,13 +119,14 @@ export function PestPlannerPage() {
       setError(null);
 
       try {
-        const [setupRes, sprayersRes, chemicalsRes] = await Promise.all([
+        const [setupRes, sprayersRes, tanksRes, chemicalsRes] = await Promise.all([
           apiFetch("/api/greenhouse-setup"),
           apiFetch("/api/pest/sprayers"),
+          apiFetch("/api/pest/tanks"),
           apiFetch("/api/pest/chemicals")
         ]);
 
-        if (!setupRes.ok || !sprayersRes.ok || !chemicalsRes.ok) {
+        if (!setupRes.ok || !sprayersRes.ok || !tanksRes.ok || !chemicalsRes.ok) {
           throw new Error("Failed to load planner data");
         }
 
@@ -111,11 +135,13 @@ export function PestPlannerPage() {
           rows: SetupRow[];
         };
         const sprayersData = (await sprayersRes.json()) as Sprayer[];
+        const tanksData = (await tanksRes.json()) as Tank[];
         const chemicalsData = (await chemicalsRes.json()) as Chemical[];
 
         setGroups(setupData.groups ?? []);
         setRows(setupData.rows ?? []);
         setSprayers(sprayersData);
+        setTanks(tanksData);
         setChemicals(chemicalsData);
       } catch (loadError) {
         setError(
@@ -261,6 +287,41 @@ export function PestPlannerPage() {
     [sprayers, sprayerId]
   );
 
+  // Generate speed options from the sprayer's min/max/step range.
+  // Falls back to the legacy single speed_m_per_min for old records.
+  const speedOptions = useMemo<number[]>(() => {
+    if (!selectedSprayer) return [];
+    const { min_speed_m_per_min: min, max_speed_m_per_min: max, speed_step_m_per_min: step, speed_m_per_min: legacy } = selectedSprayer;
+    if (min != null && max != null && min < max) {
+      const inc = step != null && step > 0 ? step : 1;
+      const opts: number[] = [];
+      for (let v = min; v <= max + 1e-9; v += inc) {
+        opts.push(Math.round(v * 1000) / 1000);
+      }
+      return opts;
+    }
+    if (legacy != null && legacy > 0) return [legacy];
+    return [];
+  }, [selectedSprayer]);
+
+  // Effective tank volume: built-in on sprayer, or a linked standalone tank.
+  const effectiveTankVolume = useMemo<number | null>(() => {
+    if (!selectedSprayer) return null;
+    if (selectedSprayer.has_tank && selectedSprayer.tank_volume_liters != null) {
+      return selectedSprayer.tank_volume_liters;
+    }
+    // prefer the joined tank object returned by the API; fall back to tanks list
+    const linkedTank = selectedSprayer.tank ?? tanks.find((t) => t.id === selectedSprayer.tank_id);
+    return linkedTank?.volume_liters ?? null;
+  }, [selectedSprayer, tanks]);
+
+  const effectiveTankName = useMemo<string | null>(() => {
+    if (!selectedSprayer) return null;
+    if (selectedSprayer.has_tank) return "Built-in tank";
+    const linkedTank = selectedSprayer.tank ?? tanks.find((t) => t.id === selectedSprayer.tank_id);
+    return linkedTank?.name ?? null;
+  }, [selectedSprayer, tanks]);
+
   const nozzlesOpenNum = useMemo(() => {
     const n = Number(nozzlesOpen);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
@@ -286,7 +347,9 @@ export function PestPlannerPage() {
     if (!selectedSprayer || nozzlesOpenNum < 1 || nozzlesOpenError) return null;
     if (totalRowLengthMeters <= 0) return null;
 
-    const speed = selectedSprayer.speed_m_per_min;           // m/min
+    const speed = Number(spraySpeed);
+    if (!Number.isFinite(speed) || speed <= 0) return null;
+
     const flowPerNozzle = selectedSprayer.nozzle_volume_l_per_min; // L/min per nozzle
 
     const sprayTimeMinutes = totalRowLengthMeters / speed;
@@ -299,12 +362,37 @@ export function PestPlannerPage() {
       totalFlowLPerMin,
       totalVolumeL
     };
-  }, [selectedSprayer, nozzlesOpenNum, nozzlesOpenError, totalRowLengthMeters]);
+  }, [selectedSprayer, nozzlesOpenNum, nozzlesOpenError, totalRowLengthMeters, spraySpeed]);
+
+  const tankCalc = useMemo(() => {
+    if (!sprayCalc || !effectiveTankVolume || !chemicalNeededResult) return null;
+    const totalVolumeL = sprayCalc.totalVolumeL;
+    const tankVolumeL = effectiveTankVolume;
+    if (totalVolumeL <= 0 || tankVolumeL <= 0) return null;
+
+    const tankCount = Math.ceil(totalVolumeL / tankVolumeL);
+    const chemPerLiterMl = chemicalNeededResult.ml / totalVolumeL;
+    const chemPerFullTankMl = chemPerLiterMl * tankVolumeL;
+    const rawFinalVolumeL = totalVolumeL % tankVolumeL;
+    const isLastFull = rawFinalVolumeL < 0.001;
+    const finalTankVolumeL = isLastFull ? tankVolumeL : rawFinalVolumeL;
+    const chemForFinalTankMl = chemPerLiterMl * finalTankVolumeL;
+
+    return {
+      tankCount,
+      chemPerLiterMl,
+      chemPerFullTankMl,
+      finalTankVolumeL,
+      chemForFinalTankMl,
+      isLastFull
+    };
+  }, [sprayCalc, effectiveTankVolume, chemicalNeededResult]);
 
   function handleSprayerChange(id: string) {
     setSprayerId(id);
     const s = sprayers.find((sp) => sp.id === id);
     setNozzlesOpen(s ? String(s.nozzle_count) : "");
+    setSpraySpeed("");
   }
 
   // ── Chemical derivations ───────────────────────────────────────────────────
@@ -318,6 +406,130 @@ export function PestPlannerPage() {
     () => availableChemicals.find((c) => c.id === chemicalId) ?? null,
     [availableChemicals, chemicalId]
   );
+
+  // Card is visible as soon as type + area are chosen so the operator sees what's next.
+  const showCreateJobCard = applicationType !== "" && selectedGroupIds.length > 0;
+
+  // Button is only enabled when chemical is also selected (required for the todo payload).
+  const canCreateJob =
+    showCreateJobCard &&
+    chemicalId !== "" &&
+    (applicationType === "drench" || selectedSprayer !== null);
+
+  const createJobLabel =
+    applicationType === "spray"
+      ? "Create Spray Job"
+      : applicationType === "drench"
+        ? "Create Drench Job"
+        : "Create Job";
+
+  const jobCreatedMessage =
+    applicationType === "spray"
+      ? "Spray job created. Open Pest Log on mobile to view it."
+      : "Drench job created. Open Pest Log on mobile to view it.";
+
+  async function handleSaveTodo() {
+    if (!canCreateJob) return;
+    setTodoSaving(true);
+    setTodoSavedMessage("");
+    setError(null);
+
+    const chemical_snapshot = selectedChemical
+      ? {
+          id: selectedChemical.id,
+          name: selectedChemical.name,
+          chemical_type: selectedChemical.chemical_type,
+          phi: selectedChemical.phi,
+          chemical_group: selectedChemical.chemical_group,
+          rate_value: rateValue || null,
+          rate_unit: rateUnit
+        }
+      : {};
+
+    const target_snapshot = {
+      group_ids: selectedGroupIds,
+      group_names: selectedGroupNames,
+      total_m2: totalM2,
+      total_row_length_meters: totalRowLengthMeters
+    };
+
+    const sprayer_snapshot =
+      selectedSprayer && applicationType === "spray"
+        ? {
+            id: selectedSprayer.id,
+            name: selectedSprayer.name,
+            nozzle_count: selectedSprayer.nozzle_count,
+            nozzle_volume_l_per_min: selectedSprayer.nozzle_volume_l_per_min,
+            nozzle_psi: selectedSprayer.nozzle_psi,
+            speed_m_per_min: Number(spraySpeed) || null,
+            nozzles_open: nozzlesOpenNum
+          }
+        : {};
+
+    const tank_snapshot =
+      applicationType === "spray" && effectiveTankVolume != null
+        ? {
+            name: effectiveTankName ?? "Tank",
+            volume_liters: effectiveTankVolume,
+            is_builtin: selectedSprayer?.has_tank ?? false
+          }
+        : {};
+
+    const calc_base = chemicalNeededResult
+      ? {
+          total_chemical_ml: chemicalNeededResult.ml,
+          total_chemical_l: chemicalNeededResult.L,
+          rate_value: rateValue ? Number(rateValue) : null,
+          rate_unit: rateUnit,
+          area_label: chemicalNeededResult.areaLabel
+        }
+      : {};
+
+    const calculation_snapshot =
+      applicationType === "spray" && sprayCalc
+        ? {
+            ...calc_base,
+            type: "spray",
+            total_volume_l: sprayCalc.totalVolumeL,
+            spray_time_minutes: sprayCalc.sprayTimeMinutes,
+            spray_time_hours: sprayCalc.sprayTimeHours,
+            total_flow_l_per_min: sprayCalc.totalFlowLPerMin,
+            tank_volume_l: effectiveTankVolume,
+            tank_count: tankCalc?.tankCount ?? null,
+            chem_per_liter_ml: tankCalc?.chemPerLiterMl ?? null,
+            chem_per_full_tank_ml: tankCalc?.chemPerFullTankMl ?? null,
+            final_tank_volume_l: tankCalc?.finalTankVolumeL ?? null,
+            chem_for_final_tank_ml: tankCalc?.chemForFinalTankMl ?? null,
+            is_last_full: tankCalc?.isLastFull ?? null
+          }
+        : { ...calc_base, type: applicationType };
+
+    try {
+      const res = await apiFetch("/api/pest/todos", {
+        method: "POST",
+        body: JSON.stringify({
+          type: applicationType,
+          chemical_id: chemicalId || null,
+          chemical_snapshot,
+          target_snapshot,
+          sprayer_snapshot,
+          tank_snapshot,
+          calculation_snapshot,
+          instructions: instructions.trim() || null
+        })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to save plan");
+      }
+      setTodoSavedMessage(jobCreatedMessage);
+      setInstructions("");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save plan");
+    } finally {
+      setTodoSaving(false);
+    }
+  }
 
   async function viewChemicalLabel(id: string) {
     setLabelLoading(true);
@@ -743,7 +955,7 @@ export function PestPlannerPage() {
       {/* ── Sprayer & Water Details (Spray only) ─────────── */}
       {applicationType === "spray" ? (
         <div className="coming-soon-card">
-          <h2>Sprayer &amp; Water Details</h2>
+          <h2>Sprayer Details</h2>
 
           {sprayers.length === 0 ? (
             <p>No sprayers configured. Add sprayers in Pest Control Setup.</p>
@@ -764,6 +976,28 @@ export function PestPlannerPage() {
                     {sprayers.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Sprayer speed
+                  <select
+                    value={spraySpeed}
+                    disabled={!selectedSprayer || speedOptions.length === 0}
+                    onChange={(event) => setSpraySpeed(event.target.value)}
+                  >
+                    <option value="">
+                      {!selectedSprayer
+                        ? "Select a sprayer first"
+                        : speedOptions.length === 0
+                          ? "No speed range configured"
+                          : "Select speed…"}
+                    </option>
+                    {speedOptions.map((v) => (
+                      <option key={v} value={String(v)}>
+                        {v} m/min
                       </option>
                     ))}
                   </select>
@@ -794,12 +1028,6 @@ export function PestPlannerPage() {
                       gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
                     }}
                   >
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">Speed</span>
-                      <span className="greenhouse-stat-value">
-                        {selectedSprayer.speed_m_per_min} m/min
-                      </span>
-                    </div>
                     <div className="greenhouse-stat-item">
                       <span className="greenhouse-stat-label">PSI</span>
                       <span className="greenhouse-stat-value">
@@ -907,6 +1135,84 @@ export function PestPlannerPage() {
                     )}
                   </div>
 
+                  {/* Tank mix breakdown */}
+                  {sprayCalc && (
+                    <div
+                      style={{
+                        marginTop: "1rem",
+                        borderTop: "1px solid var(--border)",
+                        paddingTop: "0.85rem"
+                      }}
+                    >
+                      <p
+                        style={{
+                          fontSize: "0.72rem",
+                          fontWeight: 700,
+                          letterSpacing: "0.06em",
+                          textTransform: "uppercase",
+                          color: "var(--text-muted)",
+                          margin: "0 0 0.5rem"
+                        }}
+                      >
+                        Tank Mix
+                      </p>
+
+                      {effectiveTankVolume == null ? (
+                        <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                          No tank configured for this sprayer. Add a built-in or separate tank in Pest Control Setup.
+                        </p>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: "0.85em", marginBottom: "0.5rem" }}>
+                            {effectiveTankName ?? "Tank"}: {effectiveTankVolume} L
+                          </p>
+
+                          {tankCalc ? (
+                            <div
+                              className="greenhouse-group-stats"
+                              style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
+                            >
+                              <div className="greenhouse-stat-item">
+                                <span className="greenhouse-stat-label">Tanks needed</span>
+                                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                                  {tankCalc.tankCount}
+                                </span>
+                              </div>
+                              <div className="greenhouse-stat-item">
+                                <span className="greenhouse-stat-label">Chemical per L water</span>
+                                <span className="greenhouse-stat-value">
+                                  {roundTo(tankCalc.chemPerLiterMl, 3)} ml/L
+                                </span>
+                              </div>
+                              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                                <span className="greenhouse-stat-label">
+                                  Full tank ({effectiveTankVolume} L water)
+                                </span>
+                                <span className="greenhouse-stat-value">
+                                  {roundTo(tankCalc.chemPerFullTankMl, 1)} ml chemical
+                                </span>
+                              </div>
+                              {!tankCalc.isLastFull && (
+                                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                                  <span className="greenhouse-stat-label">
+                                    Final tank ({roundTo(tankCalc.finalTankVolumeL, 1)} L water)
+                                  </span>
+                                  <span className="greenhouse-stat-value">
+                                    {roundTo(tankCalc.chemForFinalTankMl, 1)} ml chemical
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                              Enter chemical rate in Application Details to calculate mix.
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   <p
                     style={{
                       fontSize: "0.78em",
@@ -921,6 +1227,50 @@ export function PestPlannerPage() {
               ) : null}
             </>
           )}
+        </div>
+      ) : null}
+
+      {/* ── Create Job ───────────────────────────────────── */}
+      {showCreateJobCard ? (
+        <div className="coming-soon-card" style={{ marginTop: "1rem" }}>
+          <h2>{createJobLabel}</h2>
+          <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+            Sends the full plan to the mobile Pest Log so the operator can see exactly what to mix.
+          </p>
+
+          {!chemicalId ? (
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.65rem" }}>
+              Select a chemical in step 3 before creating a job.
+            </p>
+          ) : (
+            <div className="varieties-form" style={{ marginTop: "0.75rem", gridTemplateColumns: "1fr" }}>
+              <label>
+                Instructions for operator (optional)
+                <textarea
+                  rows={3}
+                  value={instructions}
+                  placeholder="e.g. Start from north end of Phase 1. Wear full PPE."
+                  onChange={(e) => setInstructions(e.target.value)}
+                  style={{ resize: "vertical", fontFamily: "inherit" }}
+                />
+              </label>
+            </div>
+          )}
+
+          <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              disabled={!canCreateJob || todoSaving}
+              onClick={() => void handleSaveTodo()}
+            >
+              {todoSaving ? "Saving…" : createJobLabel}
+            </button>
+            {todoSavedMessage ? (
+              <p style={{ fontSize: "0.85em", color: "var(--brand)", margin: 0 }}>
+                {todoSavedMessage}
+              </p>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

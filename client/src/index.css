@@ -2486,3 +2486,123 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Mobile Pest Log ─────────────────────────────────────────────────────── */
+
+.pest-todo-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.65rem;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.pest-todo-card:hover {
+  border-color: var(--brand);
+  box-shadow: 0 2px 8px rgba(15, 118, 96, 0.12);
+}
+
+.pest-todo-card--done {
+  opacity: 0.7;
+}
+
+.pest-todo-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.pest-todo-card-chemical {
+  font-weight: 600;
+  font-size: 1rem;
+  margin: 0 0 0.2rem;
+}
+
+.pest-todo-card-target {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  margin: 0 0 0.4rem;
+}
+
+.pest-todo-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  font-size: 0.78em;
+  color: var(--text-muted);
+}
+
+.pest-todo-type-badge {
+  display: inline-block;
+  font-size: 0.72em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #e0f0eb;
+  color: var(--brand);
+}
+
+.pest-todo-type-badge[data-type="drench"] {
+  background: #ddeeff;
+  color: #1a5aa8;
+}
+
+.pest-todo-status-badge {
+  display: inline-block;
+  font-size: 0.72em;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: #fff3cd;
+  color: #856404;
+}
+
+.pest-todo-status-badge[data-status="completed"] {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.pest-todo-status-badge[data-status="cancelled"] {
+  background: #f0f0f0;
+  color: var(--text-muted);
+}
+
+.pest-tank-mix-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.pest-tank-mix-row {
+  display: grid;
+  grid-template-columns: 4rem 1fr 1fr;
+  gap: 0.5rem;
+  font-size: 0.85em;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface-soft);
+  border-radius: 7px;
+  align-items: center;
+}
+
+.pest-tank-mix-label {
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.pest-tank-mix-water {
+  color: var(--text-muted);
+}
+
+.pest-tank-mix-chem {
+  font-weight: 600;
+  text-align: right;
+}

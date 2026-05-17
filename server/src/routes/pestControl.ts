@@ -8,7 +8,12 @@ type SprayerPayload = {
   nozzle_count: number;
   nozzle_volume_l_per_min: number;
   nozzle_psi: number;
-  speed_m_per_min: number;
+  min_speed_m_per_min: number | null;
+  max_speed_m_per_min: number | null;
+  speed_step_m_per_min: number | null;
+  has_tank: boolean;
+  tank_volume_liters: number | null;
+  tank_id: string | null;
 };
 
 function parseRequiredName(value: unknown): string {
@@ -35,10 +40,11 @@ function parseNonNegativeNumber(value: unknown, fieldName: string): number {
   return parsed;
 }
 
-function parseSpeedMPerMin(value: unknown): number {
+function parseOptionalNonNegativeNumber(value: unknown, fieldName: string): number | null {
+  if (value === null || value === undefined || value === "") return null;
   const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 20 || parsed > 80) {
-    throw new Error("speed_m_per_min must be between 20 and 80");
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${fieldName} must be 0 or greater`);
   }
   return parsed;
 }
@@ -50,6 +56,30 @@ function validateSprayerPayload(input: unknown): SprayerPayload {
 
   const body = input as Record<string, unknown>;
 
+  const min_speed = parseOptionalNonNegativeNumber(body.min_speed_m_per_min, "min_speed_m_per_min");
+  const max_speed = parseOptionalNonNegativeNumber(body.max_speed_m_per_min, "max_speed_m_per_min");
+  const speed_step = parseOptionalNonNegativeNumber(body.speed_step_m_per_min, "speed_step_m_per_min");
+
+  if (min_speed !== null && max_speed !== null && min_speed >= max_speed) {
+    throw new Error("min_speed_m_per_min must be less than max_speed_m_per_min");
+  }
+  if (speed_step !== null && speed_step === 0) {
+    throw new Error("speed_step_m_per_min must be greater than 0");
+  }
+
+  const has_tank = body.has_tank === true;
+
+  let tank_volume_liters: number | null = null;
+  if (has_tank && body.tank_volume_liters != null && body.tank_volume_liters !== "") {
+    const vol = typeof body.tank_volume_liters === "number" ? body.tank_volume_liters : Number(body.tank_volume_liters);
+    if (!Number.isFinite(vol) || vol <= 0) {
+      throw new Error("tank_volume_liters must be greater than 0");
+    }
+    tank_volume_liters = vol;
+  }
+
+  const tank_id = !has_tank && typeof body.tank_id === "string" && body.tank_id ? body.tank_id : null;
+
   return {
     name: parseRequiredName(body.name),
     nozzle_count: parsePositiveInteger(body.nozzle_count, "nozzle_count"),
@@ -58,7 +88,12 @@ function validateSprayerPayload(input: unknown): SprayerPayload {
       "nozzle_volume_l_per_min"
     ),
     nozzle_psi: parseNonNegativeNumber(body.nozzle_psi, "nozzle_psi"),
-    speed_m_per_min: parseSpeedMPerMin(body.speed_m_per_min)
+    min_speed_m_per_min: min_speed,
+    max_speed_m_per_min: max_speed,
+    speed_step_m_per_min: speed_step,
+    has_tank,
+    tank_volume_liters,
+    tank_id
   };
 }
 
@@ -69,7 +104,7 @@ pestControlRouter.get("/pest/sprayers", async (req, res) => {
 
   const { data, error } = await supabase
     .from("pest_sprayers")
-    .select("*")
+    .select("*, tank:pest_tanks(id, name, volume_liters)")
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: true });
 
@@ -91,10 +126,22 @@ pestControlRouter.post("/pest/sprayers", async (req, res) => {
     return res.status(400).json({ message });
   }
 
+  if (payload.tank_id) {
+    const { data: tank } = await supabase
+      .from("pest_tanks")
+      .select("id")
+      .eq("id", payload.tank_id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!tank) {
+      return res.status(400).json({ message: "Tank not found" });
+    }
+  }
+
   const { data, error } = await supabase
     .from("pest_sprayers")
     .insert({ ...payload, organization_id: organizationId })
-    .select("*")
+    .select("*, tank:pest_tanks(id, name, volume_liters)")
     .single();
 
   if (error) {
@@ -116,12 +163,24 @@ pestControlRouter.put("/pest/sprayers/:id", async (req, res) => {
     return res.status(400).json({ message });
   }
 
+  if (payload.tank_id) {
+    const { data: tank } = await supabase
+      .from("pest_tanks")
+      .select("id")
+      .eq("id", payload.tank_id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!tank) {
+      return res.status(400).json({ message: "Tank not found" });
+    }
+  }
+
   const { data, error } = await supabase
     .from("pest_sprayers")
     .update({ ...payload, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("organization_id", organizationId)
-    .select("*")
+    .select("*, tank:pest_tanks(id, name, volume_liters)")
     .single();
 
   if (error) {
@@ -526,6 +585,207 @@ pestControlRouter.delete("/pest/chemicals/:id/label", async (req, res) => {
   }
 
   return res.status(204).send();
+});
+
+// ── Tanks ─────────────────────────────────────────────────────────────────────
+
+type TankPayload = {
+  name: string;
+  volume_liters: number;
+  active: boolean;
+};
+
+function validateTankPayload(input: unknown): TankPayload {
+  if (!input || typeof input !== "object") throw new Error("Invalid request body");
+  const body = input as Record<string, unknown>;
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) throw new Error("name is required");
+
+  const volume_liters = typeof body.volume_liters === "number" ? body.volume_liters : Number(body.volume_liters);
+  if (!Number.isFinite(volume_liters) || volume_liters <= 0) {
+    throw new Error("volume_liters must be greater than 0");
+  }
+
+  const active = body.active !== false;
+
+  return { name, volume_liters, active };
+}
+
+pestControlRouter.get("/pest/tanks", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { data, error } = await supabase
+    .from("pest_tanks")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load tanks.", "Tanks fetch error:", error);
+  }
+  return res.json(data ?? []);
+});
+
+pestControlRouter.post("/pest/tanks", async (req, res) => {
+  const organizationId = req.organizationId;
+  let payload: TankPayload;
+  try {
+    payload = validateTankPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+  const { data, error } = await supabase
+    .from("pest_tanks")
+    .insert({ ...payload, organization_id: organizationId })
+    .select("*")
+    .single();
+  if (error) {
+    return sendSafeError(res, 500, "Failed to create tank.", "Tank insert error:", error);
+  }
+  return res.status(201).json(data);
+});
+
+pestControlRouter.put("/pest/tanks/:id", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  let payload: TankPayload;
+  try {
+    payload = validateTankPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+  const { data, error } = await supabase
+    .from("pest_tanks")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) {
+    return sendSafeError(res, 500, "Failed to update tank.", "Tank update error:", error);
+  }
+  return res.json(data);
+});
+
+pestControlRouter.delete("/pest/tanks/:id", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  const { error } = await supabase
+    .from("pest_tanks")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+  if (error) {
+    return sendSafeError(res, 500, "Failed to delete tank.", "Tank delete error:", error);
+  }
+  return res.status(204).send();
+});
+
+// ── Pest Control Todos ────────────────────────────────────────────────────────
+
+pestControlRouter.get("/pest/todos", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { status } = req.query;
+
+  let query = supabase
+    .from("pest_control_todos")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false });
+
+  if (status === "pending" || status === "completed" || status === "cancelled") {
+    query = query.eq("status", status as string);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load todos.", "Todos fetch error:", error);
+  }
+  return res.json(data ?? []);
+});
+
+pestControlRouter.post("/pest/todos", async (req, res) => {
+  const organizationId = req.organizationId;
+  const userId = req.userId;
+  const body = req.body as Record<string, unknown>;
+
+  const type = body.type;
+  if (type !== "spray" && type !== "drench") {
+    return res.status(400).json({ message: "type must be spray or drench" });
+  }
+
+  const chemical_id = typeof body.chemical_id === "string" && body.chemical_id ? body.chemical_id : null;
+  if (chemical_id) {
+    const { data: chem } = await supabase
+      .from("pest_chemicals")
+      .select("id")
+      .eq("id", chemical_id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!chem) {
+      return res.status(400).json({ message: "Chemical not found" });
+    }
+  }
+
+  const instructions = typeof body.instructions === "string" ? body.instructions.trim() || null : null;
+
+  const { data, error } = await supabase
+    .from("pest_control_todos")
+    .insert({
+      organization_id: organizationId,
+      type,
+      status: "pending",
+      chemical_id,
+      chemical_snapshot: body.chemical_snapshot ?? {},
+      target_snapshot: body.target_snapshot ?? {},
+      sprayer_snapshot: body.sprayer_snapshot ?? {},
+      tank_snapshot: body.tank_snapshot ?? {},
+      calculation_snapshot: body.calculation_snapshot ?? {},
+      instructions,
+      created_by: userId ?? null
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to create todo.", "Todo insert error:", error);
+  }
+  return res.status(201).json(data);
+});
+
+pestControlRouter.patch("/pest/todos/:id/status", async (req, res) => {
+  const organizationId = req.organizationId;
+  const userId = req.userId;
+  const { id } = req.params;
+  const body = req.body as Record<string, unknown>;
+
+  const status = body.status;
+  if (status !== "completed" && status !== "cancelled") {
+    return res.status(400).json({ message: "status must be completed or cancelled" });
+  }
+
+  const updates: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+  if (status === "completed") {
+    updates.completed_by = userId ?? null;
+    updates.completed_at = new Date().toISOString();
+  }
+
+  const { data, error } = await supabase
+    .from("pest_control_todos")
+    .update(updates)
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to update todo.", "Todo update error:", error);
+  }
+  if (!data) {
+    return res.status(404).json({ message: "Todo not found" });
+  }
+  return res.json(data);
 });
 
 export { pestControlRouter };

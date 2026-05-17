@@ -20,10 +20,9 @@ export function MobileHomePage() {
           Irrigation Log
         </Link>
 
-        <button type="button" className="mobile-card-button" disabled>
+        <Link className="mobile-card-button" to="/mobile/pest-log">
           Pest Log
-          <span>Coming soon</span>
-        </button>
+        </Link>
       </div>
     </section>
   );

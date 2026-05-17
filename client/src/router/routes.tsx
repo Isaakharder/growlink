@@ -10,6 +10,7 @@ import { IrrigationSetupPage } from "../pages/IrrigationSetupPage";
 import { MobileDailyYieldPage } from "../pages/MobileDailyYieldPage";
 import { MobileHomePage } from "../pages/MobileHomePage";
 import { MobileIrrigationLogPage } from "../pages/MobileIrrigationLogPage";
+import { MobilePestLogPage } from "../pages/MobilePestLogPage";
 import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
 import { PestControlSetupPage } from "../pages/PestControlSetupPage";
@@ -154,6 +155,10 @@ export const appRouter = createBrowserRouter([
           {
             path: "irrigation-log",
             element: <MobileIrrigationLogPage />
+          },
+          {
+            path: "pest-log",
+            element: <MobilePestLogPage />
           }
         ]
       }

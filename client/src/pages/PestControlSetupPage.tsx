@@ -1,13 +1,22 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
 
+type SprayerTank = { id: string; name: string; volume_liters: number };
+
 type Sprayer = {
   id: string;
   name: string;
   nozzle_count: number;
   nozzle_volume_l_per_min: number;
   nozzle_psi: number;
-  speed_m_per_min: number;
+  speed_m_per_min: number | null;
+  min_speed_m_per_min: number | null;
+  max_speed_m_per_min: number | null;
+  speed_step_m_per_min: number | null;
+  has_tank: boolean;
+  tank_volume_liters: number | null;
+  tank_id: string | null;
+  tank: SprayerTank | null;
   created_at: string;
   updated_at: string;
 };
@@ -17,217 +26,368 @@ type SprayerFormState = {
   nozzle_count: string;
   nozzle_volume_l_per_min: string;
   nozzle_psi: string;
-  speed_m_per_min: string;
+  min_speed_m_per_min: string;
+  max_speed_m_per_min: string;
+  speed_step_m_per_min: string;
+  has_tank: boolean;
+  tank_volume_liters: string;
+  tank_id: string;
+};
+
+type Tank = {
+  id: string;
+  name: string;
+  volume_liters: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type TankFormState = {
+  name: string;
+  volume_liters: string;
+  active: boolean;
 };
 
 const SPRAYERS_URL = "/api/pest/sprayers";
+const TANKS_URL = "/api/pest/tanks";
 
-const INITIAL_FORM: SprayerFormState = {
+const INITIAL_SPRAYER_FORM: SprayerFormState = {
   name: "",
   nozzle_count: "1",
   nozzle_volume_l_per_min: "0",
   nozzle_psi: "0",
-  speed_m_per_min: "50"
+  min_speed_m_per_min: "",
+  max_speed_m_per_min: "",
+  speed_step_m_per_min: "",
+  has_tank: false,
+  tank_volume_liters: "",
+  tank_id: ""
 };
 
-const SPEED_OPTIONS = Array.from({ length: 61 }, (_, i) => 20 + i);
+const INITIAL_TANK_FORM: TankFormState = {
+  name: "",
+  volume_liters: "",
+  active: true
+};
 
-function toFormState(sprayer: Sprayer): SprayerFormState {
+function toSprayerFormState(sprayer: Sprayer): SprayerFormState {
   return {
     name: sprayer.name,
     nozzle_count: String(sprayer.nozzle_count),
     nozzle_volume_l_per_min: String(sprayer.nozzle_volume_l_per_min),
     nozzle_psi: String(sprayer.nozzle_psi),
-    speed_m_per_min: String(sprayer.speed_m_per_min)
+    min_speed_m_per_min:
+      sprayer.min_speed_m_per_min != null
+        ? String(sprayer.min_speed_m_per_min)
+        : sprayer.speed_m_per_min != null
+          ? String(sprayer.speed_m_per_min)
+          : "",
+    max_speed_m_per_min:
+      sprayer.max_speed_m_per_min != null
+        ? String(sprayer.max_speed_m_per_min)
+        : sprayer.speed_m_per_min != null
+          ? String(sprayer.speed_m_per_min)
+          : "",
+    speed_step_m_per_min:
+      sprayer.speed_step_m_per_min != null ? String(sprayer.speed_step_m_per_min) : "",
+    has_tank: sprayer.has_tank,
+    tank_volume_liters: sprayer.tank_volume_liters != null ? String(sprayer.tank_volume_liters) : "",
+    tank_id: sprayer.tank_id ?? ""
+  };
+}
+
+function toTankFormState(tank: Tank): TankFormState {
+  return {
+    name: tank.name,
+    volume_liters: String(tank.volume_liters),
+    active: tank.active
   };
 }
 
 export function PestControlSetupPage() {
   const [sprayers, setSprayers] = useState<Sprayer[]>([]);
+  const [tanks, setTanks] = useState<Tank[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState<SprayerFormState>(INITIAL_FORM);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  async function fetchSprayers() {
+  // Sprayer modal state
+  const [sprayerForm, setSprayerForm] = useState<SprayerFormState>(INITIAL_SPRAYER_FORM);
+  const [editingSprayerId, setEditingSprayerId] = useState<string | null>(null);
+  const [isSprayerModalOpen, setIsSprayerModalOpen] = useState(false);
+  const [sprayerSaving, setSprayerSaving] = useState(false);
+  const [sprayerError, setSprayerError] = useState<string | null>(null);
+
+  // Tank modal state
+  const [tankForm, setTankForm] = useState<TankFormState>(INITIAL_TANK_FORM);
+  const [editingTankId, setEditingTankId] = useState<string | null>(null);
+  const [isTankModalOpen, setIsTankModalOpen] = useState(false);
+  const [tankSaving, setTankSaving] = useState(false);
+  const [tankError, setTankError] = useState<string | null>(null);
+
+  async function fetchData() {
     setLoading(true);
     setError(null);
-
     try {
-      const res = await apiFetch(SPRAYERS_URL);
-      if (!res.ok) {
-        throw new Error("Failed to load sprayers");
+      const [sprayersRes, tanksRes] = await Promise.all([
+        apiFetch(SPRAYERS_URL),
+        apiFetch(TANKS_URL)
+      ]);
+      if (!sprayersRes.ok || !tanksRes.ok) {
+        throw new Error("Failed to load setup data");
       }
-      const data = (await res.json()) as Sprayer[];
-      setSprayers(data);
+      setSprayers((await sprayersRes.json()) as Sprayer[]);
+      setTanks((await tanksRes.json()) as Tank[]);
     } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : "Failed to load sprayers");
+      setError(fetchError instanceof Error ? fetchError.message : "Failed to load setup data");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void fetchSprayers();
+    void fetchData();
   }, []);
 
   useEffect(() => {
-    if (!isModalOpen) {
-      return;
-    }
+    if (!isSprayerModalOpen && !isTankModalOpen) return;
 
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeModal();
+        if (isSprayerModalOpen) closeSprayerModal();
+        if (isTankModalOpen) closeTankModal();
       }
     }
 
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [isModalOpen]);
+  }, [isSprayerModalOpen, isTankModalOpen]);
 
-  function openAddModal() {
-    setEditingId(null);
-    setForm(INITIAL_FORM);
-    setError(null);
-    setIsModalOpen(true);
+  // ── Sprayer modal helpers ──────────────────────────────────────────────────
+
+  function openAddSprayerModal() {
+    setEditingSprayerId(null);
+    setSprayerForm(INITIAL_SPRAYER_FORM);
+    setSprayerError(null);
+    setIsSprayerModalOpen(true);
   }
 
-  function beginEdit(sprayer: Sprayer) {
-    setEditingId(sprayer.id);
-    setForm(toFormState(sprayer));
-    setError(null);
-    setIsModalOpen(true);
+  function beginEditSprayer(sprayer: Sprayer) {
+    setEditingSprayerId(sprayer.id);
+    setSprayerForm(toSprayerFormState(sprayer));
+    setSprayerError(null);
+    setIsSprayerModalOpen(true);
   }
 
-  function closeModal() {
-    setIsModalOpen(false);
-    setEditingId(null);
-    setForm(INITIAL_FORM);
-    setError(null);
+  function closeSprayerModal() {
+    setIsSprayerModalOpen(false);
+    setEditingSprayerId(null);
+    setSprayerForm(INITIAL_SPRAYER_FORM);
+    setSprayerError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSprayerSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
+    setSprayerError(null);
 
-    const name = form.name.trim();
-    if (!name) {
-      setError("Name is required.");
-      return;
-    }
+    const name = sprayerForm.name.trim();
+    if (!name) { setSprayerError("Name is required."); return; }
 
-    const nozzle_count = Number(form.nozzle_count);
+    const nozzle_count = Number(sprayerForm.nozzle_count);
     if (!Number.isInteger(nozzle_count) || nozzle_count < 1) {
-      setError("Nozzle count must be 1 or greater.");
-      return;
+      setSprayerError("Nozzle count must be 1 or greater."); return;
     }
 
-    const nozzle_volume_l_per_min = Number(form.nozzle_volume_l_per_min);
+    const nozzle_volume_l_per_min = Number(sprayerForm.nozzle_volume_l_per_min);
     if (!Number.isFinite(nozzle_volume_l_per_min) || nozzle_volume_l_per_min < 0) {
-      setError("Nozzle volume must be 0 or greater.");
-      return;
+      setSprayerError("Nozzle volume must be 0 or greater."); return;
     }
 
-    const nozzle_psi = Number(form.nozzle_psi);
+    const nozzle_psi = Number(sprayerForm.nozzle_psi);
     if (!Number.isFinite(nozzle_psi) || nozzle_psi < 0) {
-      setError("PSI must be 0 or greater.");
-      return;
+      setSprayerError("PSI must be 0 or greater."); return;
     }
 
-    const speed_m_per_min = Number(form.speed_m_per_min);
-    if (!Number.isFinite(speed_m_per_min) || speed_m_per_min < 20 || speed_m_per_min > 80) {
-      setError("Speed must be between 20 and 80 m/min.");
-      return;
+    const min_raw = sprayerForm.min_speed_m_per_min.trim();
+    const max_raw = sprayerForm.max_speed_m_per_min.trim();
+    const step_raw = sprayerForm.speed_step_m_per_min.trim();
+    const min_speed_m_per_min = min_raw !== "" ? Number(min_raw) : null;
+    const max_speed_m_per_min = max_raw !== "" ? Number(max_raw) : null;
+    const speed_step_m_per_min = step_raw !== "" ? Number(step_raw) : null;
+
+    if (min_speed_m_per_min !== null && (!Number.isFinite(min_speed_m_per_min) || min_speed_m_per_min < 0)) {
+      setSprayerError("Min speed must be 0 or greater."); return;
+    }
+    if (max_speed_m_per_min !== null && (!Number.isFinite(max_speed_m_per_min) || max_speed_m_per_min < 0)) {
+      setSprayerError("Max speed must be 0 or greater."); return;
+    }
+    if (min_speed_m_per_min !== null && max_speed_m_per_min !== null && min_speed_m_per_min >= max_speed_m_per_min) {
+      setSprayerError("Min speed must be less than max speed."); return;
+    }
+    if (speed_step_m_per_min !== null && (!Number.isFinite(speed_step_m_per_min) || speed_step_m_per_min <= 0)) {
+      setSprayerError("Speed step must be greater than 0."); return;
     }
 
-    setSaving(true);
+    const has_tank = sprayerForm.has_tank;
+    let tank_volume_liters: number | null = null;
+    let tank_id: string | null = null;
 
+    if (has_tank) {
+      const vol_raw = sprayerForm.tank_volume_liters.trim();
+      if (vol_raw) {
+        tank_volume_liters = Number(vol_raw);
+        if (!Number.isFinite(tank_volume_liters) || tank_volume_liters <= 0) {
+          setSprayerError("Tank volume must be greater than 0."); return;
+        }
+      }
+    } else {
+      tank_id = sprayerForm.tank_id || null;
+    }
+
+    setSprayerSaving(true);
     try {
-      const method = editingId ? "PUT" : "POST";
-      const url = editingId ? `${SPRAYERS_URL}/${editingId}` : SPRAYERS_URL;
-
+      const method = editingSprayerId ? "PUT" : "POST";
+      const url = editingSprayerId ? `${SPRAYERS_URL}/${editingSprayerId}` : SPRAYERS_URL;
       const response = await apiFetch(url, {
         method,
         body: JSON.stringify({
-          name,
-          nozzle_count,
-          nozzle_volume_l_per_min,
-          nozzle_psi,
-          speed_m_per_min
+          name, nozzle_count, nozzle_volume_l_per_min, nozzle_psi,
+          min_speed_m_per_min, max_speed_m_per_min, speed_step_m_per_min,
+          has_tank, tank_volume_liters, tank_id
         })
       });
-
       if (!response.ok) {
-        let message = editingId ? "Update failed" : "Create failed";
+        let message = editingSprayerId ? "Update failed" : "Create failed";
         try {
           const body = (await response.json()) as { message?: string };
-          if (body.message) {
-            message = body.message;
-          }
-        } catch {
-          // use fallback
-        }
+          if (body.message) message = body.message;
+        } catch { /* use fallback */ }
         throw new Error(message);
       }
-
-      closeModal();
-      await fetchSprayers();
+      closeSprayerModal();
+      await fetchData();
     } catch (submitError) {
-      setError(
-        submitError instanceof Error ? submitError.message : "Failed to save sprayer"
-      );
+      setSprayerError(submitError instanceof Error ? submitError.message : "Failed to save sprayer");
     } finally {
-      setSaving(false);
+      setSprayerSaving(false);
     }
   }
 
   async function deleteSprayer(id: string) {
-    const confirmed = window.confirm("Delete this sprayer?");
-    if (!confirmed) {
-      return;
-    }
-
+    if (!window.confirm("Delete this sprayer?")) return;
     setError(null);
-
     try {
       const response = await apiFetch(`${SPRAYERS_URL}/${id}`, { method: "DELETE" });
-      if (!response.ok) {
-        throw new Error(`Delete failed (${response.status})`);
-      }
-      await fetchSprayers();
+      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      await fetchData();
     } catch (deleteError) {
-      setError(
-        deleteError instanceof Error ? deleteError.message : "Failed to delete sprayer"
-      );
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete sprayer");
     }
+  }
+
+  // ── Tank modal helpers ─────────────────────────────────────────────────────
+
+  function openAddTankModal() {
+    setEditingTankId(null);
+    setTankForm(INITIAL_TANK_FORM);
+    setTankError(null);
+    setIsTankModalOpen(true);
+  }
+
+  function beginEditTank(tank: Tank) {
+    setEditingTankId(tank.id);
+    setTankForm(toTankFormState(tank));
+    setTankError(null);
+    setIsTankModalOpen(true);
+  }
+
+  function closeTankModal() {
+    setIsTankModalOpen(false);
+    setEditingTankId(null);
+    setTankForm(INITIAL_TANK_FORM);
+    setTankError(null);
+  }
+
+  async function handleTankSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTankError(null);
+
+    const name = tankForm.name.trim();
+    if (!name) { setTankError("Name is required."); return; }
+
+    const volume_liters = Number(tankForm.volume_liters);
+    if (!Number.isFinite(volume_liters) || volume_liters <= 0) {
+      setTankError("Volume must be greater than 0."); return;
+    }
+
+    setTankSaving(true);
+    try {
+      const method = editingTankId ? "PUT" : "POST";
+      const url = editingTankId ? `${TANKS_URL}/${editingTankId}` : TANKS_URL;
+      const response = await apiFetch(url, {
+        method,
+        body: JSON.stringify({ name, volume_liters, active: tankForm.active })
+      });
+      if (!response.ok) {
+        let message = editingTankId ? "Update failed" : "Create failed";
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch { /* use fallback */ }
+        throw new Error(message);
+      }
+      closeTankModal();
+      await fetchData();
+    } catch (submitError) {
+      setTankError(submitError instanceof Error ? submitError.message : "Failed to save tank");
+    } finally {
+      setTankSaving(false);
+    }
+  }
+
+  async function deleteTank(id: string) {
+    if (!window.confirm("Delete this tank?")) return;
+    setError(null);
+    try {
+      const response = await apiFetch(`${TANKS_URL}/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      await fetchData();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete tank");
+    }
+  }
+
+  function sprayerTankLabel(sprayer: Sprayer): string {
+    if (sprayer.has_tank) {
+      return sprayer.tank_volume_liters != null ? `Built-in (${sprayer.tank_volume_liters} L)` : "Built-in (—)";
+    }
+    if (sprayer.tank) {
+      return `${sprayer.tank.name} (${sprayer.tank.volume_liters} L)`;
+    }
+    return "—";
   }
 
   return (
     <section className="page-shell">
       <header>
         <h1>Pest Control Setup</h1>
-        <p>Configure sprayers and other pest control defaults for your organization.</p>
+        <p>Configure sprayers and tanks for your organization.</p>
       </header>
 
       {error ? <p className="form-error">{error}</p> : null}
 
+      {/* ── Sprayers ──────────────────────────────────────────────────────── */}
       <div className="coming-soon-card">
         <h2>Sprayers</h2>
 
         <div className="varieties-toolbar">
-          <button type="button" onClick={openAddModal}>
+          <button type="button" onClick={openAddSprayerModal}>
             + Add Sprayer
           </button>
         </div>
 
         {loading ? <p>Loading...</p> : null}
-
-        {!loading && sprayers.length === 0 ? (
-          <p>No sprayers added yet.</p>
-        ) : null}
+        {!loading && sprayers.length === 0 ? <p>No sprayers added yet.</p> : null}
 
         {sprayers.length > 0 ? (
           <div className="varieties-table-wrapper">
@@ -238,7 +398,8 @@ export function PestControlSetupPage() {
                   <th>Nozzles</th>
                   <th>Volume (L/min)</th>
                   <th>PSI</th>
-                  <th>Speed (m/min)</th>
+                  <th>Speed range (m/min)</th>
+                  <th>Tank</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -249,10 +410,17 @@ export function PestControlSetupPage() {
                     <td>{sprayer.nozzle_count}</td>
                     <td>{sprayer.nozzle_volume_l_per_min}</td>
                     <td>{sprayer.nozzle_psi}</td>
-                    <td>{sprayer.speed_m_per_min}</td>
+                    <td>
+                      {sprayer.min_speed_m_per_min != null && sprayer.max_speed_m_per_min != null
+                        ? `${sprayer.min_speed_m_per_min}–${sprayer.max_speed_m_per_min}${sprayer.speed_step_m_per_min != null ? ` (step ${sprayer.speed_step_m_per_min})` : ""}`
+                        : sprayer.speed_m_per_min != null
+                          ? `${sprayer.speed_m_per_min} (legacy)`
+                          : "—"}
+                    </td>
+                    <td>{sprayerTankLabel(sprayer)}</td>
                     <td>
                       <div className="row-actions">
-                        <button type="button" onClick={() => beginEdit(sprayer)}>
+                        <button type="button" onClick={() => beginEditSprayer(sprayer)}>
                           Edit
                         </button>
                         <button
@@ -272,20 +440,73 @@ export function PestControlSetupPage() {
         ) : null}
       </div>
 
-      {isModalOpen ? (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingId ? "Edit Sprayer" : "Add Sprayer"}</h2>
+      {/* ── Tanks ─────────────────────────────────────────────────────────── */}
+      <div className="coming-soon-card" style={{ marginTop: "1rem" }}>
+        <h2>Tanks</h2>
+        <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+          Standalone tanks that can be linked to sprayers without a built-in tank.
+        </p>
 
-            <form className="varieties-form" onSubmit={handleSubmit}>
+        <div className="varieties-toolbar">
+          <button type="button" onClick={openAddTankModal}>
+            + Add Tank
+          </button>
+        </div>
+
+        {!loading && tanks.length === 0 ? <p>No tanks added yet.</p> : null}
+
+        {tanks.length > 0 ? (
+          <div className="varieties-table-wrapper">
+            <table className="varieties-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Volume (L)</th>
+                  <th>Active</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tanks.map((tank) => (
+                  <tr key={tank.id}>
+                    <td>{tank.name}</td>
+                    <td>{tank.volume_liters}</td>
+                    <td>{tank.active ? "Yes" : "No"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button type="button" onClick={() => beginEditTank(tank)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void deleteTank(tank.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── Sprayer modal ──────────────────────────────────────────────────── */}
+      {isSprayerModalOpen ? (
+        <div className="modal-overlay" onClick={closeSprayerModal}>
+          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>{editingSprayerId ? "Edit Sprayer" : "Add Sprayer"}</h2>
+
+            <form className="varieties-form" onSubmit={(e) => void handleSprayerSubmit(e)}>
               <label>
                 Name
                 <input
                   type="text"
-                  value={form.name}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, name: event.target.value }))
-                  }
+                  value={sprayerForm.name}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, name: e.target.value }))}
                   required
                 />
               </label>
@@ -296,10 +517,8 @@ export function PestControlSetupPage() {
                   type="number"
                   min="1"
                   step="1"
-                  value={form.nozzle_count}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, nozzle_count: event.target.value }))
-                  }
+                  value={sprayerForm.nozzle_count}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, nozzle_count: e.target.value }))}
                   required
                 />
               </label>
@@ -310,13 +529,8 @@ export function PestControlSetupPage() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={form.nozzle_volume_l_per_min}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      nozzle_volume_l_per_min: event.target.value
-                    }))
-                  }
+                  value={sprayerForm.nozzle_volume_l_per_min}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, nozzle_volume_l_per_min: e.target.value }))}
                   required
                 />
               </label>
@@ -327,40 +541,167 @@ export function PestControlSetupPage() {
                   type="number"
                   min="0"
                   step="0.1"
-                  value={form.nozzle_psi}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, nozzle_psi: event.target.value }))
-                  }
+                  value={sprayerForm.nozzle_psi}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, nozzle_psi: e.target.value }))}
                   required
                 />
               </label>
 
               <label>
-                Speed (m/min)
-                <select
-                  value={form.speed_m_per_min}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      speed_m_per_min: event.target.value
-                    }))
-                  }
-                >
-                  {SPEED_OPTIONS.map((speed) => (
-                    <option key={speed} value={String(speed)}>
-                      {speed}
-                    </option>
-                  ))}
-                </select>
+                Min speed (m/min)
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="e.g. 20"
+                  value={sprayerForm.min_speed_m_per_min}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, min_speed_m_per_min: e.target.value }))}
+                />
               </label>
 
-              {error ? <p className="form-error">{error}</p> : null}
+              <label>
+                Max speed (m/min)
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="e.g. 80"
+                  value={sprayerForm.max_speed_m_per_min}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, max_speed_m_per_min: e.target.value }))}
+                />
+              </label>
 
-              <div className="form-actions">
-                <button type="submit" disabled={saving}>
-                  {saving ? "Saving..." : "Save"}
+              <label>
+                Speed step (m/min, optional)
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  placeholder="e.g. 5"
+                  value={sprayerForm.speed_step_m_per_min}
+                  onChange={(e) => setSprayerForm((f) => ({ ...f, speed_step_m_per_min: e.target.value }))}
+                />
+              </label>
+
+              <label
+                style={{
+                  gridColumn: "1 / -1",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  display: "flex",
+                  fontWeight: 500
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={sprayerForm.has_tank}
+                  onChange={(e) =>
+                    setSprayerForm((f) => ({ ...f, has_tank: e.target.checked, tank_id: "" }))
+                  }
+                />
+                This sprayer has a built-in tank
+              </label>
+
+              {sprayerForm.has_tank ? (
+                <label>
+                  Built-in tank volume (L)
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="0.1"
+                    placeholder="e.g. 200"
+                    value={sprayerForm.tank_volume_liters}
+                    onChange={(e) => setSprayerForm((f) => ({ ...f, tank_volume_liters: e.target.value }))}
+                  />
+                </label>
+              ) : (
+                <label>
+                  Separate tank (optional)
+                  <select
+                    value={sprayerForm.tank_id}
+                    onChange={(e) => setSprayerForm((f) => ({ ...f, tank_id: e.target.value }))}
+                  >
+                    <option value="">No tank</option>
+                    {tanks.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} ({t.volume_liters} L)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {sprayerError ? <p className="form-error" style={{ gridColumn: "1 / -1" }}>{sprayerError}</p> : null}
+
+              <div className="form-actions" style={{ gridColumn: "1 / -1" }}>
+                <button type="submit" disabled={sprayerSaving}>
+                  {sprayerSaving ? "Saving..." : "Save"}
                 </button>
-                <button type="button" className="secondary" onClick={closeModal}>
+                <button type="button" className="secondary" onClick={closeSprayerModal}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Tank modal ─────────────────────────────────────────────────────── */}
+      {isTankModalOpen ? (
+        <div className="modal-overlay" onClick={closeTankModal}>
+          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>{editingTankId ? "Edit Tank" : "Add Tank"}</h2>
+
+            <form className="varieties-form" onSubmit={(e) => void handleTankSubmit(e)}>
+              <label>
+                Name
+                <input
+                  type="text"
+                  value={tankForm.name}
+                  onChange={(e) => setTankForm((f) => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <label>
+                Volume (L)
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  placeholder="e.g. 200"
+                  value={tankForm.volume_liters}
+                  onChange={(e) => setTankForm((f) => ({ ...f, volume_liters: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <label
+                style={{
+                  gridColumn: "1 / -1",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  display: "flex",
+                  fontWeight: 500
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={tankForm.active}
+                  onChange={(e) => setTankForm((f) => ({ ...f, active: e.target.checked }))}
+                />
+                Active
+              </label>
+
+              {tankError ? <p className="form-error" style={{ gridColumn: "1 / -1" }}>{tankError}</p> : null}
+
+              <div className="form-actions" style={{ gridColumn: "1 / -1" }}>
+                <button type="submit" disabled={tankSaving}>
+                  {tankSaving ? "Saving..." : "Save"}
+                </button>
+                <button type="button" className="secondary" onClick={closeTankModal}>
                   Cancel
                 </button>
               </div>
