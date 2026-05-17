@@ -50,6 +50,7 @@ type Chemical = {
   inventory_unit: string;
   pest_target: string;
   notes: string | null;
+  rei?: string | null;
   phi: string | null;
   chemical_group: string | null;
   chemical_type: ChemicalType | null;
@@ -59,14 +60,31 @@ type Chemical = {
 };
 
 type ApplicationType = "drench" | "spray";
-type RateUnit = "ml_per_acre" | "L_per_acre" | "ml_per_hectare" | "L_per_hectare";
+type RateUnit =
+  | "ml_per_acre" | "L_per_acre" | "ml_per_hectare" | "L_per_hectare"
+  | "g_per_acre"  | "kg_per_acre" | "g_per_hectare"  | "kg_per_hectare";
 
-const RATE_UNIT_OPTIONS: { value: RateUnit; label: string }[] = [
+const LIQUID_RATE_OPTIONS: { value: RateUnit; label: string }[] = [
   { value: "ml_per_acre", label: "ml / acre" },
   { value: "L_per_acre", label: "L / acre" },
   { value: "ml_per_hectare", label: "ml / hectare" },
   { value: "L_per_hectare", label: "L / hectare" }
 ];
+
+const DRY_RATE_OPTIONS: { value: RateUnit; label: string }[] = [
+  { value: "g_per_acre", label: "g / acre" },
+  { value: "kg_per_acre", label: "kg / acre" },
+  { value: "g_per_hectare", label: "g / hectare" },
+  { value: "kg_per_hectare", label: "kg / hectare" }
+];
+
+function isDryChemical(inventoryUnit: string): boolean {
+  const u = inventoryUnit.toLowerCase().trim();
+  if (["g", "kg", "grams", "gram", "kilograms", "kilogram"].includes(u)) return true;
+  if (u.startsWith("g/") || u.startsWith("kg/")) return true;
+  if (/(powder|dry|dust|granule|granules|wdg|wg|wp)/.test(u)) return true;
+  return false;
+}
 
 const M2_TO_FT2 = 10.7639;
 const M2_TO_HECTARES = 1 / 10000;
@@ -257,6 +275,7 @@ export function PestPlannerPage() {
 
     let ml: number;
     let areaLabel: string;
+    let isDry = false;
 
     switch (rateUnit) {
       case "ml_per_acre":
@@ -275,9 +294,29 @@ export function PestPlannerPage() {
         ml = rate * ha * 1000;
         areaLabel = `${roundTo(ha, 4)} ha`;
         break;
+      case "g_per_acre":
+        ml = rate * acres;
+        areaLabel = `${roundTo(acres, 3)} acres`;
+        isDry = true;
+        break;
+      case "kg_per_acre":
+        ml = rate * acres * 1000;
+        areaLabel = `${roundTo(acres, 3)} acres`;
+        isDry = true;
+        break;
+      case "g_per_hectare":
+        ml = rate * ha;
+        areaLabel = `${roundTo(ha, 4)} ha`;
+        isDry = true;
+        break;
+      case "kg_per_hectare":
+        ml = rate * ha * 1000;
+        areaLabel = `${roundTo(ha, 4)} ha`;
+        isDry = true;
+        break;
     }
 
-    return { ml, L: ml / 1000, areaLabel };
+    return { ml, L: ml / 1000, areaLabel, isDry, unit: isDry ? "g" : "ml", unitLarge: isDry ? "kg" : "L" };
   }, [rateValue, rateUnit, totalM2]);
 
   // ── Sprayer derivations ────────────────────────────────────────────────────
@@ -405,6 +444,22 @@ export function PestPlannerPage() {
   const selectedChemical = useMemo(
     () => availableChemicals.find((c) => c.id === chemicalId) ?? null,
     [availableChemicals, chemicalId]
+  );
+
+  useEffect(() => {
+    if (!selectedChemical) return;
+    const dry = isDryChemical(selectedChemical.inventory_unit);
+    setRateUnit((prev) => {
+      const prevIsDry = prev.startsWith("g_") || prev.startsWith("kg_");
+      if (dry && !prevIsDry) return "g_per_acre";
+      if (!dry && prevIsDry) return "ml_per_acre";
+      return prev;
+    });
+  }, [selectedChemical]);
+
+  const currentRateOptions = useMemo(
+    () => (selectedChemical && isDryChemical(selectedChemical.inventory_unit) ? DRY_RATE_OPTIONS : LIQUID_RATE_OPTIONS),
+    [selectedChemical]
   );
 
   // Card is visible as soon as type + area are chosen so the operator sees what's next.
@@ -737,7 +792,23 @@ export function PestPlannerPage() {
               </p>
             ) : null}
 
-            <label style={{ marginTop: applicationType ? "0.75rem" : undefined }}>
+            <label style={{ marginTop: "0.75rem" }}>
+              Chemical
+              <select
+                value={chemicalId}
+                onChange={(event) => setChemicalId(event.target.value)}
+              >
+                <option value="">Select a chemical…</option>
+                {availableChemicals.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.chemical_type ? ` (${c.chemical_type})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ marginTop: "0.75rem" }}>
               Application rate
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
                 <input
@@ -754,7 +825,7 @@ export function PestPlannerPage() {
                   onChange={(event) => setRateUnit(event.target.value as RateUnit)}
                   style={{ flex: "1 1 120px", minWidth: 0 }}
                 >
-                  {RATE_UNIT_OPTIONS.map((opt) => (
+                  {currentRateOptions.map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}
                     </option>
@@ -797,7 +868,7 @@ export function PestPlannerPage() {
                   color: "var(--text)"
                 }}
               >
-                {roundTo(chemicalNeededResult.ml, 0).toLocaleString()} ml
+                {roundTo(chemicalNeededResult.ml, 0).toLocaleString()} {chemicalNeededResult.unit}
               </p>
               <p
                 style={{
@@ -807,7 +878,7 @@ export function PestPlannerPage() {
                   color: "var(--text)"
                 }}
               >
-                {roundTo(chemicalNeededResult.L, 3)} L
+                {roundTo(chemicalNeededResult.L, 3)} {chemicalNeededResult.unitLarge}
               </p>
               <p
                 style={{
@@ -836,118 +907,111 @@ export function PestPlannerPage() {
           )}
         </div>
 
-        {/* ── 3. Chemical ─────────────────────────────── */}
+        {/* ── 3. Chemical Details ─────────────────────── */}
         <div className="coming-soon-card">
-          <h2>3. Chemical</h2>
+          <h2>3. Chemical Details</h2>
 
-          {availableChemicals.length === 0 ? (
-            <p style={{ fontSize: "0.88em" }}>
-              No chemicals available. Add active chemicals with inventory in Pest Control
-              Inventory.
+          {!selectedChemical ? (
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+              Select a chemical in Application Details to view label and inventory information.
             </p>
           ) : (
-            <>
-              {/* Select sits in its own 1-column form so it never stretches to match details height */}
-              <div
-                className="varieties-form"
-                style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}
-              >
-                <label>
-                  Chemical
-                  <select
-                    value={chemicalId}
-                    onChange={(event) => setChemicalId(event.target.value)}
-                  >
-                    <option value="">Select a chemical…</option>
-                    {availableChemicals.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                        {c.chemical_type ? ` (${c.chemical_type})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              {/* Details rendered outside the form so they never share a grid row with the select */}
-              {selectedChemical ? (
-                <div
-                  className="greenhouse-group-stats"
-                  style={{
-                    marginTop: "0.75rem",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
-                  }}
-                >
-                  {selectedChemical.chemical_type ? (
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">Type</span>
-                      <span className="greenhouse-stat-value">
-                        {selectedChemical.chemical_type.charAt(0).toUpperCase() +
-                          selectedChemical.chemical_type.slice(1)}
-                      </span>
-                    </div>
-                  ) : null}
-
-                  {selectedChemical.chemical_group ? (
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">Group</span>
-                      <span className="greenhouse-stat-value">
-                        {selectedChemical.chemical_group}
-                      </span>
-                    </div>
-                  ) : null}
-
-                  {selectedChemical.phi ? (
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">PHI</span>
-                      <span className="greenhouse-stat-value">{selectedChemical.phi}</span>
-                    </div>
-                  ) : null}
-
-                  {selectedChemical.active_ingredients ? (
-                    <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
-                      <span className="greenhouse-stat-label">Active ingredients</span>
-                      <span className="greenhouse-stat-value">
-                        {selectedChemical.active_ingredients}
-                      </span>
-                    </div>
-                  ) : null}
-
-                  {selectedChemical.registration_number ? (
-                    <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">Reg. No.</span>
-                      <span className="greenhouse-stat-value">
-                        {selectedChemical.registration_number}
-                      </span>
-                    </div>
-                  ) : null}
-
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">In stock</span>
-                    <span className="greenhouse-stat-value">
-                      {selectedChemical.inventory_qty} {selectedChemical.inventory_unit}
-                    </span>
-                  </div>
-
-                  {selectedChemical.label_pdf_path ? (
-                    <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
-                      <span className="greenhouse-stat-label">Label</span>
-                      <span className="greenhouse-stat-value">
-                        <button
-                          type="button"
-                          className="secondary"
-                          style={{ fontSize: "0.78em", padding: "0.2rem 0.5rem" }}
-                          disabled={labelLoading}
-                          onClick={() => void viewChemicalLabel(selectedChemical.id)}
-                        >
-                          {labelLoading ? "Opening…" : "View PDF"}
-                        </button>
-                      </span>
-                    </div>
-                  ) : null}
+            <div
+              className="greenhouse-group-stats"
+              style={{
+                marginTop: "0.75rem",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
+              }}
+            >
+              {selectedChemical.chemical_type ? (
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Type</span>
+                  <span className="greenhouse-stat-value">
+                    {selectedChemical.chemical_type.charAt(0).toUpperCase() +
+                      selectedChemical.chemical_type.slice(1)}
+                  </span>
                 </div>
               ) : null}
-            </>
+
+              {selectedChemical.chemical_group ? (
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Group</span>
+                  <span className="greenhouse-stat-value">
+                    {selectedChemical.chemical_group}
+                  </span>
+                </div>
+              ) : null}
+
+              {selectedChemical.rei ? (
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">REI</span>
+                  <span className="greenhouse-stat-value">{selectedChemical.rei}</span>
+                </div>
+              ) : null}
+
+              {selectedChemical.phi ? (
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">PHI</span>
+                  <span className="greenhouse-stat-value">{selectedChemical.phi}</span>
+                </div>
+              ) : null}
+
+              {selectedChemical.pest_target ? (
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Target pest</span>
+                  <span className="greenhouse-stat-value">{selectedChemical.pest_target}</span>
+                </div>
+              ) : null}
+
+              {selectedChemical.active_ingredients ? (
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Active ingredients</span>
+                  <span className="greenhouse-stat-value">
+                    {selectedChemical.active_ingredients}
+                  </span>
+                </div>
+              ) : null}
+
+              {selectedChemical.registration_number ? (
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Reg. No.</span>
+                  <span className="greenhouse-stat-value">
+                    {selectedChemical.registration_number}
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">In stock</span>
+                <span className="greenhouse-stat-value">
+                  {selectedChemical.inventory_qty} {selectedChemical.inventory_unit}
+                </span>
+              </div>
+
+              {selectedChemical.notes ? (
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Notes</span>
+                  <span className="greenhouse-stat-value">{selectedChemical.notes}</span>
+                </div>
+              ) : null}
+
+              {selectedChemical.label_pdf_path ? (
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Label</span>
+                  <span className="greenhouse-stat-value">
+                    <button
+                      type="button"
+                      className="secondary"
+                      style={{ fontSize: "0.78em", padding: "0.2rem 0.5rem" }}
+                      disabled={labelLoading}
+                      onClick={() => void viewChemicalLabel(selectedChemical.id)}
+                    >
+                      {labelLoading ? "Opening…" : "View PDF"}
+                    </button>
+                  </span>
+                </div>
+              ) : null}
+            </div>
           )}
         </div>
       </div>
@@ -1240,7 +1304,7 @@ export function PestPlannerPage() {
 
           {!chemicalId ? (
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.65rem" }}>
-              Select a chemical in step 3 before creating a job.
+              Select a chemical in Application Details before creating a job.
             </p>
           ) : (
             <div className="varieties-form" style={{ marginTop: "0.75rem", gridTemplateColumns: "1fr" }}>
@@ -1260,6 +1324,7 @@ export function PestPlannerPage() {
           <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
             <button
               type="button"
+              className="primary-action-button"
               disabled={!canCreateJob || todoSaving}
               onClick={() => void handleSaveTodo()}
             >

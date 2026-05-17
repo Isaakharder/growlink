@@ -672,7 +672,7 @@ export function MobilePestLogPage() {
                 {remainingMixes > 0 ? (
                   <button
                     type="button"
-                    style={{ marginTop: "0.65rem", width: "100%" }}
+                    className="mobile-action-button mobile-action-button--next"
                     onClick={startNewMix}
                   >
                     New Mix → Mix #{activeMix.mixNumber + 1}
@@ -693,10 +693,10 @@ export function MobilePestLogPage() {
                     </p>
                     <button
                       type="button"
-                      style={{ marginTop: "0.65rem", width: "100%" }}
+                      className="mobile-action-button"
                       onClick={startNewMix}
                     >
-                      Start Mix #1
+                      Start New Mix #1
                     </button>
                   </>
                 ) : (
