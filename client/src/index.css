@@ -2612,6 +2612,89 @@ body {
   text-align: right;
 }
 
+/* ── Mobile Pest Log — mix tracking ─────────────────────────────────────── */
+
+.pest-mix-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.2rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.82rem;
+}
+
+.pest-mix-summary-stat {
+  white-space: nowrap;
+}
+
+.pest-mix-summary-sep {
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.pest-mix-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.75rem 0.9rem;
+}
+
+.pest-mix-card--active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.pest-mix-card--done {
+  background: var(--surface-soft);
+  opacity: 0.9;
+}
+
+.pest-mix-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.pest-mix-card-number {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--brand);
+}
+
+.pest-mix-card--done .pest-mix-card-number {
+  color: var(--text);
+}
+
+.pest-mix-card-status {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+}
+
+.pest-mix-card-status--done {
+  background: #e0ece7;
+  color: #2d6b55;
+}
+
+.pest-mix-card-amounts {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  flex-wrap: wrap;
+}
+
 /* ── Mobile Pest Log — phase tabs ────────────────────────────────────────── */
 
 .pest-phase-tabs {

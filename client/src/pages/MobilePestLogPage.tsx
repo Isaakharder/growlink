@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
 
-// ── Snapshot types (mirrors what PestPlannerPage saves) ──────────────────────
+// ── Snapshot types ────────────────────────────────────────────────────────────
 
 type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
@@ -62,8 +62,10 @@ type CalcSnapshot = {
 type ProgressRow = {
   rowId: string;
   rowNumber: number;
+  rowLengthM?: number | null;         // populated at init; null for old snapshots
   completed: boolean;
   completedAt: string | null;
+  completedByMixNumber?: number | null; // which mix completed this row
 };
 
 type ProgressPhase = {
@@ -74,8 +76,24 @@ type ProgressPhase = {
   rows: ProgressRow[];
 };
 
+type MixRecord = {
+  mixNumber: number;
+  status: "active" | "completed";
+  startedAt: string;
+  endedAt: string | null;
+  waterVolumeL: number;
+  chemicalAmountMl: number;
+  completedRowIds: string[];
+  completedRowCount: number;
+  completedRowLengthM: number;
+  estimatedAppliedWaterL: number | null;
+  estimatedAppliedChemicalMl: number | null;
+};
+
 type ProgressSnapshot = {
   phases: ProgressPhase[];
+  mixes?: MixRecord[];
+  activeMixNumber?: number | null;
 };
 
 type PestTodo = {
@@ -97,6 +115,7 @@ type SetupRow = {
   id: string;
   group_id: string;
   row_number: number;
+  length_meters: number | null;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -113,13 +132,21 @@ function roundTo(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
+function safeNum(v: number | null | undefined): number {
+  return v != null && Number.isFinite(v) ? v : 0;
+}
+
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   } catch {
     return iso;
   }
@@ -128,7 +155,6 @@ function formatDate(iso: string): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MobilePestLogPage() {
-  // List view state
   const [todos, setTodos] = useState<PestTodo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -137,7 +163,6 @@ export function MobilePestLogPage() {
   const [showCompleted, setShowCompleted] = useState(false);
   const [completedMessage, setCompletedMessage] = useState<string | null>(null);
 
-  // Detail / progress state
   const [progress, setProgress] = useState<ProgressSnapshot | null>(null);
   const [selectedPhaseIdx, setSelectedPhaseIdx] = useState(0);
   const [loadingProgress, setLoadingProgress] = useState(false);
@@ -145,6 +170,7 @@ export function MobilePestLogPage() {
   const [showCompleteSection, setShowCompleteSection] = useState(false);
   const [sectionFrom, setSectionFrom] = useState("");
   const [sectionTo, setSectionTo] = useState("");
+  const [showPrevMixes, setShowPrevMixes] = useState(false);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -155,35 +181,31 @@ export function MobilePestLogPage() {
       const res = await apiFetch("/api/pest/todos");
       if (!res.ok) throw new Error("Failed to load pest log");
       setTodos((await res.json()) as PestTodo[]);
-    } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : "Failed to load pest log");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load pest log");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void fetchTodos();
-  }, []);
+  useEffect(() => { void fetchTodos(); }, []);
 
-  // ── Progress initialization (runs when selectedId changes) ─────────────────
+  // ── Progress initialization ────────────────────────────────────────────────
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    // Reset detail state
     setProgress(null);
     setSelectedPhaseIdx(0);
     setShowCompleteSection(false);
+    setShowPrevMixes(false);
     setSectionFrom("");
     setSectionTo("");
     setError(null);
 
     if (!selectedId) return;
 
-    // Find the todo using the closure value of todos at effect time
     const todo = todos.find((t) => t.id === selectedId);
     if (!todo) return;
 
-    // Use existing progress if already initialized
     const snap = todo.progress_snapshot as Partial<ProgressSnapshot>;
     if (snap.phases && snap.phases.length > 0) {
       setProgress(snap as ProgressSnapshot);
@@ -192,7 +214,6 @@ export function MobilePestLogPage() {
       return;
     }
 
-    // No progress yet — build from greenhouse rows
     const groupIds: string[] = todo.target_snapshot.group_ids ?? [];
     const groupNames: string[] = todo.target_snapshot.group_names ?? [];
 
@@ -213,7 +234,6 @@ export function MobilePestLogPage() {
           const groupRows = (setupData.rows ?? [])
             .filter((r) => r.group_id === groupId)
             .sort((a, b) => (a.row_number ?? 0) - (b.row_number ?? 0));
-
           return {
             phaseId: groupId,
             phaseName: groupNames[idx] ?? `Group ${idx + 1}`,
@@ -222,12 +242,13 @@ export function MobilePestLogPage() {
             rows: groupRows.map((r) => ({
               rowId: r.id,
               rowNumber: r.row_number,
+              rowLengthM: r.length_meters ?? null,
               completed: false,
-              completedAt: null
+              completedAt: null,
+              completedByMixNumber: null
             }))
           };
         });
-
         const newSnap: ProgressSnapshot = { phases };
         setProgress(newSnap);
         setLoadingProgress(false);
@@ -237,7 +258,7 @@ export function MobilePestLogPage() {
         setError(err instanceof Error ? err.message : "Failed to load rows");
         setLoadingProgress(false);
       });
-  }, [selectedId]); // deliberately not including `todos` — initialization only needs the snapshot once
+  }, [selectedId]);
 
   // ── Progress persistence ───────────────────────────────────────────────────
 
@@ -249,18 +270,16 @@ export function MobilePestLogPage() {
         body: JSON.stringify({ progress_snapshot: snap })
       });
       if (res.ok) {
-        setTodos((prev) =>
-          prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap } : t))
-        );
+        setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap } : t)));
       }
     } catch {
-      // non-fatal — local state stays correct
+      // non-fatal
     } finally {
       if (showSaving) setSavingProgress(false);
     }
   }
 
-  // ── Mark todo status complete ──────────────────────────────────────────────
+  // ── Job completion ─────────────────────────────────────────────────────────
 
   async function completeJob(todoId: string) {
     setCompleting(true);
@@ -277,8 +296,8 @@ export function MobilePestLogPage() {
       setCompletedMessage("Spray record saved.");
       await fetchTodos();
       setSelectedId(null);
-    } catch (completeError) {
-      setError(completeError instanceof Error ? completeError.message : "Failed to save record");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save record");
     } finally {
       setCompleting(false);
     }
@@ -296,25 +315,115 @@ export function MobilePestLogPage() {
           );
         }
       })
-      .catch(() => {
-        /* non-fatal */
-      });
+      .catch(() => { /* non-fatal */ });
   }
 
-  // ── Phase / row completion logic ───────────────────────────────────────────
+  // ── Mix tracking ───────────────────────────────────────────────────────────
+
+  function startNewMix() {
+    if (!progress || !selectedId) return;
+    const todo = todos.find((t) => t.id === selectedId);
+    if (!todo) return;
+
+    const calc = todo.calculation_snapshot;
+    const totalMixesRequired = safeNum(calc.tank_count);
+    const mixes = (progress.mixes ?? []) as MixRecord[];
+
+    if (totalMixesRequired > 0 && mixes.length >= totalMixesRequired) return;
+
+    const now = new Date().toISOString();
+    const newMixNumber = mixes.length + 1;
+    const isLastMix = totalMixesRequired > 0 && newMixNumber === totalMixesRequired;
+    const isLastFull = calc.is_last_full ?? false;
+
+    const waterVolumeL = roundTo(
+      isLastMix && !isLastFull
+        ? safeNum(calc.final_tank_volume_l ?? calc.tank_volume_l)
+        : safeNum(calc.tank_volume_l),
+      1
+    );
+    const chemicalAmountMl = roundTo(
+      isLastMix && !isLastFull
+        ? safeNum(calc.chem_for_final_tank_ml ?? calc.chem_per_full_tank_ml)
+        : safeNum(calc.chem_per_full_tank_ml),
+      1
+    );
+
+    const totalRowLengthM = safeNum(todo.target_snapshot.total_row_length_meters);
+    const totalWaterL = safeNum(calc.total_volume_l);
+    const totalChemMl = safeNum(calc.total_chemical_ml);
+    const allRows = progress.phases.flatMap((p) => p.rows);
+
+    // Close out any active mix
+    const updatedMixes: MixRecord[] = mixes.map((m) => {
+      if (m.status !== "active") return m;
+      const mixRows = allRows.filter((r) => (r.completedByMixNumber ?? null) === m.mixNumber && r.completed);
+      const completedRowLengthM = mixRows.reduce((s, r) => s + safeNum(r.rowLengthM), 0);
+      const hasLength = mixRows.some((r) => safeNum(r.rowLengthM) > 0);
+      const ratio = hasLength && totalRowLengthM > 0 ? completedRowLengthM / totalRowLengthM : null;
+      return {
+        ...m,
+        status: "completed" as const,
+        endedAt: now,
+        completedRowIds: mixRows.map((r) => r.rowId),
+        completedRowCount: mixRows.length,
+        completedRowLengthM,
+        estimatedAppliedWaterL: ratio != null ? roundTo(totalWaterL * ratio, 1) : null,
+        estimatedAppliedChemicalMl: ratio != null ? roundTo(totalChemMl * ratio, 1) : null
+      };
+    });
+
+    const newMix: MixRecord = {
+      mixNumber: newMixNumber,
+      status: "active",
+      startedAt: now,
+      endedAt: null,
+      waterVolumeL,
+      chemicalAmountMl,
+      completedRowIds: [],
+      completedRowCount: 0,
+      completedRowLengthM: 0,
+      estimatedAppliedWaterL: null,
+      estimatedAppliedChemicalMl: null
+    };
+
+    const newProgress: ProgressSnapshot = {
+      ...progress,
+      mixes: [...updatedMixes, newMix],
+      activeMixNumber: newMixNumber
+    };
+
+    if (todo.status === "pending") markInProgress(todo.id);
+    setProgress(newProgress);
+    void patchProgress(todo.id, newProgress);
+  }
+
+  // ── Phase / row completion ─────────────────────────────────────────────────
 
   function confirmJobComplete(todoId: string) {
     const todo = todos.find((t) => t.id === todoId);
     const label = todo?.type === "drench" ? "drench" : "spray";
+    const hasTankPlan = todo?.type === "spray" && safeNum(todo.calculation_snapshot.tank_count) > 0;
+
+    if (hasTankPlan && progress) {
+      const withoutMix = progress.phases
+        .flatMap((p) => p.rows)
+        .filter((r) => r.completed && (r.completedByMixNumber ?? null) == null);
+      if (withoutMix.length > 0) {
+        const proceed = window.confirm(
+          `${withoutMix.length} row${withoutMix.length !== 1 ? "s" : ""} completed without mix tracking. Save ${label} record anyway?`
+        );
+        if (!proceed) return;
+        void completeJob(todoId);
+        return;
+      }
+    }
+
     if (!window.confirm(`All phases complete. Save this ${label} record?`)) return;
     void completeJob(todoId);
   }
 
-  function confirmPhaseComplete(
-    phaseIdx: number,
-    currentProgress: ProgressSnapshot,
-    todoId: string
-  ) {
+  function confirmPhaseComplete(phaseIdx: number, currentProgress: ProgressSnapshot, todoId: string) {
     const phase = currentProgress.phases[phaseIdx];
     if (!phase) return;
     if (!window.confirm(`${phase.phaseName} complete?`)) return;
@@ -330,11 +439,9 @@ export function MobilePestLogPage() {
     setProgress(newProgress);
     void patchProgress(todoId, newProgress);
 
-    // Move to next incomplete phase
     const nextIncomplete = newProgress.phases.findIndex((p, i) => i > phaseIdx && !p.completed);
     if (nextIncomplete >= 0) setSelectedPhaseIdx(nextIncomplete);
 
-    // Check if all phases are done
     if (newProgress.phases.every((p) => p.completed)) {
       setTimeout(() => confirmJobComplete(todoId), 150);
     }
@@ -345,17 +452,36 @@ export function MobilePestLogPage() {
     const todo = todos.find((t) => t.id === selectedId);
     if (!todo) return;
 
+    const calc = todo.calculation_snapshot;
+    const hasTankMix = todo.type === "spray" && safeNum(calc.tank_count) > 0 && calc.chem_per_full_tank_ml != null;
+    const activeMix = (progress.mixes ?? []).find((m) => m.status === "active") as MixRecord | undefined;
+    const row = progress.phases[phaseIdx]?.rows[rowIdx];
+    const isMarkingComplete = row != null && !row.completed;
+
+    if (hasTankMix && isMarkingComplete && activeMix == null) {
+      setError("Start a new mix before marking rows complete.");
+      return;
+    }
+
     if (todo.status === "pending") markInProgress(todo.id);
+    if (error) setError(null);
 
     const now = new Date().toISOString();
+    const activeMixNumber = activeMix?.mixNumber ?? null;
+
     const newProgress: ProgressSnapshot = {
       ...progress,
       phases: progress.phases.map((phase, pi) => {
         if (pi !== phaseIdx) return phase;
-        const newRows = phase.rows.map((row, ri) => {
-          if (ri !== rowIdx) return row;
-          const wasDone = row.completed;
-          return { ...row, completed: !wasDone, completedAt: wasDone ? null : now };
+        const newRows = phase.rows.map((r, ri) => {
+          if (ri !== rowIdx) return r;
+          const wasDone = r.completed;
+          return {
+            ...r,
+            completed: !wasDone,
+            completedAt: wasDone ? null : now,
+            completedByMixNumber: wasDone ? null : activeMixNumber
+          };
         });
         return { ...phase, rows: newRows };
       })
@@ -375,11 +501,19 @@ export function MobilePestLogPage() {
     const todo = todos.find((t) => t.id === selectedId);
     if (!todo) return;
 
+    const calc = todo.calculation_snapshot;
+    const hasTankMix = todo.type === "spray" && safeNum(calc.tank_count) > 0 && calc.chem_per_full_tank_ml != null;
+    const activeMix = (progress.mixes ?? []).find((m) => m.status === "active") as MixRecord | undefined;
+
+    if (hasTankMix && activeMix == null) {
+      setError("Start a new mix before marking rows complete.");
+      return;
+    }
+
     if (todo.status === "pending") markInProgress(todo.id);
 
     const fromNum = Number(sectionFrom);
     const toNum = Number(sectionTo);
-
     if (!Number.isFinite(fromNum) || !Number.isFinite(toNum) || !sectionFrom || !sectionTo) {
       setError("Select a from and to row.");
       return;
@@ -390,15 +524,22 @@ export function MobilePestLogPage() {
     }
 
     const now = new Date().toISOString();
+    const activeMixNumber = activeMix?.mixNumber ?? null;
+
     const newProgress: ProgressSnapshot = {
       ...progress,
       phases: progress.phases.map((phase, pi) => {
         if (pi !== selectedPhaseIdx) return phase;
-        const newRows = phase.rows.map((row) => {
-          if (row.rowNumber >= fromNum && row.rowNumber <= toNum) {
-            return { ...row, completed: true, completedAt: row.completedAt ?? now };
+        const newRows = phase.rows.map((r) => {
+          if (r.rowNumber >= fromNum && r.rowNumber <= toNum) {
+            return {
+              ...r,
+              completed: true,
+              completedAt: r.completedAt ?? now,
+              completedByMixNumber: r.completedByMixNumber ?? activeMixNumber
+            };
           }
-          return row;
+          return r;
         });
         return { ...phase, rows: newRows };
       })
@@ -417,13 +558,12 @@ export function MobilePestLogPage() {
     }
   }
 
-  // ── Derived values (for selected todo detail) ──────────────────────────────
+  // ── Derived values ─────────────────────────────────────────────────────────
 
   const selectedTodo = todos.find((t) => t.id === selectedId) ?? null;
   const pendingTodos = todos.filter((t) => t.status === "pending" || t.status === "in_progress");
   const completedTodos = todos.filter((t) => t.status === "completed" || t.status === "cancelled");
 
-  // Total progress across all phases
   const totalRows = progress?.phases.reduce((s, p) => s + p.rows.length, 0) ?? 0;
   const doneRows = progress?.phases.reduce((s, p) => s + p.rows.filter((r) => r.completed).length, 0) ?? 0;
   const selectedPhase = progress?.phases[selectedPhaseIdx] ?? null;
@@ -434,38 +574,27 @@ export function MobilePestLogPage() {
   if (selectedTodo) {
     const chem = selectedTodo.chemical_snapshot;
     const calc = selectedTodo.calculation_snapshot;
-    const tank = selectedTodo.tank_snapshot;
     const isSpray = selectedTodo.type === "spray";
 
     const hasTankMix =
       isSpray &&
-      calc.tank_count != null &&
-      calc.tank_count > 0 &&
+      safeNum(calc.tank_count) > 0 &&
       calc.chem_per_full_tank_ml != null &&
       calc.tank_volume_l != null;
 
-    const tankRows: { label: string; water: string; chemical: string }[] = [];
-    if (hasTankMix && calc.tank_count != null && calc.chem_per_full_tank_ml != null && calc.tank_volume_l != null) {
-      const fullTanks = calc.is_last_full ? calc.tank_count : calc.tank_count - 1;
-      for (let i = 1; i <= fullTanks; i++) {
-        tankRows.push({
-          label: `Tank ${i}`,
-          water: `${calc.tank_volume_l} L`,
-          chemical: `${roundTo(calc.chem_per_full_tank_ml, 1)} ml`
-        });
-      }
-      if (!calc.is_last_full && calc.final_tank_volume_l != null && calc.chem_for_final_tank_ml != null) {
-        tankRows.push({
-          label: `Tank ${calc.tank_count}`,
-          water: `${roundTo(calc.final_tank_volume_l, 1)} L`,
-          chemical: `${roundTo(calc.chem_for_final_tank_ml, 1)} ml`
-        });
-      }
-    }
+    const mixes = (progress?.mixes ?? []) as MixRecord[];
+    const activeMix = mixes.find((m) => m.status === "active") ?? null;
+    const completedMixes = mixes.filter((m) => m.status === "completed");
+    const totalMixesRequired = safeNum(calc.tank_count);
+    const remainingMixes = Math.max(0, totalMixesRequired - mixes.length);
+    const activeMixRowCount = activeMix
+      ? progress!.phases.flatMap((p) => p.rows).filter(
+          (r) => (r.completedByMixNumber ?? null) === activeMix.mixNumber && r.completed
+        ).length
+      : 0;
 
     return (
       <section className="mobile-page">
-        {/* Back */}
         <button
           type="button"
           className="secondary"
@@ -475,7 +604,6 @@ export function MobilePestLogPage() {
           ← Back
         </button>
 
-        {/* Header */}
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
           <span className="pest-todo-type-badge" data-type={selectedTodo.type}>
             {selectedTodo.type === "spray" ? "Spray" : "Drench"}
@@ -499,35 +627,133 @@ export function MobilePestLogPage() {
 
         {error ? <p className="form-error" style={{ marginTop: "0.75rem" }}>{error}</p> : null}
 
-        {/* ── Mix reminder card (shown at top so operator sees it immediately) */}
-        {calc.total_chemical_ml != null && Number.isFinite(calc.total_chemical_ml) ? (
+        {/* ── Mix tracking (spray jobs with tank plan) ─────────────────────── */}
+        {hasTankMix ? (
+          <div style={{ marginTop: "0.85rem" }}>
+            {/* Summary strip */}
+            <div className="pest-mix-summary">
+              <span className="pest-mix-summary-stat">
+                <strong>{totalMixesRequired}</strong> mix{totalMixesRequired !== 1 ? "es" : ""}
+              </span>
+              <span className="pest-mix-summary-sep">·</span>
+              <span className="pest-mix-summary-stat">
+                <strong>{remainingMixes}</strong> remaining
+              </span>
+              <span className="pest-mix-summary-sep">·</span>
+              <span className="pest-mix-summary-stat">
+                {safeNum(calc.tank_volume_l)} L / {roundTo(safeNum(calc.chem_per_full_tank_ml), 1)} ml ea.
+              </span>
+              {!calc.is_last_full && calc.final_tank_volume_l != null && calc.chem_for_final_tank_ml != null ? (
+                <>
+                  <span className="pest-mix-summary-sep">·</span>
+                  <span className="pest-mix-summary-stat">
+                    Last: {roundTo(safeNum(calc.final_tank_volume_l), 1)} L / {roundTo(safeNum(calc.chem_for_final_tank_ml), 1)} ml
+                  </span>
+                </>
+              ) : null}
+            </div>
+
+            {/* Active mix card */}
+            {activeMix ? (
+              <div className="pest-mix-card pest-mix-card--active" style={{ marginTop: "0.6rem" }}>
+                <div className="pest-mix-card-header">
+                  <span className="pest-mix-card-number">Mix #{activeMix.mixNumber}</span>
+                  <span className="pest-mix-card-status">In Use</span>
+                </div>
+                <div className="pest-mix-card-amounts">
+                  <span>{activeMix.waterVolumeL} L water</span>
+                  <span className="pest-mix-summary-sep">·</span>
+                  <span>{roundTo(activeMix.chemicalAmountMl, 1)} ml chemical</span>
+                </div>
+                <p style={{ margin: "0.2rem 0 0", fontSize: "0.78em", color: "var(--text-muted)" }}>
+                  Started {formatTime(activeMix.startedAt)}
+                  {activeMixRowCount > 0 ? ` · ${activeMixRowCount} row${activeMixRowCount !== 1 ? "s" : ""} done` : ""}
+                </p>
+                {remainingMixes > 0 ? (
+                  <button
+                    type="button"
+                    style={{ marginTop: "0.65rem", width: "100%" }}
+                    onClick={startNewMix}
+                  >
+                    New Mix → Mix #{activeMix.mixNumber + 1}
+                  </button>
+                ) : (
+                  <p style={{ margin: "0.5rem 0 0", fontSize: "0.82em", color: "var(--text-muted)" }}>
+                    All planned mixes started
+                  </p>
+                )}
+              </div>
+            ) : (
+              /* No active mix */
+              <div className="pest-mix-card" style={{ marginTop: "0.6rem" }}>
+                {mixes.length === 0 ? (
+                  <>
+                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.88em" }}>
+                      No mix started. Fill your first tank to begin.
+                    </p>
+                    <button
+                      type="button"
+                      style={{ marginTop: "0.65rem", width: "100%" }}
+                      onClick={startNewMix}
+                    >
+                      Start Mix #1
+                    </button>
+                  </>
+                ) : (
+                  <p style={{ margin: 0, fontSize: "0.88em", color: "var(--brand)", fontWeight: 600 }}>
+                    ✓ All planned mixes started
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Completed mixes */}
+            {completedMixes.length > 0 ? (
+              <div style={{ marginTop: "0.45rem" }}>
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ fontSize: "0.8em", padding: "0.3rem 0.6rem" }}
+                  onClick={() => setShowPrevMixes((v) => !v)}
+                >
+                  {showPrevMixes ? "▾" : "▸"} Previous mixes ({completedMixes.length})
+                </button>
+                {showPrevMixes ? (
+                  <div style={{ marginTop: "0.4rem", display: "grid", gap: "0.3rem" }}>
+                    {completedMixes.map((mix) => (
+                      <div key={mix.mixNumber} className="pest-mix-card pest-mix-card--done">
+                        <div className="pest-mix-card-header">
+                          <span className="pest-mix-card-number">Mix #{mix.mixNumber}</span>
+                          <span className="pest-mix-card-status pest-mix-card-status--done">Done</span>
+                        </div>
+                        <div className="pest-mix-card-amounts" style={{ flexWrap: "wrap", fontSize: "0.82em" }}>
+                          <span>{mix.completedRowCount} row{mix.completedRowCount !== 1 ? "s" : ""}</span>
+                          {mix.completedRowLengthM > 0 ? (
+                            <><span className="pest-mix-summary-sep">·</span><span>{mix.completedRowLengthM} m</span></>
+                          ) : null}
+                          {mix.estimatedAppliedWaterL != null ? (
+                            <><span className="pest-mix-summary-sep">·</span><span>~{mix.estimatedAppliedWaterL} L water</span></>
+                          ) : null}
+                          {mix.estimatedAppliedChemicalMl != null ? (
+                            <><span className="pest-mix-summary-sep">·</span><span>~{mix.estimatedAppliedChemicalMl} ml chemical</span></>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : calc.total_chemical_ml != null && Number.isFinite(calc.total_chemical_ml) ? (
+          /* Fallback: drench or spray with no tank plan */
           <div
             className="mobile-yield-card"
-            style={{
-              marginTop: "0.85rem",
-              background: "var(--brand-soft)",
-              border: "1px solid var(--brand)"
-            }}
+            style={{ marginTop: "0.85rem", background: "var(--brand-soft)", border: "1px solid var(--brand)" }}
           >
             <p style={{ margin: 0, fontWeight: 700, color: "var(--brand)" }}>
-              Mix: {roundTo(calc.total_chemical_ml, 0).toLocaleString()} ml chemical total
+              Mix: {roundTo(safeNum(calc.total_chemical_ml), 0).toLocaleString()} ml chemical total
             </p>
-            {tankRows.length > 0 && tank.volume_liters != null ? (
-              <>
-                <p style={{ margin: "0.25rem 0 0.4rem", fontSize: "0.82em", color: "var(--brand)" }}>
-                  {tank.name ?? "Tank"}: {tank.volume_liters} L — {tankRows.length} tank{tankRows.length !== 1 ? "s" : ""}
-                </p>
-                <div className="pest-tank-mix-list">
-                  {tankRows.map((row, i) => (
-                    <div key={i} className="pest-tank-mix-row">
-                      <span className="pest-tank-mix-label">{row.label}</span>
-                      <span className="pest-tank-mix-water">{row.water} water</span>
-                      <span className="pest-tank-mix-chem">{row.chemical} chemical</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
             {calc.rate_value != null && calc.rate_unit ? (
               <p style={{ margin: "0.3rem 0 0", fontSize: "0.78em", color: "var(--brand)" }}>
                 @ {calc.rate_value} {RATE_UNIT_LABELS[calc.rate_unit] ?? calc.rate_unit}
@@ -542,13 +768,11 @@ export function MobilePestLogPage() {
           <p style={{ marginTop: "1rem" }}>Loading rows…</p>
         ) : progress && progress.phases.length > 0 ? (
           <div style={{ marginTop: "1rem" }}>
-            {/* Overall progress */}
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: "0 0 0.65rem" }}>
               <strong>{doneRows}</strong> of <strong>{totalRows}</strong> rows complete
               {progress.phases.length > 1 ? ` across ${progress.phases.length} phases` : ""}
             </p>
 
-            {/* Phase tabs */}
             <div className="pest-phase-tabs">
               {progress.phases.map((phase, idx) => {
                 const phaseDone = phase.rows.filter((r) => r.completed).length;
@@ -557,17 +781,8 @@ export function MobilePestLogPage() {
                   <button
                     key={phase.phaseId}
                     type="button"
-                    className={[
-                      "pest-phase-tab",
-                      idx === selectedPhaseIdx ? "pest-phase-tab--active" : "",
-                      phase.completed ? "pest-phase-tab--done" : ""
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    onClick={() => {
-                      setSelectedPhaseIdx(idx);
-                      setShowCompleteSection(false);
-                    }}
+                    className={["pest-phase-tab", idx === selectedPhaseIdx ? "pest-phase-tab--active" : "", phase.completed ? "pest-phase-tab--done" : ""].filter(Boolean).join(" ")}
+                    onClick={() => { setSelectedPhaseIdx(idx); setShowCompleteSection(false); }}
                   >
                     {phase.completed ? "✓ " : ""}
                     {phase.phaseName}
@@ -581,17 +796,9 @@ export function MobilePestLogPage() {
               })}
             </div>
 
-            {/* Selected phase rows */}
             {selectedPhase ? (
               <div style={{ marginTop: "0.75rem" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                    marginBottom: "0.4rem"
-                  }}
-                >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.4rem" }}>
                   <p style={{ margin: 0, fontWeight: 600 }}>{selectedPhase.phaseName}</p>
                   <p style={{ margin: 0, fontSize: "0.82em", color: "var(--text-muted)" }}>
                     {selectedPhase.rows.filter((r) => r.completed).length}/{selectedPhase.rows.length} rows
@@ -619,7 +826,6 @@ export function MobilePestLogPage() {
                   </div>
                 ) : (
                   <>
-                    {/* Row list */}
                     <div className="pest-row-list">
                       {selectedPhase.rows.map((row, rowIdx) => (
                         <button
@@ -628,20 +834,19 @@ export function MobilePestLogPage() {
                           className={`pest-row-btn${row.completed ? " pest-row-btn--done" : ""}`}
                           onClick={() => toggleRow(selectedPhaseIdx, rowIdx)}
                         >
-                          <span className="pest-row-btn-check">
-                            {row.completed ? "✓" : ""}
-                          </span>
+                          <span className="pest-row-btn-check">{row.completed ? "✓" : ""}</span>
                           <span className="pest-row-btn-label">Row {row.rowNumber}</span>
                           {row.completed ? (
                             <span className="pest-row-btn-time">
-                              {row.completedAt ? formatDate(row.completedAt) : "done"}
+                              {row.completedByMixNumber != null
+                                ? `Mix #${row.completedByMixNumber}`
+                                : row.completedAt ? formatDate(row.completedAt) : "done"}
                             </span>
                           ) : null}
                         </button>
                       ))}
                     </div>
 
-                    {/* Complete Section */}
                     {!selectedPhase.completed ? (
                       <div style={{ marginTop: "0.75rem" }}>
                         {!showCompleteSection ? (
@@ -649,57 +854,36 @@ export function MobilePestLogPage() {
                             type="button"
                             className="secondary"
                             style={{ width: "100%" }}
-                            onClick={() => {
-                              setShowCompleteSection(true);
-                              setError(null);
-                            }}
+                            onClick={() => { setShowCompleteSection(true); setError(null); }}
                           >
                             Complete Section
                           </button>
                         ) : (
                           <div className="pest-section-form">
-                            <p style={{ margin: "0 0 0.6rem", fontWeight: 600 }}>
-                              Mark a range of rows complete
-                            </p>
+                            <p style={{ margin: "0 0 0.6rem", fontWeight: 600 }}>Mark a range of rows complete</p>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
                               <label>
                                 From row
-                                <select
-                                  value={sectionFrom}
-                                  onChange={(e) => setSectionFrom(e.target.value)}
-                                >
+                                <select value={sectionFrom} onChange={(e) => setSectionFrom(e.target.value)}>
                                   <option value="">—</option>
                                   {phaseRowNums.map((n) => (
-                                    <option key={n} value={String(n)}>
-                                      Row {n}
-                                    </option>
+                                    <option key={n} value={String(n)}>Row {n}</option>
                                   ))}
                                 </select>
                               </label>
                               <label>
                                 To row
-                                <select
-                                  value={sectionTo}
-                                  onChange={(e) => setSectionTo(e.target.value)}
-                                >
+                                <select value={sectionTo} onChange={(e) => setSectionTo(e.target.value)}>
                                   <option value="">—</option>
                                   {phaseRowNums
                                     .filter((n) => !sectionFrom || n >= Number(sectionFrom))
                                     .map((n) => (
-                                      <option key={n} value={String(n)}>
-                                        Row {n}
-                                      </option>
+                                      <option key={n} value={String(n)}>Row {n}</option>
                                     ))}
                                 </select>
                               </label>
                             </div>
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: "0.5rem",
-                                marginTop: "0.65rem"
-                              }}
-                            >
+                            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.65rem" }}>
                               <button
                                 type="button"
                                 disabled={!sectionFrom || !sectionTo}
@@ -711,12 +895,7 @@ export function MobilePestLogPage() {
                               <button
                                 type="button"
                                 className="secondary"
-                                onClick={() => {
-                                  setShowCompleteSection(false);
-                                  setSectionFrom("");
-                                  setSectionTo("");
-                                  setError(null);
-                                }}
+                                onClick={() => { setShowCompleteSection(false); setSectionFrom(""); setSectionTo(""); setError(null); }}
                               >
                                 Cancel
                               </button>
@@ -725,17 +904,7 @@ export function MobilePestLogPage() {
                         )}
                       </div>
                     ) : (
-                      <div
-                        style={{
-                          marginTop: "0.65rem",
-                          padding: "0.5rem 0.75rem",
-                          background: "var(--brand-soft)",
-                          borderRadius: "8px",
-                          fontSize: "0.85em",
-                          color: "var(--brand)",
-                          fontWeight: 600
-                        }}
-                      >
+                      <div style={{ marginTop: "0.65rem", padding: "0.5rem 0.75rem", background: "var(--brand-soft)", borderRadius: "8px", fontSize: "0.85em", color: "var(--brand)", fontWeight: 600 }}>
                         ✓ Phase complete
                       </div>
                     )}
@@ -756,15 +925,12 @@ export function MobilePestLogPage() {
         {selectedTodo.instructions ? (
           <div className="mobile-yield-card" style={{ marginTop: "1rem" }}>
             <h3 style={{ margin: "0 0 0.4rem" }}>Instructions</h3>
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "0.9em" }}>
-              {selectedTodo.instructions}
-            </p>
+            <p style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "0.9em" }}>{selectedTodo.instructions}</p>
           </div>
         ) : null}
 
         {/* ── Job status actions ────────────────────────────────────────────── */}
         {(selectedTodo.status === "pending" || selectedTodo.status === "in_progress") ? (
-          // Manual complete only when no rows exist — row/phase flow handles the normal path
           progress && progress.phases.length === 0 ? (
             <div style={{ marginTop: "1.25rem" }}>
               <button
@@ -780,29 +946,24 @@ export function MobilePestLogPage() {
         ) : (
           <div
             className="mobile-yield-card"
-            style={{
-              marginTop: "1rem",
-              background: "var(--brand-soft)",
-              border: "1px solid var(--brand)"
-            }}
+            style={{ marginTop: "1rem", background: "var(--brand-soft)", border: "1px solid var(--brand)" }}
           >
             <p style={{ margin: 0, fontWeight: 600, color: "var(--brand)" }}>
-              Completed{" "}
-              {selectedTodo.completed_at ? formatDate(selectedTodo.completed_at) : ""}
+              Completed {selectedTodo.completed_at ? formatDate(selectedTodo.completed_at) : ""}
             </p>
           </div>
         )}
 
-        {/* ── Spray run details (secondary, below the action area) ─────────── */}
+        {/* ── Spray run details ─────────────────────────────────────────────── */}
         {isSpray && (calc.total_volume_l != null || selectedTodo.sprayer_snapshot.name) ? (
           <div className="mobile-yield-card" style={{ marginTop: "1rem" }}>
             <h3 style={{ margin: "0 0 0.4rem" }}>Spray Run</h3>
             {calc.total_volume_l != null ? (
-              <p style={{ margin: 0 }}>Water volume: <strong>{roundTo(calc.total_volume_l, 1)} L</strong></p>
+              <p style={{ margin: 0 }}>Water volume: <strong>{roundTo(safeNum(calc.total_volume_l), 1)} L</strong></p>
             ) : null}
             {calc.spray_time_minutes != null ? (
               <p style={{ margin: "0.15rem 0 0", fontSize: "0.85em" }}>
-                Est. time: {roundTo(calc.spray_time_minutes, 1)} min
+                Est. time: {roundTo(safeNum(calc.spray_time_minutes), 1)} min
               </p>
             ) : null}
             {selectedTodo.sprayer_snapshot.name ? (
@@ -828,15 +989,11 @@ export function MobilePestLogPage() {
 
       {error ? <p className="form-error">{error}</p> : null}
       {completedMessage ? (
-        <p style={{ color: "var(--brand)", fontWeight: 600, marginTop: "0.5rem" }}>
-          ✓ {completedMessage}
-        </p>
+        <p style={{ color: "var(--brand)", fontWeight: 600, marginTop: "0.5rem" }}>✓ {completedMessage}</p>
       ) : null}
       {loading ? <p>Loading…</p> : null}
 
-      <h3 style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>
-        To Do ({pendingTodos.length})
-      </h3>
+      <h3 style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>To Do ({pendingTodos.length})</h3>
 
       {!loading && pendingTodos.length === 0 ? (
         <div className="mobile-yield-card">
@@ -866,9 +1023,7 @@ export function MobilePestLogPage() {
                 {todo.type === "spray" ? "Spray" : "Drench"}
               </span>
               {totalR > 0 ? (
-                <span style={{ fontSize: "0.75em", color: "var(--text-muted)" }}>
-                  {doneR}/{totalR} rows
-                </span>
+                <span style={{ fontSize: "0.75em", color: "var(--text-muted)" }}>{doneR}/{totalR} rows</span>
               ) : (
                 <span className="pest-todo-status-badge" data-status={todo.status}>
                   {todo.status === "in_progress" ? "In Progress" : "Pending"}
@@ -881,25 +1036,18 @@ export function MobilePestLogPage() {
             ) : null}
             <div className="pest-todo-card-stats">
               {calc.total_chemical_ml != null && Number.isFinite(calc.total_chemical_ml) ? (
-                <span>{roundTo(calc.total_chemical_ml, 0)} ml chemical</span>
+                <span>{roundTo(safeNum(calc.total_chemical_ml), 0)} ml chemical</span>
               ) : null}
               {todo.type === "spray" && calc.total_volume_l != null ? (
-                <span>{roundTo(calc.total_volume_l, 1)} L water</span>
+                <span>{roundTo(safeNum(calc.total_volume_l), 1)} L water</span>
               ) : null}
               {todo.type === "spray" && calc.spray_time_minutes != null ? (
-                <span>~{roundTo(calc.spray_time_minutes, 0)} min</span>
+                <span>~{roundTo(safeNum(calc.spray_time_minutes), 0)} min</span>
               ) : null}
             </div>
             {totalR > 0 ? (
               <div style={{ marginTop: "0.4rem" }}>
-                <div
-                  style={{
-                    height: "4px",
-                    background: "var(--border)",
-                    borderRadius: "2px",
-                    overflow: "hidden"
-                  }}
-                >
+                <div style={{ height: "4px", background: "var(--border)", borderRadius: "2px", overflow: "hidden" }}>
                   <div
                     style={{
                       height: "100%",
@@ -916,7 +1064,6 @@ export function MobilePestLogPage() {
         );
       })}
 
-      {/* Completed plans toggle */}
       {completedTodos.length > 0 ? (
         <div style={{ marginTop: "1.5rem" }}>
           <button
@@ -927,13 +1074,11 @@ export function MobilePestLogPage() {
           >
             {showCompleted ? "Hide" : "Show"} completed ({completedTodos.length})
           </button>
-
           {showCompleted ? (
             <div style={{ marginTop: "0.75rem" }}>
               {completedTodos.map((todo) => {
                 const chem = todo.chemical_snapshot;
                 const target = todo.target_snapshot;
-
                 return (
                   <button
                     key={todo.id}
