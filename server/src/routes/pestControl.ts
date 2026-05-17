@@ -761,8 +761,8 @@ pestControlRouter.patch("/pest/todos/:id/status", async (req, res) => {
   const body = req.body as Record<string, unknown>;
 
   const status = body.status;
-  if (status !== "completed" && status !== "cancelled") {
-    return res.status(400).json({ message: "status must be completed or cancelled" });
+  if (status !== "in_progress" && status !== "completed" && status !== "cancelled") {
+    return res.status(400).json({ message: "status must be in_progress, completed, or cancelled" });
   }
 
   const updates: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
@@ -786,6 +786,129 @@ pestControlRouter.patch("/pest/todos/:id/status", async (req, res) => {
     return res.status(404).json({ message: "Todo not found" });
   }
   return res.json(data);
+});
+
+pestControlRouter.patch("/pest/todos/:id/progress", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  const body = req.body as Record<string, unknown>;
+
+  if (!body.progress_snapshot || typeof body.progress_snapshot !== "object") {
+    return res.status(400).json({ message: "progress_snapshot is required" });
+  }
+
+  const { data, error } = await supabase
+    .from("pest_control_todos")
+    .update({
+      progress_snapshot: body.progress_snapshot,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("id, progress_snapshot")
+    .single();
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to save progress.", "Progress update error:", error);
+  }
+  if (!data) {
+    return res.status(404).json({ message: "Todo not found" });
+  }
+  return res.json(data);
+});
+
+// POST /pest/todos/:id/complete — verifies completion, saves record, marks todo completed
+pestControlRouter.post("/pest/todos/:id/complete", async (req, res) => {
+  const organizationId = req.organizationId;
+  const userId = req.userId;
+  const { id } = req.params;
+  const body = req.body as Record<string, unknown>;
+
+  // Load the todo
+  const { data: todo, error: fetchError } = await supabase
+    .from("pest_control_todos")
+    .select("*")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to load todo.", "Todo fetch error:", fetchError);
+  }
+  if (!todo) {
+    return res.status(404).json({ message: "Todo not found" });
+  }
+
+  // Idempotent: already completed — return success without inserting another record
+  if (todo.status === "completed") {
+    const { data: existingRecord } = await supabase
+      .from("pest_control_records")
+      .select("id")
+      .eq("todo_id", id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (existingRecord) {
+      return res.json({ ok: true, already_completed: true });
+    }
+  }
+
+  // Verify all rows and phases are complete (skip check when no phases were tracked)
+  type SnapRow = { completed: boolean };
+  type SnapPhase = { completed: boolean; rows?: SnapRow[] };
+  const snap = todo.progress_snapshot as { phases?: SnapPhase[] };
+  if (snap.phases && snap.phases.length > 0) {
+    const allPhasesComplete = snap.phases.every((p) => p.completed);
+    const allRowsComplete = snap.phases.every((p) => (p.rows ?? []).every((r) => r.completed));
+    if (!allPhasesComplete || !allRowsComplete) {
+      return res.status(400).json({ message: "Job is not fully complete yet." });
+    }
+  }
+
+  const now = new Date().toISOString();
+  const notes = typeof body.notes === "string" ? body.notes.trim() || null : null;
+
+  // Insert permanent record
+  const { error: insertError } = await supabase
+    .from("pest_control_records")
+    .insert({
+      organization_id: organizationId,
+      todo_id: id,
+      type: todo.type as string,
+      chemical_id: (todo.chemical_id as string | null) ?? null,
+      chemical_snapshot: todo.chemical_snapshot,
+      target_snapshot: todo.target_snapshot,
+      sprayer_snapshot: todo.sprayer_snapshot,
+      tank_snapshot: todo.tank_snapshot,
+      calculation_snapshot: todo.calculation_snapshot,
+      progress_snapshot: todo.progress_snapshot,
+      completed_by: userId ?? null,
+      completed_at: now,
+      notes
+    });
+
+  if (insertError) {
+    return sendSafeError(res, 500, "Failed to save record.", "Record insert error:", insertError);
+  }
+
+  // Mark todo completed
+  const { data: updatedTodo, error: updateError } = await supabase
+    .from("pest_control_todos")
+    .update({
+      status: "completed",
+      completed_by: userId ?? null,
+      completed_at: now,
+      updated_at: now
+    })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("id, status, completed_at")
+    .single();
+
+  if (updateError) {
+    return sendSafeError(res, 500, "Failed to complete todo.", "Todo update error:", updateError);
+  }
+
+  return res.json({ ok: true, todo: updatedTodo });
 });
 
 export { pestControlRouter };
