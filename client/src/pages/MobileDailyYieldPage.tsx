@@ -97,6 +97,9 @@ type PhaseProjection = {
   projectedFullBins: number;
   projectedCases: number;
   canProject: boolean;
+  canShowKg: boolean;
+  canShowBins: boolean;
+  canShowCases: boolean;
 };
 
 const VARIETIES_URL = "/api/varieties";
@@ -330,18 +333,24 @@ export function MobileDailyYieldPage() {
   const kgPerFullBin = Number(kgPerFullBinDraft);
   const kgPerCase = Number(kgPerCaseDraft);
   const casesPerBin = Number(casesPerBinDraft);
-  const canProject =
-    Number.isFinite(kgPerFullBin) &&
-    kgPerFullBin > 0 &&
-    sampleCount > 0 &&
-    totalLinkedStems > 0;
+  const canShowKg =
+    sampleCount >= MINIMUM_SAMPLE_COUNT &&
+    totalLinkedStems > 0 &&
+    Number.isFinite(avgKgPerStem) &&
+    avgKgPerStem > 0;
 
-  const projectedKg = canProject ? avgKgPerStem * totalLinkedStems : 0;
-  const projectedFullBins = canProject ? projectedKg / kgPerFullBin : 0;
-  const usesKgPerCaseForCases = canProject && Number.isFinite(kgPerCase) && kgPerCase > 0;
+  const canShowBins = canShowKg && Number.isFinite(kgPerFullBin) && kgPerFullBin > 0;
+  const canProject = canShowKg;
+
+  const projectedKg = canShowKg ? avgKgPerStem * totalLinkedStems : 0;
+  const projectedFullBins = canShowBins ? projectedKg / kgPerFullBin : 0;
+  const usesKgPerCaseForCases = canShowKg && Number.isFinite(kgPerCase) && kgPerCase > 0;
+  const canShowCases =
+    usesKgPerCaseForCases ||
+    (canShowBins && Number.isFinite(casesPerBin) && casesPerBin > 0);
   const projectedCases = usesKgPerCaseForCases
     ? projectedKg / kgPerCase
-    : canProject && Number.isFinite(casesPerBin) && casesPerBin > 0
+    : canShowBins && Number.isFinite(casesPerBin) && casesPerBin > 0
       ? projectedFullBins * casesPerBin
       : 0;
 
@@ -351,7 +360,6 @@ export function MobileDailyYieldPage() {
 
   const phaseProjections = useMemo((): PhaseProjection[] => {
     if (samples.length < MINIMUM_SAMPLE_COUNT) return [];
-    if (!Number.isFinite(kgPerFullBin) || kgPerFullBin <= 0) return [];
 
     // Index linked rows by phase so we can count stems per phase.
     const linkedByPhase = new Map<string, LinkedRow[]>();
@@ -379,13 +387,22 @@ export function MobileDailyYieldPage() {
       const sumKgPerStem = phaseSamples.reduce((sum, s) => sum + s.sample_kg_per_stem, 0);
       const phaseAvgKgPerStem = phaseSamples.length > 0 ? sumKgPerStem / phaseSamples.length : 0;
 
-      const phaseCanProject = phaseLinkedStems > 0 && Number.isFinite(phaseAvgKgPerStem) && phaseAvgKgPerStem > 0;
-      const phaseProjectedKg = phaseCanProject ? phaseAvgKgPerStem * phaseLinkedStems : 0;
-      const phaseProjectedFullBins = phaseCanProject ? phaseProjectedKg / kgPerFullBin : 0;
-      const phaseUsesKgPerCase = phaseCanProject && Number.isFinite(kgPerCase) && kgPerCase > 0;
+      const phaseCanShowKg =
+        phaseLinkedStems > 0 &&
+        Number.isFinite(phaseAvgKgPerStem) &&
+        phaseAvgKgPerStem > 0;
+      const phaseProjectedKg = phaseCanShowKg ? phaseAvgKgPerStem * phaseLinkedStems : 0;
+      const phaseCanShowBins =
+        phaseCanShowKg && Number.isFinite(kgPerFullBin) && kgPerFullBin > 0;
+      const phaseProjectedFullBins = phaseCanShowBins ? phaseProjectedKg / kgPerFullBin : 0;
+      const phaseUsesKgPerCase =
+        phaseCanShowKg && Number.isFinite(kgPerCase) && kgPerCase > 0;
+      const phaseCanShowCases =
+        phaseUsesKgPerCase ||
+        (phaseCanShowBins && Number.isFinite(casesPerBin) && casesPerBin > 0);
       const phaseProjectedCases = phaseUsesKgPerCase
         ? phaseProjectedKg / kgPerCase
-        : phaseCanProject && Number.isFinite(casesPerBin) && casesPerBin > 0
+        : phaseCanShowBins && Number.isFinite(casesPerBin) && casesPerBin > 0
           ? phaseProjectedFullBins * casesPerBin
           : 0;
 
@@ -399,7 +416,10 @@ export function MobileDailyYieldPage() {
         projectedKg: Number.isFinite(phaseProjectedKg) ? phaseProjectedKg : 0,
         projectedFullBins: Number.isFinite(phaseProjectedFullBins) ? phaseProjectedFullBins : 0,
         projectedCases: Number.isFinite(phaseProjectedCases) ? phaseProjectedCases : 0,
-        canProject: phaseCanProject
+        canProject: phaseCanShowKg,
+        canShowKg: phaseCanShowKg,
+        canShowBins: phaseCanShowBins,
+        canShowCases: phaseCanShowCases
       });
     }
 
@@ -1003,15 +1023,27 @@ export function MobileDailyYieldPage() {
           {sampleCount >= MINIMUM_SAMPLE_COUNT ? (
             <>
               <p>Avg kg per stem: {roundTo(avgKgPerStem, 6)}</p>
-              <p>Projected kg: {roundTo(projectedKg, 2)}</p>
-              <p>Projected full bins: {roundTo(projectedFullBins, 2)}</p>
-              <p>Projected cases: {roundTo(projectedCases, 2)}</p>
-              {canProject ? (
-                <p>
-                  {usesKgPerCaseForCases
-                    ? "Cases calculated from kg per case"
-                    : "Cases calculated from cases per bin fallback"}
-                </p>
+              {canShowKg ? (
+                <p>Projected kg: {roundTo(projectedKg, 2)}</p>
+              ) : (
+                <p>No linked stems — projected kg unavailable.</p>
+              )}
+              {canShowBins ? (
+                <p>Projected full bins: {roundTo(projectedFullBins, 2)}</p>
+              ) : canShowKg ? (
+                <p>Enter kg per full bin to enable bin projection.</p>
+              ) : null}
+              {canShowCases ? (
+                <>
+                  <p>Projected cases: {roundTo(projectedCases, 2)}</p>
+                  <p>
+                    {usesKgPerCaseForCases
+                      ? "Cases calculated from kg per case"
+                      : "Cases calculated from cases per bin fallback"}
+                  </p>
+                </>
+              ) : canShowKg ? (
+                <p>Cases require kg per case or cases per bin.</p>
               ) : null}
             </>
           ) : null}
@@ -1042,15 +1074,29 @@ export function MobileDailyYieldPage() {
             <p style={{ fontWeight: 700, marginBottom: "0.3rem" }}>{phase.phase_name}</p>
             <p>Sampled rows: {phase.sampledRowCount} of {phase.linkedRowCount} linked</p>
             <p>Linked stems: {roundTo(phase.totalLinkedStems, 0).toLocaleString()}</p>
-            {phase.canProject ? (
+            {phase.canShowKg ? (
               <>
                 <p>Avg kg/stem: {roundTo(phase.avgKgPerStem, 6)}</p>
                 <p>Projected kg: {roundTo(phase.projectedKg, 2)}</p>
-                <p>Projected bins: {roundTo(phase.projectedFullBins, 2)}</p>
-                <p>Projected cases: {roundTo(phase.projectedCases, 2)}</p>
+                {phase.canShowBins ? (
+                  <p>Projected bins: {roundTo(phase.projectedFullBins, 2)}</p>
+                ) : (
+                  <p style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
+                    Enter kg per full bin to show bin projection.
+                  </p>
+                )}
+                {phase.canShowCases ? (
+                  <p>Projected cases: {roundTo(phase.projectedCases, 2)}</p>
+                ) : (
+                  <p style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
+                    Cases require kg per case or cases per bin.
+                  </p>
+                )}
               </>
             ) : (
-              <p>No linked stems for this phase — cannot project.</p>
+              <p style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
+                No linked stems for this phase — cannot project.
+              </p>
             )}
           </div>
         ))}
