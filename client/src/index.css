@@ -3125,3 +3125,57 @@ body {
   border-radius: 12px;
   padding: 0.85rem;
 }
+
+/* ── Mobile Quality Check — large touch-friendly select / input ───────────── */
+
+.quality-select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: 52px;
+  padding: 0 1rem;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 1rem;
+  color: var(--text);
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.85rem center;
+  padding-right: 2.5rem;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.quality-select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(15, 118, 96, 0.15);
+}
+
+.quality-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quality-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: 52px;
+  padding: 0 1rem;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 1rem;
+  color: var(--text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.quality-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(15, 118, 96, 0.15);
+}

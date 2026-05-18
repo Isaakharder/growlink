@@ -16,6 +16,8 @@ import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
 import { PestControlSetupPage } from "../pages/PestControlSetupPage";
 import { PestInventoryPage } from "../pages/PestInventoryPage";
 import { PestPlannerPage } from "../pages/PestPlannerPage";
+import { QualityCheckPage } from "../pages/QualityCheckPage";
+import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
 import { LoginPage } from "../pages/LoginPage";
@@ -93,12 +95,7 @@ export const appRouter = createBrowserRouter([
           },
           {
             path: "quality-check",
-            element: (
-              <PagePlaceholder
-                title="Quality Check"
-                description="Quality inspection checkpoints, review notes, and pass/fail statuses will be captured here."
-              />
-            )
+            element: <QualityCheckPage />
           },
           {
             path: "setup/pest-control",
@@ -159,6 +156,10 @@ export const appRouter = createBrowserRouter([
           {
             path: "pest-log",
             element: <MobilePestLogPage />
+          },
+          {
+            path: "quality-check",
+            element: <MobileQualityCheckPage />
           }
         ]
       }

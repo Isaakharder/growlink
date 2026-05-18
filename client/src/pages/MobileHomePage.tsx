@@ -11,10 +11,9 @@ export function MobileHomePage() {
           Daily Yield
         </Link>
 
-        <button type="button" className="mobile-card-button" disabled>
+        <Link className="mobile-card-button" to="/mobile/quality-check">
           Quality Check
-          <span>Coming soon</span>
-        </button>
+        </Link>
 
         <Link className="mobile-card-button" to="/mobile/irrigation-log">
           Irrigation Log
