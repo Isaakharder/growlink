@@ -753,6 +753,91 @@ body {
   gap: 0.2rem;
 }
 
+.irrigation-group-summary-list {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.irrigation-group-summary-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.7rem 0.8rem;
+}
+
+.irrigation-group-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.irrigation-group-summary-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.irrigation-group-summary-type {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  padding: 0.12rem 0.45rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.irrigation-group-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem 0.6rem;
+}
+
+.irrigation-group-summary-grid p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.irrigation-group-summary-grid strong {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.irrigation-raw-table-wrapper {
+  margin-top: 0.85rem;
+}
+
+.irrigation-raw-table {
+  min-width: 1080px;
+}
+
+.irrigation-raw-table th,
+.irrigation-raw-table td {
+  padding: 0.44rem 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  vertical-align: top;
+}
+
+.irrigation-reading-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+}
+
+.irrigation-reading-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  padding: 0.08rem 0.42rem;
+  white-space: nowrap;
+}
+
 .varieties-form {
   margin-top: 0.85rem;
   display: grid;
@@ -2480,6 +2565,10 @@ body {
   .pdf-preview-modal {
     width: min(1100px, 100%);
   }
+
+  .irrigation-group-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 900px) {
@@ -2528,6 +2617,149 @@ body {
   .pdf-preview-grid,
   .pdf-preview-metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .irrigation-group-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .yield-data-entry-page,
+  .yield-analytics-page {
+    overflow-x: hidden;
+  }
+
+  .yield-data-entry-page .tab-navigation {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .yield-data-entry-page .tab-button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .yield-data-entry-page .kg-entry-header-buttons {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .yield-data-entry-page .kg-entry-header-buttons .cases-entry-open-button {
+    width: 100%;
+    min-height: 42px;
+    padding: 0.58rem 0.68rem;
+  }
+
+  .yield-data-entry-page .recent-entries-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .yield-data-entry-page .recent-entries-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .yield-data-entry-page .recent-entries-toggle,
+  .yield-data-entry-page .sync-button {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .yield-data-entry-page .yield-entry-table-wrapper,
+  .yield-analytics-page .varieties-table-wrapper,
+  .yield-analytics-page .yield-analytics-export-preview-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  .yield-data-entry-page .yield-entry-table {
+    min-width: 760px;
+    table-layout: auto;
+  }
+
+  .yield-data-entry-page .yield-entry-table th,
+  .yield-data-entry-page .yield-entry-table td {
+    white-space: nowrap;
+    font-size: 0.84rem;
+    padding: 0.48rem 0.5rem;
+    vertical-align: top;
+  }
+
+  .yield-data-entry-page .yield-entry-table .row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.35rem;
+    min-width: 124px;
+  }
+
+  .yield-data-entry-page .yield-entry-table .row-actions button {
+    width: 100%;
+    min-height: 38px;
+    white-space: nowrap;
+    padding: 0.35rem 0.5rem;
+  }
+
+  .yield-analytics-page .yield-analytics-summary-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .yield-analytics-page .yield-analytics-summary-toolbar {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    align-items: end;
+    justify-content: initial;
+  }
+
+  .yield-analytics-page .yield-analytics-filter-label {
+    white-space: normal;
+  }
+
+  .yield-analytics-page .yield-analytics-filter-label select {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .yield-analytics-page .yield-analytics-export-menu {
+    grid-column: 1 / -1;
+  }
+
+  .yield-analytics-page .yield-analytics-export-button {
+    width: 100%;
+    min-height: 38px;
+  }
+
+  .yield-analytics-page .yield-analytics-export-dropdown {
+    left: 0;
+    right: auto;
+    min-width: 180px;
+  }
+
+  .yield-analytics-page .yield-analytics-chart-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .yield-analytics-page .yield-analytics-chart-wrapper > div {
+    min-width: 560px;
+  }
+
+  .yield-analytics-page .yield-analytics-table th,
+  .yield-analytics-page .yield-analytics-table td {
+    white-space: nowrap;
+    font-size: 0.84rem;
+    padding: 0.5rem;
   }
 }
 

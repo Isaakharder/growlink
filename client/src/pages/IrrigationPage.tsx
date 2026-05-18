@@ -29,6 +29,8 @@ type SummaryMetric = {
   value: string;
 };
 
+type SummaryTab = "summary" | "raw";
+
 const IRRIGATION_LOGS_URL = "/api/irrigation/logs?days=30";
 
 function roundTo(value: number, decimals: number) {
@@ -135,14 +137,24 @@ function computeRowMetrics(log: IrrigationLogRecord) {
   return {
     avgFeedMl,
     avgDrainMl,
+    avgFeedMlPerDripper,
+    avgDrainMlPerDripper,
     drainPercent
   };
+}
+
+function formatLogDate(value: string | null): string {
+  if (!value) return "--";
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return value;
+  return new Date(time).toLocaleDateString();
 }
 
 export function IrrigationPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<IrrigationLogRecord[]>([]);
+  const [activeTab, setActiveTab] = useState<SummaryTab>("summary");
 
   useEffect(() => {
     let active = true;
@@ -238,7 +250,24 @@ export function IrrigationPage() {
       </header>
 
       <div className="coming-soon-card">
-        <h2>30-Day Summary</h2>
+        <h2>Latest 30 Day Logs</h2>
+
+        <div className="tab-navigation" style={{ marginTop: "0.85rem" }}>
+          <button
+            type="button"
+            className={`tab-button${activeTab === "summary" ? " active" : ""}`}
+            onClick={() => setActiveTab("summary")}
+          >
+            Summary
+          </button>
+          <button
+            type="button"
+            className={`tab-button${activeTab === "raw" ? " active" : ""}`}
+            onClick={() => setActiveTab("raw")}
+          >
+            Raw Data
+          </button>
+        </div>
 
         {loading ? <p>Loading...</p> : null}
         {error ? <p className="form-error">{error}</p> : null}
@@ -247,31 +276,55 @@ export function IrrigationPage() {
           <p>No irrigation logs in the last 30 days.</p>
         ) : null}
 
-        {!loading && !error && logs.length > 0 ? (
-          <div className="irrigation-summary-grid">
-            {summary.map((metric) => (
-              <div key={metric.label} className="irrigation-summary-card">
-                <p className="irrigation-summary-label">{metric.label}</p>
-                <p className="irrigation-summary-value">{metric.value}</p>
-              </div>
-            ))}
-          </div>
+        {!loading && !error && logs.length > 0 && activeTab === "summary" ? (
+          <>
+            <div className="irrigation-summary-grid">
+              {summary.map((metric) => (
+                <div key={metric.label} className="irrigation-summary-card">
+                  <p className="irrigation-summary-label">{metric.label}</p>
+                  <p className="irrigation-summary-value">{metric.value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="varieties-table-wrapper irrigation-raw-table-wrapper">
+              <table className="varieties-table irrigation-raw-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Phase / Zone / Group</th>
+                    <th>Avg Feed ml</th>
+                    <th>Avg Drain ml</th>
+                    <th>Drain %</th>
+                    <th>Feed EC</th>
+                    <th>Feed pH</th>
+                    <th>Drain EC</th>
+                    <th>Drain pH</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rowsWithMetrics.map(({ log, metrics }) => (
+                    <tr key={`summary-${log.id}`}>
+                      <td>{formatLogDate(log.log_date)}</td>
+                      <td>{capitalize(log.tracking_mode)}: {log.group_name}</td>
+                      <td>{formatNumber(metrics.avgFeedMl)}</td>
+                      <td>{formatNumber(metrics.avgDrainMl)}</td>
+                      <td>{formatPercent(metrics.drainPercent)}</td>
+                      <td>{formatNumber(log.feed_ec, 3)}</td>
+                      <td>{formatNumber(log.feed_ph, 3)}</td>
+                      <td>{formatNumber(log.drain_ec, 3)}</td>
+                      <td>{formatNumber(log.drain_ph, 3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : null}
-      </div>
 
-      <div className="coming-soon-card">
-        <h2>Raw Logs (Last 30 Days)</h2>
-
-        {loading ? <p>Loading...</p> : null}
-        {error ? <p className="form-error">{error}</p> : null}
-
-        {!loading && !error && logs.length === 0 ? (
-          <p>No irrigation logs available to display.</p>
-        ) : null}
-
-        {!loading && !error && logs.length > 0 ? (
-          <div className="varieties-table-wrapper">
-            <table className="varieties-table">
+        {!loading && !error && logs.length > 0 && activeTab === "raw" ? (
+          <div className="varieties-table-wrapper irrigation-raw-table-wrapper">
+            <table className="varieties-table irrigation-raw-table">
               <thead>
                 <tr>
                   <th>Date</th>
@@ -290,33 +343,33 @@ export function IrrigationPage() {
               <tbody>
                 {rowsWithMetrics.map(({ log, metrics }) => (
                   <tr key={log.id}>
-                    <td>{log.log_date}</td>
+                    <td>{formatLogDate(log.log_date)}</td>
                     <td>{capitalize(log.tracking_mode)}</td>
                     <td>{log.group_name}</td>
                     <td>
                       {(log.feed_valve_readings ?? []).length === 0 ? (
                         "--"
                       ) : (
-                        <ul className="irrigation-reading-list">
+                        <div className="irrigation-reading-compact">
                           {(log.feed_valve_readings ?? []).map((reading) => (
-                            <li key={`feed-${log.id}-${reading.id}`}>
+                            <span key={`feed-${log.id}-${reading.id}`} className="irrigation-reading-pill">
                               {reading.name}: {formatNumber(reading.volume_ml)} ml
-                            </li>
+                            </span>
                           ))}
-                        </ul>
+                        </div>
                       )}
                     </td>
                     <td>
                       {(log.drain_bucket_readings ?? []).length === 0 ? (
                         "--"
                       ) : (
-                        <ul className="irrigation-reading-list">
+                        <div className="irrigation-reading-compact">
                           {(log.drain_bucket_readings ?? []).map((reading) => (
-                            <li key={`drain-${log.id}-${reading.id}`}>
+                            <span key={`drain-${log.id}-${reading.id}`} className="irrigation-reading-pill">
                               {reading.name}: {formatNumber(reading.volume_ml)} ml
-                            </li>
+                            </span>
                           ))}
-                        </ul>
+                        </div>
                       )}
                     </td>
                     <td>{formatNumber(metrics.avgFeedMl)}</td>

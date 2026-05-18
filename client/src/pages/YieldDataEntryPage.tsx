@@ -8,7 +8,7 @@ export function YieldDataEntryPage() {
   const [activeTab, setActiveTab] = useState<TabType>("kg");
 
   return (
-    <section className="page-shell">
+    <section className="page-shell yield-data-entry-page">
       <header>
         <h1>Yield Data Entry</h1>
         <p>Weekly one-screen entry for yield by size.</p>

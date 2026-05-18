@@ -833,7 +833,7 @@ export function YieldAnalyticsPage() {
   }, [summary, colorCaseEntries, varietyMeta]);
 
   return (
-    <section className="page-shell">
+    <section className="page-shell yield-analytics-page">
       <header>
         <h1>Yield Analytics</h1>
         <p>Per-variety yield totals and size percentage breakdown.</p>
