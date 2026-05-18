@@ -5,6 +5,7 @@ type VarietyOption = {
   id: string;
   name: string;
   status: "active" | "inactive";
+  color: string | null;
 };
 
 type GreenhouseGroup = {
@@ -83,6 +84,19 @@ type PersistedSample = {
   stems_per_plant?: number | null;
   total_plants?: number | null;
   total_stems?: number | null;
+};
+
+type PhaseProjection = {
+  phase_id: string;
+  phase_name: string;
+  sampledRowCount: number;
+  linkedRowCount: number;
+  totalLinkedStems: number;
+  avgKgPerStem: number;
+  projectedKg: number;
+  projectedFullBins: number;
+  projectedCases: number;
+  canProject: boolean;
 };
 
 const VARIETIES_URL = "/api/varieties";
@@ -258,6 +272,10 @@ export function MobileDailyYieldPage() {
   const [casesPerBinDraft, setCasesPerBinDraft] = useState("38");
   const [savingCasesPerBin, setSavingCasesPerBin] = useState(false);
 
+  // Raw weekly samples for every variety — drives the per-color totals card.
+  // Keyed by variety_id, values are PersistedSample[] for the current week.
+  const [allWeekSamples, setAllWeekSamples] = useState<Record<string, PersistedSample[]>>({});
+
   const { sessionYear, sessionWeek } = useMemo(() => getIsoWeekAndYear(new Date()), []);
 
   function handleKgPerFullBinChange(value: string) {
@@ -327,6 +345,119 @@ export function MobileDailyYieldPage() {
       ? projectedFullBins * casesPerBin
       : 0;
 
+  // ── Per-phase projections ────────────────────────────────────────────────
+  // Groups sampled rows by phase_id, computes projection per phase using the
+  // same formula as the global projection but scoped to that phase's linked stems.
+
+  const phaseProjections = useMemo((): PhaseProjection[] => {
+    if (samples.length < MINIMUM_SAMPLE_COUNT) return [];
+    if (!Number.isFinite(kgPerFullBin) || kgPerFullBin <= 0) return [];
+
+    // Index linked rows by phase so we can count stems per phase.
+    const linkedByPhase = new Map<string, LinkedRow[]>();
+    for (const row of linkedRowsForVariety) {
+      const group = linkedByPhase.get(row.phase_id) ?? [];
+      group.push(row);
+      linkedByPhase.set(row.phase_id, group);
+    }
+
+    // Group samples by phase.
+    const samplesByPhase = new Map<string, LocalSample[]>();
+    for (const sample of samples) {
+      const group = samplesByPhase.get(sample.phase_id) ?? [];
+      group.push(sample);
+      samplesByPhase.set(sample.phase_id, group);
+    }
+
+    const results: PhaseProjection[] = [];
+
+    for (const [phase_id, phaseSamples] of samplesByPhase.entries()) {
+      const phase_name = phaseSamples[0]?.phase_name ?? "Unknown";
+      const linkedRowsForPhase = linkedByPhase.get(phase_id) ?? [];
+      const phaseLinkedStems = linkedRowsForPhase.reduce((sum, r) => sum + r.total_stems, 0);
+
+      const sumKgPerStem = phaseSamples.reduce((sum, s) => sum + s.sample_kg_per_stem, 0);
+      const phaseAvgKgPerStem = phaseSamples.length > 0 ? sumKgPerStem / phaseSamples.length : 0;
+
+      const phaseCanProject = phaseLinkedStems > 0 && Number.isFinite(phaseAvgKgPerStem) && phaseAvgKgPerStem > 0;
+      const phaseProjectedKg = phaseCanProject ? phaseAvgKgPerStem * phaseLinkedStems : 0;
+      const phaseProjectedFullBins = phaseCanProject ? phaseProjectedKg / kgPerFullBin : 0;
+      const phaseUsesKgPerCase = phaseCanProject && Number.isFinite(kgPerCase) && kgPerCase > 0;
+      const phaseProjectedCases = phaseUsesKgPerCase
+        ? phaseProjectedKg / kgPerCase
+        : phaseCanProject && Number.isFinite(casesPerBin) && casesPerBin > 0
+          ? phaseProjectedFullBins * casesPerBin
+          : 0;
+
+      results.push({
+        phase_id,
+        phase_name,
+        sampledRowCount: phaseSamples.length,
+        linkedRowCount: linkedRowsForPhase.length,
+        totalLinkedStems: phaseLinkedStems,
+        avgKgPerStem: Number.isFinite(phaseAvgKgPerStem) ? phaseAvgKgPerStem : 0,
+        projectedKg: Number.isFinite(phaseProjectedKg) ? phaseProjectedKg : 0,
+        projectedFullBins: Number.isFinite(phaseProjectedFullBins) ? phaseProjectedFullBins : 0,
+        projectedCases: Number.isFinite(phaseProjectedCases) ? phaseProjectedCases : 0,
+        canProject: phaseCanProject
+      });
+    }
+
+    return results.sort((a, b) => a.phase_name.localeCompare(b.phase_name));
+  }, [samples, linkedRowsForVariety, kgPerFullBin, kgPerCase, casesPerBin]);
+
+  const combinedTotal = useMemo(() => {
+    if (phaseProjections.length === 0) return null;
+    return {
+      projectedKg: phaseProjections.reduce((sum, p) => sum + p.projectedKg, 0),
+      projectedFullBins: phaseProjections.reduce((sum, p) => sum + p.projectedFullBins, 0),
+      projectedCases: phaseProjections.reduce((sum, p) => sum + p.projectedCases, 0)
+    };
+  }, [phaseProjections]);
+
+  // ── Projected cases by color ─────────────────────────────────────────────
+  // Sums projected cases across all varieties for the current week, grouped by
+  // variety.color. Uses allWeekSamples (loaded for every variety) so the totals
+  // remain visible when the user switches between varieties.
+
+  const colorTotals = useMemo((): { color: string; cases: number }[] => {
+    if (!Number.isFinite(kgPerFullBin) || kgPerFullBin <= 0) return [];
+
+    const totalsMap = new Map<string, number>();
+
+    for (const variety of varieties) {
+      const color = variety.color;
+      if (!color) continue;
+
+      const varietySamples = allWeekSamples[variety.id] ?? [];
+      if (varietySamples.length < MINIMUM_SAMPLE_COUNT) continue;
+
+      const linkedRows = linkedRowsByVarietyId[variety.id] ?? [];
+      const totalLinkedStems = linkedRows.reduce((sum, r) => sum + r.total_stems, 0);
+      if (totalLinkedStems <= 0) continue;
+
+      const sumKgPerStem = varietySamples.reduce((sum, s) => sum + s.calculated_kg_per_stem, 0);
+      const avgKgPerStem = sumKgPerStem / varietySamples.length;
+      if (!Number.isFinite(avgKgPerStem) || avgKgPerStem <= 0) continue;
+
+      const projectedKg = avgKgPerStem * totalLinkedStems;
+      const projectedCases =
+        Number.isFinite(kgPerCase) && kgPerCase > 0
+          ? projectedKg / kgPerCase
+          : Number.isFinite(casesPerBin) && casesPerBin > 0
+            ? (projectedKg / kgPerFullBin) * casesPerBin
+            : 0;
+
+      if (!Number.isFinite(projectedCases) || projectedCases <= 0) continue;
+
+      totalsMap.set(color, (totalsMap.get(color) ?? 0) + projectedCases);
+    }
+
+    return Array.from(totalsMap.entries())
+      .map(([color, cases]) => ({ color, cases }))
+      .sort((a, b) => a.color.localeCompare(b.color));
+  }, [allWeekSamples, varieties, linkedRowsByVarietyId, kgPerFullBin, kgPerCase, casesPerBin]);
+
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
@@ -390,6 +521,30 @@ export function MobileDailyYieldPage() {
           }
           return activeVarieties[0]?.id ?? "";
         });
+
+        // Load weekly samples for every variety in parallel to power the
+        // per-color totals. Failures are silently ignored per-variety.
+        const { sessionYear: sy, sessionWeek: sw } = getIsoWeekAndYear(new Date());
+        const sampleResults = await Promise.allSettled(
+          activeVarieties.map(async (v) => {
+            const params = new URLSearchParams({
+              variety_id: v.id,
+              session_year: String(sy),
+              session_week: String(sw)
+            });
+            const res = await apiFetch(`${SAMPLES_URL}?${params.toString()}`);
+            if (!res.ok) return { varietyId: v.id, data: [] as PersistedSample[] };
+            const data = (await res.json()) as PersistedSample[];
+            return { varietyId: v.id, data };
+          })
+        );
+        const weekMap: Record<string, PersistedSample[]> = {};
+        for (const result of sampleResults) {
+          if (result.status === "fulfilled") {
+            weekMap[result.value.varietyId] = result.value.data;
+          }
+        }
+        setAllWeekSamples(weekMap);
       } catch (fetchError) {
         setError(fetchError instanceof Error ? fetchError.message : "Failed to load data");
       } finally {
@@ -468,6 +623,8 @@ export function MobileDailyYieldPage() {
             };
           })
         );
+        // Keep allWeekSamples in sync for color totals.
+        setAllWeekSamples((prev) => ({ ...prev, [selectedVarietyId]: data }));
       } catch (loadError) {
         setError(
           loadError instanceof Error ? loadError.message : "Failed to load saved samples"
@@ -615,6 +772,11 @@ export function MobileDailyYieldPage() {
         }
       ]);
 
+      // Keep allWeekSamples in sync so color totals update immediately.
+      setAllWeekSamples((prev) => ({
+        ...prev,
+        [selectedVarietyId]: [...(prev[selectedVarietyId] ?? []), saved]
+      }));
       setBinFillPercent("0");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save sample");
@@ -653,6 +815,7 @@ export function MobileDailyYieldPage() {
       }
 
       setSamples([]);
+      setAllWeekSamples((prev) => ({ ...prev, [selectedVarietyId]: [] }));
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : "Failed to reset samples");
     } finally {
@@ -874,25 +1037,80 @@ export function MobileDailyYieldPage() {
           </p>
         ) : null}
 
-        {sampleCount >= MINIMUM_SAMPLE_COUNT ? (
-          <div className="mobile-projection-card">
-            <p>Average kg per stem: {roundTo(avgKgPerStem, 6)}</p>
-            <p>Projected kg: {roundTo(projectedKg, 2)}</p>
-            <p>Projected full bins: {roundTo(projectedFullBins, 2)}</p>
-            <p>Projected cases: {roundTo(projectedCases, 2)}</p>
-            <p>
-              {usesKgPerCaseForCases
-                ? "Cases calculated from kg per case"
-                : "Cases calculated from cases per bin fallback"}
+        {phaseProjections.map((phase) => (
+          <div className="mobile-projection-card" key={phase.phase_id}>
+            <p style={{ fontWeight: 700, marginBottom: "0.3rem" }}>{phase.phase_name}</p>
+            <p>Sampled rows: {phase.sampledRowCount} of {phase.linkedRowCount} linked</p>
+            <p>Linked stems: {roundTo(phase.totalLinkedStems, 0).toLocaleString()}</p>
+            {phase.canProject ? (
+              <>
+                <p>Avg kg/stem: {roundTo(phase.avgKgPerStem, 6)}</p>
+                <p>Projected kg: {roundTo(phase.projectedKg, 2)}</p>
+                <p>Projected bins: {roundTo(phase.projectedFullBins, 2)}</p>
+                <p>Projected cases: {roundTo(phase.projectedCases, 2)}</p>
+              </>
+            ) : (
+              <p>No linked stems for this phase — cannot project.</p>
+            )}
+          </div>
+        ))}
+
+        {combinedTotal ? (
+          <div
+            className="mobile-projection-card"
+            style={{ borderColor: "var(--brand)", background: "var(--brand-soft)" }}
+          >
+            <p style={{ fontWeight: 700, marginBottom: "0.3rem" }}>
+              {phaseProjections.length > 1 ? "Combined Total" : "Total"}
             </p>
-            {sampleCount < 6 ? (
-              <p className="mobile-projection-hint">
-                More lines will improve projection accuracy.
-              </p>
-            ) : null}
+            <p>Projected kg: {roundTo(combinedTotal.projectedKg, 2)}</p>
+            <p>Projected bins: {roundTo(combinedTotal.projectedFullBins, 2)}</p>
+            <p>Projected cases: {roundTo(combinedTotal.projectedCases, 2)}</p>
+            <p style={{ fontSize: "0.8em", marginTop: "0.25rem", opacity: 0.8 }}>
+              {usesKgPerCaseForCases
+                ? "Cases from kg per case"
+                : "Cases from cases per bin"}
+            </p>
           </div>
         ) : null}
+
+        {sampleCount >= MINIMUM_SAMPLE_COUNT && sampleCount < 6 ? (
+          <p className="mobile-projection-hint">
+            More lines will improve projection accuracy.
+          </p>
+        ) : null}
       </div>
+
+      {/* ── Projected cases by color ─────────────────────────────────── */}
+      {colorTotals.length > 0 ? (
+        <div className="mobile-yield-card">
+          <h3>Projected Cases by Color</h3>
+          <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.15rem", marginBottom: "0.65rem" }}>
+            Week {sessionWeek}, {sessionYear} — all varieties combined
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {colorTotals.map(({ color, cases }) => (
+              <div
+                key={color}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "0.55rem 0.75rem",
+                  border: "1px solid var(--border)",
+                  borderRadius: "10px",
+                  background: "var(--surface)"
+                }}
+              >
+                <span style={{ fontSize: "0.95rem", textTransform: "capitalize" }}>{color}</span>
+                <span style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--brand)" }}>
+                  {roundTo(cases, 1).toLocaleString()} cases
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
