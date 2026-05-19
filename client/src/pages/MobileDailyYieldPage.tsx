@@ -107,38 +107,10 @@ const GREENHOUSE_URL = "/api/greenhouse-setup";
 const SETTINGS_URL = "/api/mobile/daily-yield/settings";
 const SAMPLES_URL = "/api/mobile/daily-yield/samples";
 const MINIMUM_SAMPLE_COUNT = 4;
-const KG_PER_FULL_BIN_STORAGE_KEY = "growlink.mobileDailyYield.kgPerFullBin";
-const KG_PER_CASE_STORAGE_KEY = "growlink.mobileDailyYield.kgPerCase";
 
 function roundTo(value: number, decimals: number) {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
-}
-
-function readStoredNumber(key: string): number | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const storedValue = window.localStorage.getItem(key);
-  if (storedValue === null) {
-    return null;
-  }
-
-  const parsed = Number(storedValue);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return null;
-  }
-
-  return parsed;
-}
-
-function persistInputValue(key: string, value: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(key, value);
 }
 
 function getIsoWeekAndYear(date: Date) {
@@ -263,8 +235,8 @@ export function MobileDailyYieldPage() {
   const [rowSearch, setRowSearch] = useState("");
   const [selectedRowId, setSelectedRowId] = useState("");
   const [binFillPercent, setBinFillPercent] = useState("0");
-  const [kgPerFullBinDraft, setKgPerFullBinDraft] = useState("0");
-  const [kgPerCaseDraft, setKgPerCaseDraft] = useState("0");
+  const [kgPerFullBin, setKgPerFullBin] = useState(0);
+  const [kgPerCase, setKgPerCase] = useState(0);
 
   const [samples, setSamples] = useState<LocalSample[]>([]);
   const [samplesLoading, setSamplesLoading] = useState(false);
@@ -280,16 +252,6 @@ export function MobileDailyYieldPage() {
   const [allWeekSamples, setAllWeekSamples] = useState<Record<string, PersistedSample[]>>({});
 
   const { sessionYear, sessionWeek } = useMemo(() => getIsoWeekAndYear(new Date()), []);
-
-  function handleKgPerFullBinChange(value: string) {
-    setKgPerFullBinDraft(value);
-    persistInputValue(KG_PER_FULL_BIN_STORAGE_KEY, value);
-  }
-
-  function handleKgPerCaseChange(value: string) {
-    setKgPerCaseDraft(value);
-    persistInputValue(KG_PER_CASE_STORAGE_KEY, value);
-  }
 
   const linkedRowsForVariety = useMemo(
     () => linkedRowsByVarietyId[selectedVarietyId] ?? [],
@@ -330,8 +292,6 @@ export function MobileDailyYieldPage() {
     0
   );
 
-  const kgPerFullBin = Number(kgPerFullBinDraft);
-  const kgPerCase = Number(kgPerCaseDraft);
   const casesPerBin = Number(casesPerBinDraft);
   const canShowKg =
     sampleCount >= MINIMUM_SAMPLE_COUNT &&
@@ -441,7 +401,9 @@ export function MobileDailyYieldPage() {
   // remain visible when the user switches between varieties.
 
   const colorTotals = useMemo((): { color: string; cases: number }[] => {
-    if (!Number.isFinite(kgPerFullBin) || kgPerFullBin <= 0) return [];
+    const hasKgPerBin = Number.isFinite(kgPerFullBin) && kgPerFullBin > 0;
+    const hasKgPerCase = Number.isFinite(kgPerCase) && kgPerCase > 0;
+    if (!hasKgPerBin && !hasKgPerCase) return [];
 
     const totalsMap = new Map<string, number>();
 
@@ -508,19 +470,16 @@ export function MobileDailyYieldPage() {
             })
           : { cases_per_bin: 38, kg_per_full_bin: 0, kg_per_case: 0 };
 
-        const storedKgPerFullBin = readStoredNumber(KG_PER_FULL_BIN_STORAGE_KEY);
-        const storedKgPerCase = readStoredNumber(KG_PER_CASE_STORAGE_KEY);
-
         const resolvedKgPerFullBin =
           Number.isFinite(settingsData.kg_per_full_bin) &&
           Number(settingsData.kg_per_full_bin) > 0
             ? Number(settingsData.kg_per_full_bin)
-            : (storedKgPerFullBin ?? 0);
+            : 0;
 
         const resolvedKgPerCase =
           Number.isFinite(settingsData.kg_per_case) && Number(settingsData.kg_per_case) > 0
             ? Number(settingsData.kg_per_case)
-            : (storedKgPerCase ?? 0);
+            : 0;
 
         const activeVarieties = allVarieties.filter((variety) => variety.status === "active");
         const linked = buildLinkedRowsByVariety(
@@ -532,8 +491,8 @@ export function MobileDailyYieldPage() {
         setVarieties(activeVarieties);
         setLinkedRowsByVarietyId(linked);
         setCasesPerBinDraft(String(settingsData.cases_per_bin ?? 38));
-        setKgPerFullBinDraft(String(resolvedKgPerFullBin));
-        setKgPerCaseDraft(String(resolvedKgPerCase));
+        setKgPerFullBin(resolvedKgPerFullBin);
+        setKgPerCase(resolvedKgPerCase);
 
         setSelectedVarietyId((current) => {
           if (current && activeVarieties.some((variety) => variety.id === current)) {
@@ -717,15 +676,8 @@ export function MobileDailyYieldPage() {
       return;
     }
 
-    const parsedKgPerCase = Number(kgPerCaseDraft);
-    if (!Number.isFinite(parsedKgPerCase) || parsedKgPerCase < 0) {
-      setError("Kg per case cannot be negative.");
-      return;
-    }
-
-    const parsedKgPerBin = Number(kgPerFullBinDraft);
-    if (!Number.isFinite(parsedKgPerBin) || parsedKgPerBin <= 0) {
-      setError("Kg per full bin must be greater than 0.");
+    if (!Number.isFinite(kgPerFullBin) || kgPerFullBin <= 0) {
+      setError("Set kg per full bin in Greenhouse Setup to enable sampling.");
       return;
     }
 
@@ -739,7 +691,7 @@ export function MobileDailyYieldPage() {
       return;
     }
 
-    const sampleKg = (parsedPercent / 100) * parsedKgPerBin;
+    const sampleKg = (parsedPercent / 100) * kgPerFullBin;
     const sampleKgPerStem = sampleKg / row.total_stems;
 
     setSavingSample(true);
@@ -755,8 +707,8 @@ export function MobileDailyYieldPage() {
           row_label: row.label,
           row_number: row.row_number,
           percent_full: parsedPercent,
-          kg_per_full_bin: parsedKgPerBin,
-          kg_per_case: parsedKgPerCase,
+          kg_per_full_bin: kgPerFullBin,
+          kg_per_case: kgPerCase,
           calculated_sample_kg: sampleKg,
           calculated_kg_per_stem: sampleKgPerStem,
           sample_date: toSampleDateString(new Date()),
@@ -850,41 +802,6 @@ export function MobileDailyYieldPage() {
 
       {error ? <p className="form-error">{error}</p> : null}
       {loading ? <p>Loading...</p> : null}
-
-      <div className="mobile-yield-card">
-        <h3>Projection Inputs</h3>
-        <form className="mobile-yield-form" onSubmit={(event) => event.preventDefault()}>
-          <div
-            style={{
-              display: "grid",
-              gap: "0.75rem",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
-            }}
-          >
-            <label>
-              Kg per full bin
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={kgPerFullBinDraft}
-                onChange={(event) => handleKgPerFullBinChange(event.target.value)}
-              />
-            </label>
-
-            <label>
-              Kg per case
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={kgPerCaseDraft}
-                onChange={(event) => handleKgPerCaseChange(event.target.value)}
-              />
-            </label>
-          </div>
-        </form>
-      </div>
 
       <div className="mobile-yield-card">
         <button
@@ -1031,7 +948,7 @@ export function MobileDailyYieldPage() {
               {canShowBins ? (
                 <p>Projected full bins: {roundTo(projectedFullBins, 2)}</p>
               ) : canShowKg ? (
-                <p>Enter kg per full bin to enable bin projection.</p>
+                <p>Set kg per full bin in Greenhouse Setup to show bin projection.</p>
               ) : null}
               {canShowCases ? (
                 <>
@@ -1043,14 +960,14 @@ export function MobileDailyYieldPage() {
                   </p>
                 </>
               ) : canShowKg ? (
-                <p>Cases require kg per case or cases per bin.</p>
+                <p>Set kg per case in Greenhouse Setup to show case projection.</p>
               ) : null}
             </>
           ) : null}
         </div>
 
         {!Number.isFinite(kgPerFullBin) || kgPerFullBin <= 0 ? (
-          <p>Enter kg per full bin above to enable projection.</p>
+          <p>Set kg per full bin in Greenhouse Setup to enable projection.</p>
         ) : null}
 
         {Number.isFinite(kgPerCase) && kgPerCase < 0 ? (
@@ -1082,14 +999,14 @@ export function MobileDailyYieldPage() {
                   <p>Projected bins: {roundTo(phase.projectedFullBins, 2)}</p>
                 ) : (
                   <p style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
-                    Enter kg per full bin to show bin projection.
+                    Set kg per full bin in Greenhouse Setup to show bin projection.
                   </p>
                 )}
                 {phase.canShowCases ? (
                   <p>Projected cases: {roundTo(phase.projectedCases, 2)}</p>
                 ) : (
                   <p style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
-                    Cases require kg per case or cases per bin.
+                    Set kg per case in Greenhouse Setup to show case projection.
                   </p>
                 )}
               </>

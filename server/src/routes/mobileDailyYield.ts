@@ -171,10 +171,16 @@ function validateSamplePayload(input: unknown): MobileYieldSamplePayload {
   };
 }
 
-async function getCurrentCasesPerBin(organizationId: string): Promise<number> {
+type BinSettings = {
+  casesPerBin: number;
+  pickingBinKg: number | null;
+  caseKg: number | null;
+};
+
+async function getCurrentBinSettings(organizationId: string): Promise<BinSettings> {
   const { data, error } = await supabase
     .from("daily_yield_bin_settings")
-    .select("cases_per_bin")
+    .select("cases_per_bin, picking_bin_kg, case_kg")
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -182,7 +188,7 @@ async function getCurrentCasesPerBin(organizationId: string): Promise<number> {
 
   if (error) {
     if (isMissingSettingsStorageError(error)) {
-      return DEFAULT_CASES_PER_BIN;
+      return { casesPerBin: DEFAULT_CASES_PER_BIN, pickingBinKg: null, caseKg: null };
     }
 
     console.error("Bin settings fetch error:", error);
@@ -190,11 +196,22 @@ async function getCurrentCasesPerBin(organizationId: string): Promise<number> {
   }
 
   if (!data) {
-    return DEFAULT_CASES_PER_BIN;
+    return { casesPerBin: DEFAULT_CASES_PER_BIN, pickingBinKg: null, caseKg: null };
   }
 
-  const parsed = Number(data.cases_per_bin);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CASES_PER_BIN;
+  const casesPerBin = Number(data.cases_per_bin);
+  const rawPickingBinKg = data.picking_bin_kg !== null && data.picking_bin_kg !== undefined
+    ? Number(data.picking_bin_kg) : null;
+  const rawCaseKg = data.case_kg !== null && data.case_kg !== undefined
+    ? Number(data.case_kg) : null;
+
+  return {
+    casesPerBin: Number.isFinite(casesPerBin) && casesPerBin > 0 ? casesPerBin : DEFAULT_CASES_PER_BIN,
+    pickingBinKg: rawPickingBinKg !== null && Number.isFinite(rawPickingBinKg) && rawPickingBinKg > 0
+      ? rawPickingBinKg : null,
+    caseKg: rawCaseKg !== null && Number.isFinite(rawCaseKg) && rawCaseKg > 0
+      ? rawCaseKg : null
+  };
 }
 
 async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
@@ -359,15 +376,15 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (req, res) => {
   const organizationId = req.organizationId;
 
   try {
-    const [options, casesPerBin] = await Promise.all([
+    const [options, binSettings] = await Promise.all([
       fetchRowsLinkedToActiveVarieties(organizationId),
-      getCurrentCasesPerBin(organizationId)
+      getCurrentBinSettings(organizationId)
     ]);
 
     return res.json({
       varieties: options.varieties,
       rows: options.rows,
-      casesPerBin
+      casesPerBin: binSettings.casesPerBin
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load options";
@@ -379,11 +396,11 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (req, res) => {
   const organizationId = req.organizationId;
 
   try {
-    const casesPerBin = await getCurrentCasesPerBin(organizationId);
+    const settings = await getCurrentBinSettings(organizationId);
     return res.json({
-      cases_per_bin: casesPerBin,
-      kg_per_full_bin: DEFAULT_KG_PER_FULL_BIN,
-      kg_per_case: DEFAULT_KG_PER_CASE
+      cases_per_bin: settings.casesPerBin,
+      kg_per_full_bin: settings.pickingBinKg ?? 0,
+      kg_per_case: settings.caseKg ?? 0
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load settings";

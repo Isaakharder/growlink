@@ -15,6 +15,9 @@ type SetupRow = {
   length_meters: number | null;
 };
 
+type FeedValve = { id: string; name: string; };
+type RowValveLink = { id: string; valve_id: string; row_id: string; };
+
 type SprayerTank = { id: string; name: string; volume_liters: number };
 
 type Sprayer = {
@@ -109,8 +112,12 @@ export function PestPlannerPage() {
   const [error, setError] = useState<string | null>(null);
 
   // ── Target area selection
+  const [targetMode, setTargetMode] = useState<"phase" | "valve">("phase");
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const [feedValves, setFeedValves] = useState<FeedValve[]>([]);
+  const [rowValves, setRowValves] = useState<RowValveLink[]>([]);
+  const [selectedValveIds, setSelectedValveIds] = useState<string[]>([]);
 
   // ── Application details
   const [applicationType, setApplicationType] = useState<ApplicationType | "">("");
@@ -151,6 +158,7 @@ export function PestPlannerPage() {
         const setupData = (await setupRes.json()) as {
           groups: SetupGroup[];
           rows: SetupRow[];
+          rowValves?: RowValveLink[];
         };
         const sprayersData = (await sprayersRes.json()) as Sprayer[];
         const tanksData = (await tanksRes.json()) as Tank[];
@@ -158,6 +166,7 @@ export function PestPlannerPage() {
 
         setGroups(setupData.groups ?? []);
         setRows(setupData.rows ?? []);
+        setRowValves(setupData.rowValves ?? []);
         setSprayers(sprayersData);
         setTanks(tanksData);
         setChemicals(chemicalsData);
@@ -171,6 +180,20 @@ export function PestPlannerPage() {
     }
 
     void load();
+  }, []);
+
+  useEffect(() => {
+    async function loadValves() {
+      try {
+        const res = await apiFetch("/api/irrigation-setup");
+        if (!res.ok) return;
+        const data = (await res.json()) as { feedValves: FeedValve[] };
+        setFeedValves(data.feedValves ?? []);
+      } catch {
+        // supplemental — silently ignore
+      }
+    }
+    void loadValves();
   }, []);
 
   // ── Group selection ────────────────────────────────────────────────────────
@@ -221,6 +244,12 @@ export function PestPlannerPage() {
     return map;
   }, [rows]);
 
+  const rowById = useMemo(() => {
+    const map: Record<string, SetupRow> = {};
+    for (const row of rows) map[row.id] = row;
+    return map;
+  }, [rows]);
+
   const areaByGroupId = useMemo(() => {
     const result: Record<string, number> = {};
     for (const id of selectedGroupIds) {
@@ -230,14 +259,29 @@ export function PestPlannerPage() {
     return result;
   }, [selectedGroupIds, rowsByGroupId]);
 
-  const totalM2 = useMemo(
-    () => Object.values(areaByGroupId).reduce((sum, a) => sum + a, 0),
-    [areaByGroupId]
-  );
+  // Rows linked to the currently selected valves (valve mode).
+  const valveTargetRows = useMemo(() => {
+    if (targetMode !== "valve" || selectedValveIds.length === 0) return [];
+    const valveSet = new Set(selectedValveIds);
+    return rowValves
+      .filter((rv) => valveSet.has(rv.valve_id))
+      .map((rv) => rowById[rv.row_id])
+      .filter((r): r is SetupRow => r !== undefined);
+  }, [targetMode, selectedValveIds, rowValves, rowById]);
 
-  // Sum of length_meters across every row in every selected group.
+  const totalM2 = useMemo(() => {
+    if (targetMode === "valve") {
+      return valveTargetRows.reduce((sum, r) => sum + rowAreaM2(r), 0);
+    }
+    return Object.values(areaByGroupId).reduce((sum, a) => sum + a, 0);
+  }, [targetMode, valveTargetRows, areaByGroupId]);
+
+  // Sum of length_meters across every row in every selected group/valve.
   // This is the actual linear distance the sprayer travels.
   const totalRowLengthMeters = useMemo(() => {
+    if (targetMode === "valve") {
+      return valveTargetRows.reduce((sum, r) => sum + (r.length_meters ?? 0), 0);
+    }
     let total = 0;
     for (const id of selectedGroupIds) {
       for (const row of rowsByGroupId[id] ?? []) {
@@ -245,7 +289,7 @@ export function PestPlannerPage() {
       }
     }
     return total;
-  }, [selectedGroupIds, rowsByGroupId]);
+  }, [targetMode, valveTargetRows, selectedGroupIds, rowsByGroupId]);
 
   const groupsWithNoDimensions = useMemo(
     () =>
@@ -261,6 +305,14 @@ export function PestPlannerPage() {
         .map((id) => groups.find((g) => g.id === id)?.name ?? "")
         .filter(Boolean),
     [selectedGroupIds, groups]
+  );
+
+  const selectedValveNames = useMemo(
+    () =>
+      selectedValveIds
+        .map((id) => feedValves.find((v) => v.id === id)?.name ?? "")
+        .filter(Boolean),
+    [selectedValveIds, feedValves]
   );
 
   // ── Application rate calculation ───────────────────────────────────────────
@@ -462,8 +514,11 @@ export function PestPlannerPage() {
     [selectedChemical]
   );
 
+  const hasTargetArea =
+    targetMode === "valve" ? selectedValveIds.length > 0 : selectedGroupIds.length > 0;
+
   // Card is visible as soon as type + area are chosen so the operator sees what's next.
-  const showCreateJobCard = applicationType !== "" && selectedGroupIds.length > 0;
+  const showCreateJobCard = applicationType !== "" && hasTargetArea;
 
   // Button is only enabled when chemical is also selected (required for the todo payload).
   const canCreateJob =
@@ -501,12 +556,22 @@ export function PestPlannerPage() {
         }
       : {};
 
-    const target_snapshot = {
-      group_ids: selectedGroupIds,
-      group_names: selectedGroupNames,
-      total_m2: totalM2,
-      total_row_length_meters: totalRowLengthMeters
-    };
+    const target_snapshot =
+      targetMode === "valve"
+        ? {
+            target_mode: "valve",
+            valve_ids: selectedValveIds,
+            valve_names: selectedValveNames,
+            total_m2: totalM2,
+            total_row_length_meters: totalRowLengthMeters
+          }
+        : {
+            target_mode: "phase",
+            group_ids: selectedGroupIds,
+            group_names: selectedGroupNames,
+            total_m2: totalM2,
+            total_row_length_meters: totalRowLengthMeters
+          };
 
     const sprayer_snapshot =
       selectedSprayer && applicationType === "spray"

@@ -63,12 +63,35 @@ type Variety = {
   status: "active" | "inactive";
 };
 
+type IrrigationFeedValve = {
+  id: string;
+  name: string;
+  group_id: string;
+  organization_id: string;
+  status: string;
+};
+
+
+type RowValve = {
+  id: string;
+  valve_id: string;
+  row_id: string;
+};
+
+type ValveAssignForm = {
+  valve_id: string;
+  row_pattern: "all" | "alternate";
+  start_row: string;
+  end_row: string;
+};
+
 type SetupResponse = {
   groups: GreenhouseGroup[];
   rowSections: GreenhouseRowSection[];
   rows: GreenhouseRow[];
   varietyAssignments: GreenhouseVarietyAssignment[];
   varieties: Variety[];
+  rowValves?: RowValve[];
 };
 
 type GroupFormState = {
@@ -123,6 +146,7 @@ const GROUPS_URL = "/api/greenhouse-groups";
 const ROW_SECTIONS_URL = "/api/greenhouse-row-sections";
 const ROWS_URL = "/api/greenhouse-rows";
 const ASSIGNMENTS_URL = "/api/greenhouse-variety-assignments";
+const BIN_SETTINGS_URL = "/api/greenhouse-setup/bin-settings";
 
 const TYPE_LABELS: Record<GroupType, string> = {
   phase: "Phase",
@@ -260,7 +284,24 @@ export function GreenhouseSetupPage() {
   const [expandedRowsByGroupId, setExpandedRowsByGroupId] = useState<Record<string, boolean>>(
     {}
   );
-  const [activeTab, setActiveTab] = useState<"rows" | "varieties">("rows");
+  const [activeTab, setActiveTab] = useState<"rows" | "varieties" | "valves">("rows");
+
+  const [valves, setValves] = useState<IrrigationFeedValve[]>([]);
+  const [rowValves, setRowValves] = useState<RowValve[]>([]);
+  const [valveAssignForm, setValveAssignForm] = useState<ValveAssignForm>({
+    valve_id: "",
+    row_pattern: "all",
+    start_row: "1",
+    end_row: "1"
+  });
+  const [valveAssigning, setValveAssigning] = useState(false);
+  const [valveAssignError, setValveAssignError] = useState<string | null>(null);
+
+  const [pickingBinKgDraft, setPickingBinKgDraft] = useState("");
+  const [caseKgDraft, setCaseKgDraft] = useState("");
+  const [binSettingsSaving, setBinSettingsSaving] = useState(false);
+  const [binSettingsSaved, setBinSettingsSaved] = useState(false);
+  const [binSettingsError, setBinSettingsError] = useState<string | null>(null);
 
   const selectedGroup = useMemo(
     () => groups.find((group) => group.id === selectedGroupId) ?? null,
@@ -453,6 +494,7 @@ export function GreenhouseSetupPage() {
       setRows(data.rows ?? []);
       setVarietyAssignments(data.varietyAssignments ?? []);
       setVarieties(data.varieties ?? []);
+      setRowValves(data.rowValves ?? []);
 
       setRowDrafts(() => {
         const draft: Record<string, RowDraft> = {};
@@ -489,6 +531,68 @@ export function GreenhouseSetupPage() {
   useEffect(() => {
     void fetchSetup();
   }, []);
+
+  useEffect(() => {
+    async function loadBinSettings() {
+      try {
+        const res = await apiFetch(BIN_SETTINGS_URL);
+        if (!res.ok) return;
+        const data = (await res.json()) as { picking_bin_kg: number | null; case_kg: number | null };
+        setPickingBinKgDraft(data.picking_bin_kg !== null && data.picking_bin_kg !== undefined ? String(data.picking_bin_kg) : "");
+        setCaseKgDraft(data.case_kg !== null && data.case_kg !== undefined ? String(data.case_kg) : "");
+      } catch {
+        // silently ignore — bin settings are supplemental
+      }
+    }
+    void loadBinSettings();
+  }, []);
+
+  async function saveBinSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBinSettingsError(null);
+    setBinSettingsSaved(false);
+    setBinSettingsSaving(true);
+
+    const rawPickingBinKg = pickingBinKgDraft.trim();
+    const rawCaseKg = caseKgDraft.trim();
+
+    const pickingBinKg = rawPickingBinKg !== "" ? Number(rawPickingBinKg) : null;
+    const caseKg = rawCaseKg !== "" ? Number(rawCaseKg) : null;
+
+    if (pickingBinKg !== null && (!Number.isFinite(pickingBinKg) || pickingBinKg <= 0)) {
+      setBinSettingsError("Kg per full bin must be greater than 0.");
+      setBinSettingsSaving(false);
+      return;
+    }
+
+    if (caseKg !== null && (!Number.isFinite(caseKg) || caseKg <= 0)) {
+      setBinSettingsError("Kg per case must be greater than 0.");
+      setBinSettingsSaving(false);
+      return;
+    }
+
+    try {
+      const res = await apiFetch(BIN_SETTINGS_URL, {
+        method: "PUT",
+        body: JSON.stringify({
+          picking_bin_kg: pickingBinKg,
+          case_kg: caseKg
+        })
+      });
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to save bin settings");
+      }
+
+      setBinSettingsSaved(true);
+      setTimeout(() => setBinSettingsSaved(false), 3000);
+    } catch (err) {
+      setBinSettingsError(err instanceof Error ? err.message : "Failed to save bin settings");
+    } finally {
+      setBinSettingsSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!groupModalOpen && !rowSectionModalOpen && !assignmentModalOpen) {
@@ -914,6 +1018,85 @@ export function GreenhouseSetupPage() {
     }));
   }
 
+  useEffect(() => {
+    async function loadValves() {
+      try {
+        const res = await apiFetch("/api/irrigation-setup");
+        if (!res.ok) return;
+        const data = (await res.json()) as { feedValves: IrrigationFeedValve[] };
+        setValves(data.feedValves ?? []);
+      } catch {
+        // silently ignore — valves are supplemental to the main setup
+      }
+    }
+    void loadValves();
+  }, []);
+
+  async function assignValveRows(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setValveAssignError(null);
+
+    const startRow = parseInt(valveAssignForm.start_row, 10);
+    const endRow = parseInt(valveAssignForm.end_row, 10);
+
+    if (!valveAssignForm.valve_id) {
+      setValveAssignError("Select a valve.");
+      return;
+    }
+    if (!Number.isInteger(startRow) || startRow < 1) {
+      setValveAssignError("Start row must be 1 or greater.");
+      return;
+    }
+    if (!Number.isInteger(endRow) || endRow < startRow) {
+      setValveAssignError("End row must be >= start row.");
+      return;
+    }
+
+    setValveAssigning(true);
+    try {
+      const res = await apiFetch("/api/greenhouse/row-valves", {
+        method: "POST",
+        body: JSON.stringify({
+          valve_id: valveAssignForm.valve_id,
+          row_pattern: valveAssignForm.row_pattern,
+          start_row: startRow,
+          end_row: endRow
+        })
+      });
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to assign rows");
+      }
+
+      setValveAssignForm((prev) => ({ ...prev, start_row: "1", end_row: "1" }));
+      await fetchSetup();
+    } catch (err) {
+      setValveAssignError(err instanceof Error ? err.message : "Failed to assign rows");
+    } finally {
+      setValveAssigning(false);
+    }
+  }
+
+  async function removeRowValve(id: string) {
+    setError(null);
+    const { error: delError } = await (async () => {
+      try {
+        const res = await apiFetch(`/api/greenhouse/row-valves/${id}`, { method: "DELETE" });
+        return res.ok ? { error: null } : { error: new Error("Failed to remove link") };
+      } catch (e) {
+        return { error: e instanceof Error ? e : new Error("Failed to remove link") };
+      }
+    })();
+
+    if (delError) {
+      setError(delError.message);
+      return;
+    }
+
+    await fetchSetup();
+  }
+
   return (
     <section className="page-shell">
       <header>
@@ -1080,6 +1263,50 @@ export function GreenhouseSetupPage() {
         </div>
       </div>
 
+      <div className="coming-soon-card" style={{ marginBottom: "1.5rem" }}>
+        <h2>Picking Bins</h2>
+        <p style={{ fontSize: "0.88rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
+          Used by Mobile Daily Yield to project bins and cases from sampled stems.
+        </p>
+        {binSettingsError ? (
+          <p className="form-error" style={{ marginBottom: "0.75rem" }}>{binSettingsError}</p>
+        ) : null}
+        <form className="picking-bins-form" onSubmit={(e) => void saveBinSettings(e)}>
+          <label className="picking-bins-label">
+            Kg per full bin
+            <input
+              className="setup-input"
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={pickingBinKgDraft}
+              placeholder="e.g. 25"
+              onChange={(e) => { setPickingBinKgDraft(e.target.value); setBinSettingsSaved(false); }}
+            />
+          </label>
+          <label className="picking-bins-label">
+            Kg per case
+            <input
+              className="setup-input"
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={caseKgDraft}
+              placeholder="e.g. 12"
+              onChange={(e) => { setCaseKgDraft(e.target.value); setBinSettingsSaved(false); }}
+            />
+          </label>
+          <button className="setup-action-button" type="submit" disabled={binSettingsSaving}>
+            {binSettingsSaving ? "Saving..." : "Save"}
+          </button>
+        </form>
+        {binSettingsSaved ? (
+          <p style={{ marginTop: "0.5rem", color: "var(--brand)", fontWeight: 600, fontSize: "0.88rem" }}>
+            Bin settings saved.
+          </p>
+        ) : null}
+      </div>
+
       <div className="coming-soon-card">
         <div className="greenhouse-tabs">
           <button
@@ -1095,6 +1322,13 @@ export function GreenhouseSetupPage() {
             onClick={() => setActiveTab("varieties")}
           >
             Linked Varieties
+          </button>
+          <button
+            type="button"
+            className={`greenhouse-tab-button${activeTab === "valves" ? " active" : ""}`}
+            onClick={() => setActiveTab("valves")}
+          >
+            Linked Valves
           </button>
         </div>
 
@@ -1386,6 +1620,143 @@ export function GreenhouseSetupPage() {
                 </table>
               </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {activeTab === "valves" ? (
+          <div className="greenhouse-tab-content">
+            <div className="varieties-toolbar greenhouse-toolbar">
+              <span className="greenhouse-toolbar-label">Link rows to irrigation valves</span>
+            </div>
+
+            {valves.length === 0 ? (
+              <p>No irrigation valves found. Set up valves in Irrigation Setup first.</p>
+            ) : (
+              <form className="valve-assign-form" onSubmit={(event) => void assignValveRows(event)}>
+                <div className="valve-assign-row">
+                  <label>
+                    Valve
+                    <select
+                      value={valveAssignForm.valve_id}
+                      onChange={(event) =>
+                        setValveAssignForm((current) => ({
+                          ...current,
+                          valve_id: event.target.value
+                        }))
+                      }
+                      required
+                    >
+                      <option value="">Select valve…</option>
+                      {valves.map((valve) => (
+                        <option key={valve.id} value={valve.id}>
+                          {valve.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Row pattern
+                    <select
+                      value={valveAssignForm.row_pattern}
+                      onChange={(event) =>
+                        setValveAssignForm((current) => ({
+                          ...current,
+                          row_pattern: event.target.value as "all" | "alternate"
+                        }))
+                      }
+                    >
+                      <option value="all">All rows</option>
+                      <option value="alternate">Every other row</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Start row
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={valveAssignForm.start_row}
+                      onChange={(event) =>
+                        setValveAssignForm((current) => ({
+                          ...current,
+                          start_row: event.target.value
+                        }))
+                      }
+                      required
+                    />
+                  </label>
+
+                  <label>
+                    End row
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={valveAssignForm.end_row}
+                      onChange={(event) =>
+                        setValveAssignForm((current) => ({
+                          ...current,
+                          end_row: event.target.value
+                        }))
+                      }
+                      required
+                    />
+                  </label>
+
+                  <button className="setup-action-button" type="submit" disabled={valveAssigning}>
+                    {valveAssigning ? "Assigning…" : "Assign"}
+                  </button>
+                </div>
+
+                {valveAssignError ? (
+                  <p className="form-error">{valveAssignError}</p>
+                ) : null}
+              </form>
+            )}
+
+            {rowValves.length === 0 ? (
+              <p>No row-valve links yet.</p>
+            ) : (
+              <div className="varieties-table-wrapper">
+                <table className="varieties-table valve-linked-table">
+                  <thead>
+                    <tr>
+                      <th>Group</th>
+                      <th>Row #</th>
+                      <th>Valve</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rowValves.map((rv) => {
+                      const valve = valves.find((v) => v.id === rv.valve_id);
+                      const row = rows.find((r) => r.id === rv.row_id);
+                      const group = row ? groups.find((g) => g.id === row.group_id) : undefined;
+                      return (
+                        <tr key={rv.id}>
+                          <td>{group?.name ?? "-"}</td>
+                          <td>{row?.row_number ?? "-"}</td>
+                          <td>{valve?.name ?? rv.valve_id}</td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                type="button"
+                                className="danger"
+                                onClick={() => void removeRowValve(rv.id)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         ) : null}
       </div>

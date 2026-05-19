@@ -354,7 +354,7 @@ const greenhouseSetupRouter = Router();
 greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
   const organizationId = req.organizationId;
 
-  const [groupsResult, sectionsResult, rowsResult, assignmentsResult, varietiesResult] =
+  const [groupsResult, sectionsResult, rowsResult, assignmentsResult, varietiesResult, rowValvesResult] =
     await Promise.all([
     supabase
       .from("greenhouse_groups")
@@ -370,8 +370,7 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
       .from("greenhouse_rows")
       .select("*")
       .eq("organization_id", organizationId)
-      .order("row_number", { ascending: true })
-      ,
+      .order("row_number", { ascending: true }),
     supabase
       .from("greenhouse_variety_assignments")
       .select("*")
@@ -381,7 +380,11 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
       .from("varieties")
       .select("id,name,color,status")
       .eq("organization_id", organizationId)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("greenhouse_row_valves")
+      .select("id,valve_id,row_id")
+      .eq("organization_id", organizationId)
   ]);
 
   if (groupsResult.error) {
@@ -404,6 +407,9 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
     return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - varieties error:", varietiesResult.error);
   }
 
+  // rowValves gracefully degrades — table may not exist if migration is pending
+  const rowValves = rowValvesResult.error ? [] : (rowValvesResult.data ?? []);
+
   return res.json({
     groups: groupsResult.data ?? [],
     rowSections: (sectionsResult.data ?? []).map((section) => ({
@@ -412,7 +418,8 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
     })),
     rows: rowsResult.data ?? [],
     varietyAssignments: assignmentsResult.data ?? [],
-    varieties: varietiesResult.data ?? []
+    varieties: varietiesResult.data ?? [],
+    rowValves
   });
 });
 
@@ -740,6 +747,190 @@ greenhouseSetupRouter.delete("/greenhouse-variety-assignments/:id", async (req, 
   }
 
   return res.status(204).send();
+});
+
+// ── Row-valve link routes ─────────────────────────────────────────────────────
+
+greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
+  const organizationId = req.organizationId;
+  const body = req.body as Record<string, unknown>;
+
+  const valveId = typeof body.valve_id === "string" ? body.valve_id.trim() : "";
+  const groupId = typeof body.group_id === "string" ? body.group_id.trim() : "";
+  const rowPattern = body.row_pattern === "alternate" ? "alternate" : "all";
+  const startRow = typeof body.start_row === "number" ? body.start_row : Number(body.start_row);
+  const endRow = typeof body.end_row === "number" ? body.end_row : Number(body.end_row);
+
+  if (!valveId) return res.status(400).json({ message: "valve_id is required" });
+  if (!Number.isInteger(startRow) || startRow < 1) return res.status(400).json({ message: "start_row must be a positive integer" });
+  if (!Number.isInteger(endRow) || endRow < startRow) return res.status(400).json({ message: "end_row must be >= start_row" });
+
+  // Verify valve belongs to org
+  const { data: valveData, error: valveError } = await supabase
+    .from("irrigation_feed_valves")
+    .select("id")
+    .eq("id", valveId)
+    .eq("organization_id", organizationId)
+    .single();
+
+  if (valveError || !valveData) {
+    return res.status(400).json({ message: "Valve not found" });
+  }
+
+  // Find rows within the range; optionally scope to a specific group
+  let rowQuery = supabase
+    .from("greenhouse_rows")
+    .select("id, row_number")
+    .eq("organization_id", organizationId)
+    .gte("row_number", startRow)
+    .lte("row_number", endRow);
+
+  if (groupId) rowQuery = rowQuery.eq("group_id", groupId);
+
+  const { data: fetchedRows, error: rowsError } = await rowQuery;
+
+  if (rowsError) {
+    return sendSafeError(res, 500, "Failed to look up rows.", "Row-valve rows fetch error:", rowsError);
+  }
+
+  if (!fetchedRows || fetchedRows.length === 0) {
+    return res.status(400).json({ message: "No rows found in the selected range" });
+  }
+
+  // Apply every-other-row filter: keep rows whose row_number has the same
+  // parity as startRow (so start=1 → odd rows; start=2 → even rows).
+  const targetRows =
+    rowPattern === "alternate"
+      ? fetchedRows.filter((r) => r.row_number % 2 === startRow % 2)
+      : fetchedRows;
+
+  if (targetRows.length === 0) {
+    return res.status(400).json({ message: "No rows matched the selected pattern in this range" });
+  }
+
+  const now = new Date().toISOString();
+  const upsertRows = targetRows.map((r) => ({
+    organization_id: organizationId,
+    valve_id: valveId,
+    row_id: r.id,
+    created_at: now
+  }));
+
+  const { error: upsertError } = await supabase
+    .from("greenhouse_row_valves")
+    .upsert(upsertRows, { onConflict: "organization_id,row_id" });
+
+  if (upsertError) {
+    return sendSafeError(res, 500, "Failed to assign rows to valve.", "Row-valve upsert error:", upsertError);
+  }
+
+  return res.status(201).json({ assigned: targetRows.length });
+});
+
+greenhouseSetupRouter.delete("/greenhouse/row-valves/:id", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from("greenhouse_row_valves")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to remove row-valve link.", "Row-valve delete error:", error);
+  }
+
+  return res.status(204).send();
+});
+
+// ── Bin settings routes ───────────────────────────────────────────────────────
+
+greenhouseSetupRouter.get("/greenhouse-setup/bin-settings", async (req, res) => {
+  const organizationId = req.organizationId;
+
+  const { data, error } = await supabase
+    .from("daily_yield_bin_settings")
+    .select("picking_bin_kg, case_kg")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load bin settings.", "Bin settings fetch error:", error);
+  }
+
+  return res.json({
+    picking_bin_kg: data?.picking_bin_kg ?? null,
+    case_kg: data?.case_kg ?? null
+  });
+});
+
+greenhouseSetupRouter.put("/greenhouse-setup/bin-settings", async (req, res) => {
+  const organizationId = req.organizationId;
+  const body = req.body as Record<string, unknown>;
+
+  let picking_bin_kg: number | null = null;
+  let case_kg: number | null = null;
+
+  if (body.picking_bin_kg !== null && body.picking_bin_kg !== undefined && body.picking_bin_kg !== "") {
+    const parsed = Number(body.picking_bin_kg);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return res.status(400).json({ message: "kg per full bin must be greater than 0" });
+    }
+    picking_bin_kg = parsed;
+  }
+
+  if (body.case_kg !== null && body.case_kg !== undefined && body.case_kg !== "") {
+    const parsed = Number(body.case_kg);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return res.status(400).json({ message: "kg per case must be greater than 0" });
+    }
+    case_kg = parsed;
+  }
+
+  const now = new Date().toISOString();
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("daily_yield_bin_settings")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to load bin settings.", "Bin settings fetch error:", fetchError);
+  }
+
+  if (existing) {
+    const { data, error } = await supabase
+      .from("daily_yield_bin_settings")
+      .update({ picking_bin_kg, case_kg, updated_at: now })
+      .eq("id", existing.id)
+      .eq("organization_id", organizationId)
+      .select("picking_bin_kg, case_kg")
+      .single();
+
+    if (error) {
+      return sendSafeError(res, 500, "Failed to update bin settings.", "Bin settings update error:", error);
+    }
+
+    return res.json(data);
+  }
+
+  const { data, error } = await supabase
+    .from("daily_yield_bin_settings")
+    .insert({ organization_id: organizationId, picking_bin_kg, case_kg, updated_at: now })
+    .select("picking_bin_kg, case_kg")
+    .single();
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to save bin settings.", "Bin settings insert error:", error);
+  }
+
+  return res.status(201).json(data);
 });
 
 export { greenhouseSetupRouter };
