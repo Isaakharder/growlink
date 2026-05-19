@@ -80,7 +80,7 @@ type RowValve = {
 
 type ValveAssignForm = {
   valve_id: string;
-  row_pattern: "all" | "alternate";
+  row_pattern: "all" | "every_other";
   start_row: string;
   end_row: string;
 };
@@ -1662,12 +1662,12 @@ export function GreenhouseSetupPage() {
                       onChange={(event) =>
                         setValveAssignForm((current) => ({
                           ...current,
-                          row_pattern: event.target.value as "all" | "alternate"
+                          row_pattern: event.target.value as "all" | "every_other"
                         }))
                       }
                     >
                       <option value="all">All rows</option>
-                      <option value="alternate">Every other row</option>
+                      <option value="every_other">Every other row</option>
                     </select>
                   </label>
 

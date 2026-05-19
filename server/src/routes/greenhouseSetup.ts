@@ -757,9 +757,11 @@ greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
 
   const valveId = typeof body.valve_id === "string" ? body.valve_id.trim() : "";
   const groupId = typeof body.group_id === "string" ? body.group_id.trim() : "";
-  const rowPattern = body.row_pattern === "alternate" ? "alternate" : "all";
+  const rowPattern = body.row_pattern === "every_other" ? "every_other" : "all";
   const startRow = typeof body.start_row === "number" ? body.start_row : Number(body.start_row);
   const endRow = typeof body.end_row === "number" ? body.end_row : Number(body.end_row);
+
+  console.log("[row-valves] assign request:", { valveId, groupId, rowPattern, startRow, endRow });
 
   if (!valveId) return res.status(400).json({ message: "valve_id is required" });
   if (!Number.isInteger(startRow) || startRow < 1) return res.status(400).json({ message: "start_row must be a positive integer" });
@@ -774,6 +776,7 @@ greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
     .single();
 
   if (valveError || !valveData) {
+    console.log("[row-valves] valve lookup failed:", valveError?.message);
     return res.status(400).json({ message: "Valve not found" });
   }
 
@@ -790,22 +793,27 @@ greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
   const { data: fetchedRows, error: rowsError } = await rowQuery;
 
   if (rowsError) {
+    console.log("[row-valves] row fetch failed:", rowsError.message);
     return sendSafeError(res, 500, "Failed to look up rows.", "Row-valve rows fetch error:", rowsError);
   }
 
+  console.log("[row-valves] rows found before filter:", fetchedRows?.length ?? 0);
+
   if (!fetchedRows || fetchedRows.length === 0) {
-    return res.status(400).json({ message: "No rows found in the selected range" });
+    return res.status(400).json({ message: "No rows found in the selected range." });
   }
 
   // Apply every-other-row filter: keep rows whose row_number has the same
   // parity as startRow (so start=1 → odd rows; start=2 → even rows).
   const targetRows =
-    rowPattern === "alternate"
+    rowPattern === "every_other"
       ? fetchedRows.filter((r) => r.row_number % 2 === startRow % 2)
       : fetchedRows;
 
+  console.log("[row-valves] rows after pattern filter:", targetRows.length, `(pattern=${rowPattern})`);
+
   if (targetRows.length === 0) {
-    return res.status(400).json({ message: "No rows matched the selected pattern in this range" });
+    return res.status(400).json({ message: "No rows matched the selected pattern in this range." });
   }
 
   const now = new Date().toISOString();
@@ -821,9 +829,11 @@ greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
     .upsert(upsertRows, { onConflict: "organization_id,row_id" });
 
   if (upsertError) {
+    console.log("[row-valves] upsert failed:", upsertError.message, upsertError.details, upsertError.hint);
     return sendSafeError(res, 500, "Failed to assign rows to valve.", "Row-valve upsert error:", upsertError);
   }
 
+  console.log("[row-valves] assigned", targetRows.length, "rows to valve", valveId);
   return res.status(201).json({ assigned: targetRows.length });
 });
 
