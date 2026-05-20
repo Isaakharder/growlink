@@ -50,6 +50,16 @@ type EmployeeReport = {
   checkCount: number;
 };
 
+type EmployeeTrend = {
+  employee_id: string;
+  name: string;
+  checkCount: number;
+  earlierPct: number;
+  recentPct: number;
+  diffPct: number;
+  status: "improving" | "worsening" | "stable" | "insufficient";
+};
+
 type ActiveTab = "reports" | "setup";
 
 function safeRate(issues: number, stems: number): number {
@@ -82,6 +92,10 @@ export function QualityCheckPage() {
   const [thresholdSaving, setThresholdSaving] = useState(false);
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+
+  const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
+  const [editingEmployeeName, setEditingEmployeeName] = useState("");
+  const [editingSaving, setEditingSaving] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -161,6 +175,58 @@ export function QualityCheckPage() {
     [employeeReports, thresholdRate]
   );
 
+  const trendData = useMemo((): EmployeeTrend[] => {
+    // Group checks by employee, sorted by checked_at ascending.
+    const byEmployee = new Map<string, typeof checks>();
+    for (const chk of checks) {
+      if (!byEmployee.has(chk.employee_id)) byEmployee.set(chk.employee_id, []);
+      byEmployee.get(chk.employee_id)!.push(chk);
+    }
+    for (const arr of byEmployee.values()) {
+      arr.sort((a, b) => a.checked_at.localeCompare(b.checked_at));
+    }
+
+    const results: EmployeeTrend[] = [];
+    for (const [employee_id, empChecks] of byEmployee.entries()) {
+      const emp = employees.find((e) => e.id === employee_id);
+      const name = emp?.name ?? "Unknown";
+      const n = empChecks.length;
+
+      if (n < 2) {
+        results.push({ employee_id, name, checkCount: n, earlierPct: 0, recentPct: 0, diffPct: 0, status: "insufficient" });
+        continue;
+      }
+
+      const splitIdx = Math.ceil(n / 2);
+      const earlier = empChecks.slice(0, splitIdx);
+      const recent = empChecks.slice(splitIdx);
+
+      const earlierRate = safeRate(
+        earlier.reduce((s, c) => s + c.total_issues, 0),
+        earlier.reduce((s, c) => s + c.stems_checked, 0)
+      );
+      const recentRate = safeRate(
+        recent.reduce((s, c) => s + c.total_issues, 0),
+        recent.reduce((s, c) => s + c.stems_checked, 0)
+      );
+
+      const earlierPct = earlierRate * 100;
+      const recentPct = recentRate * 100;
+      const diffPct = recentPct - earlierPct;
+
+      let status: EmployeeTrend["status"];
+      if (Math.abs(diffPct) < 0.5) status = "stable";
+      else if (diffPct < 0) status = "improving";
+      else status = "worsening";
+
+      results.push({ employee_id, name, checkCount: n, earlierPct, recentPct, diffPct, status });
+    }
+
+    // Sort: worsening first, then stable, then improving, then insufficient.
+    const order = { worsening: 0, stable: 1, improving: 2, insufficient: 3 };
+    return results.sort((a, b) => order[a.status] - order[b.status]);
+  }, [checks, employees]);
+
   // ── Setup handlers ────────────────────────────────────────────────────────
 
   async function addEmployee(e: FormEvent) {
@@ -198,6 +264,75 @@ export function QualityCheckPage() {
       await load();
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : "Failed to update employee");
+    }
+  }
+
+  function startEditEmployee(emp: QualityEmployee) {
+    setEditingEmployeeId(emp.id);
+    setEditingEmployeeName(emp.name);
+  }
+
+  function cancelEditEmployee() {
+    setEditingEmployeeId(null);
+    setEditingEmployeeName("");
+  }
+
+  async function saveEditEmployee(empId: string) {
+    const name = editingEmployeeName.trim();
+    if (!name) return;
+    setEditingSaving(true);
+    setSetupError(null);
+    try {
+      const res = await apiFetch(`/api/quality/employees/${empId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) throw new Error("Failed to rename employee");
+      cancelEditEmployee();
+      await load();
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : "Failed to rename employee");
+    } finally {
+      setEditingSaving(false);
+    }
+  }
+
+  async function deleteEmployee(emp: QualityEmployee) {
+    const hasRecords = checks.some((c) => c.employee_id === emp.id);
+    const msg = hasRecords
+      ? `"${emp.name}" has quality check records and will be archived (deactivated). Continue?`
+      : `Delete "${emp.name}"? This cannot be undone.`;
+    if (!window.confirm(msg)) return;
+    setSetupError(null);
+    try {
+      const res = await apiFetch(`/api/quality/employees/${emp.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to remove employee");
+      }
+      await load();
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : "Failed to remove employee");
+    }
+  }
+
+  async function permanentDeleteEmployee(emp: QualityEmployee) {
+    const checkCount = checks.filter((c) => c.employee_id === emp.id).length;
+    const msg =
+      `This will permanently delete "${emp.name}"` +
+      (checkCount > 0 ? ` and all ${checkCount} quality check record${checkCount !== 1 ? "s" : ""} for them` : "") +
+      `. This cannot be undone. Continue?`;
+    if (!window.confirm(msg)) return;
+    setSetupError(null);
+    try {
+      const res = await apiFetch(`/api/quality/employees/${emp.id}/permanent`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to permanently delete employee");
+      }
+      await load();
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : "Failed to permanently delete employee");
     }
   }
 
@@ -354,6 +489,71 @@ export function QualityCheckPage() {
                 </ResponsiveContainer>
               </div>
 
+              {/* Trend card */}
+              <div className="coming-soon-card" style={{ marginBottom: "1rem" }}>
+                <h2 style={{ marginBottom: "0.25rem" }}>Quality Trend by Employee</h2>
+                <p style={{ fontSize: "0.8em", color: "var(--text-muted)", marginBottom: "0.85rem" }}>
+                  Compares each employee's earlier checks against their recent checks. Lower issue rate is better.
+                </p>
+                <div className="varieties-table-wrapper">
+                  <table className="varieties-table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th style={{ textAlign: "right" }}>Checks</th>
+                        <th style={{ textAlign: "right" }}>Earlier rate</th>
+                        <th style={{ textAlign: "right" }}>Recent rate</th>
+                        <th style={{ textAlign: "right" }}>Change</th>
+                        <th style={{ textAlign: "center" }}>Trend</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trendData.map((t) => {
+                        const badgeStyle: React.CSSProperties = {
+                          display: "inline-block",
+                          padding: "0.2rem 0.6rem",
+                          borderRadius: "999px",
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          background:
+                            t.status === "improving" ? "#d1e7dd"
+                            : t.status === "worsening" ? "#f8d7da"
+                            : "#e9ecef",
+                          color:
+                            t.status === "improving" ? "#0a3622"
+                            : t.status === "worsening" ? "#842029"
+                            : "#495057"
+                        };
+                        const label =
+                          t.status === "improving" ? "Improving ↓"
+                          : t.status === "worsening" ? "Getting worse ↑"
+                          : t.status === "stable" ? "Stable"
+                          : "Need more checks";
+                        const diffSign = t.diffPct > 0 ? "+" : "";
+                        return (
+                          <tr key={t.employee_id}>
+                            <td>{t.name}</td>
+                            <td style={{ textAlign: "right" }}>{t.checkCount}</td>
+                            <td style={{ textAlign: "right" }}>
+                              {t.status === "insufficient" ? "–" : `${t.earlierPct.toFixed(1)}%`}
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              {t.status === "insufficient" ? "–" : `${t.recentPct.toFixed(1)}%`}
+                            </td>
+                            <td style={{ textAlign: "right", color: t.status === "improving" ? "#0a3622" : t.status === "worsening" ? "#842029" : "var(--text-muted)" }}>
+                              {t.status === "insufficient" ? "–" : `${diffSign}${t.diffPct.toFixed(1)}%`}
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <span style={badgeStyle}>{label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               {/* Detail table */}
               <div className="coming-soon-card">
                 <h2 style={{ marginBottom: "0.75rem" }}>Employee Summary</h2>
@@ -367,11 +567,13 @@ export function QualityCheckPage() {
                         <th style={{ textAlign: "right" }}>Stems Checked</th>
                         <th style={{ textAlign: "right" }}>Issue Rate</th>
                         <th style={{ textAlign: "center" }}>Status</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {employeeReports.map((r) => {
                         const isOver = r.issueRate >= thresholdRate;
+                        const emp = employees.find((e) => e.id === r.employee_id);
                         return (
                           <tr key={r.employee_id}>
                             <td>{r.name}</td>
@@ -393,6 +595,28 @@ export function QualityCheckPage() {
                               >
                                 {isOver ? "Over threshold" : "Good"}
                               </span>
+                            </td>
+                            <td>
+                              {emp ? (
+                                <div className="row-actions">
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                                    onClick={() => startEditEmployee(emp)}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="danger"
+                                    style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                                    onClick={() => void deleteEmployee(emp)}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              ) : null}
                             </td>
                           </tr>
                         );
@@ -427,23 +651,92 @@ export function QualityCheckPage() {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
+                      gap: "0.5rem",
                       padding: "0.45rem 0.65rem",
                       border: "1px solid var(--border)",
                       borderRadius: "8px",
                       background: emp.active ? "var(--surface)" : "var(--surface-soft)"
                     }}
                   >
-                    <span style={{ fontSize: "0.9em", color: emp.active ? "var(--text)" : "var(--text-muted)" }}>
-                      {emp.name}
-                    </span>
-                    <button
-                      type="button"
-                      className="secondary"
-                      style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
-                      onClick={() => void toggleEmployee(emp)}
-                    >
-                      {emp.active ? "Deactivate" : "Activate"}
-                    </button>
+                    {editingEmployeeId === emp.id ? (
+                      <>
+                        <input
+                          type="text"
+                          value={editingEmployeeName}
+                          onChange={(e) => setEditingEmployeeName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void saveEditEmployee(emp.id);
+                            if (e.key === "Escape") cancelEditEmployee();
+                          }}
+                          style={{ flex: 1, fontSize: "0.9em" }}
+                          autoFocus
+                        />
+                        <div style={{ display: "flex", gap: "0.35rem", flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            className="secondary"
+                            style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                            onClick={() => void saveEditEmployee(emp.id)}
+                            disabled={editingSaving || !editingEmployeeName.trim()}
+                          >
+                            {editingSaving ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                            onClick={cancelEditEmployee}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: "0.9em", color: emp.active ? "var(--text)" : "var(--text-muted)", flex: 1 }}>
+                          {emp.name}
+                          {!emp.active ? (
+                            <span style={{ marginLeft: "0.4rem", fontSize: "0.8em", color: "var(--text-muted)" }}>
+                              (inactive)
+                            </span>
+                          ) : null}
+                        </span>
+                        <div style={{ display: "flex", gap: "0.35rem", flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            className="secondary"
+                            style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                            onClick={() => startEditEmployee(emp)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                            onClick={() => void deleteEmployee(emp)}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem", opacity: 0.75 }}
+                            onClick={() => void permanentDeleteEmployee(emp)}
+                          >
+                            Delete permanently
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                            onClick={() => void toggleEmployee(emp)}
+                          >
+                            {emp.active ? "Deactivate" : "Activate"}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

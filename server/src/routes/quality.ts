@@ -50,6 +50,75 @@ router.patch("/quality/employees/:id", async (req, res) => {
   return res.json(data);
 });
 
+router.delete("/quality/employees/:id", async (req, res) => {
+  const orgId = req.organizationId;
+  const { id } = req.params;
+
+  const { data: emp, error: empError } = await supabase
+    .from("quality_employees")
+    .select("id")
+    .eq("id", id)
+    .eq("organization_id", orgId)
+    .maybeSingle();
+  if (empError) return sendSafeError(res, 500, "Failed to look up employee.", "quality employee delete lookup:", empError);
+  if (!emp) return res.status(404).json({ message: "Employee not found" });
+
+  const { count, error: countError } = await supabase
+    .from("quality_checks")
+    .select("id", { count: "exact", head: true })
+    .eq("employee_id", id)
+    .eq("organization_id", orgId);
+  if (countError) return sendSafeError(res, 500, "Failed to check records.", "quality employee record count:", countError);
+
+  if (count && count > 0) {
+    const { error: archiveError } = await supabase
+      .from("quality_employees")
+      .update({ active: false })
+      .eq("id", id)
+      .eq("organization_id", orgId);
+    if (archiveError) return sendSafeError(res, 500, "Failed to archive employee.", "quality employee archive:", archiveError);
+    return res.json({ archived: true });
+  }
+
+  const { error: deleteError } = await supabase
+    .from("quality_employees")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", orgId);
+  if (deleteError) return sendSafeError(res, 500, "Failed to delete employee.", "quality employee delete:", deleteError);
+  return res.json({ deleted: true });
+});
+
+router.delete("/quality/employees/:id/permanent", async (req, res) => {
+  const orgId = req.organizationId;
+  const { id } = req.params;
+
+  const { data: emp, error: empError } = await supabase
+    .from("quality_employees")
+    .select("id")
+    .eq("id", id)
+    .eq("organization_id", orgId)
+    .maybeSingle();
+  if (empError) return sendSafeError(res, 500, "Failed to look up employee.", "quality employee permanent delete lookup:", empError);
+  if (!emp) return res.status(404).json({ message: "Employee not found" });
+
+  const { error: checksError } = await supabase
+    .from("quality_checks")
+    .delete()
+    .eq("employee_id", id)
+    .eq("organization_id", orgId);
+  if (checksError) return sendSafeError(res, 500, "Failed to delete check records.", "quality employee checks delete:", checksError);
+
+  const { error: empDeleteError } = await supabase
+    .from("quality_employees")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", orgId);
+  if (empDeleteError) return sendSafeError(res, 500, "Failed to delete employee.", "quality employee permanent delete:", empDeleteError);
+
+  return res.json({ deleted: true });
+});
+
 // ── Metrics ────────────────────────────────────────────────────────────────
 
 router.get("/quality/metrics", async (req, res) => {
