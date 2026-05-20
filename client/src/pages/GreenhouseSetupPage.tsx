@@ -133,6 +133,27 @@ type VarietyAreaSummary = {
   slabs: number;
 };
 
+type GroupedVarietySummary = {
+  varietyId: string;
+  varietyName: string;
+  varietyColor: string;
+  rowDisplay: string;
+  totalRowCount: number;
+  totalM2: number;
+  totalFt2: number;
+  totalPlants: number;
+  totalSlabs: number;
+  assignments: VarietyAreaSummary[];
+};
+
+type GroupedValveLink = {
+  valveId: string;
+  valveName: string;
+  rowNumbers: number[];
+  rowDisplay: string;
+  rvIds: string[];
+};
+
 type AssignmentFormState = {
   group_id: string;
   variety_id: string;
@@ -239,6 +260,25 @@ function formatAssignmentRange(assignment: GreenhouseVarietyAssignment) {
   return getAssignmentPattern(assignment) === "every_other"
     ? `${rangeLabel} every other`
     : rangeLabel;
+}
+
+function compressRowNumbers(rowNumbers: number[]): string {
+  if (rowNumbers.length === 0) return "";
+  const sorted = [...new Set(rowNumbers)].sort((a, b) => a - b);
+  const ranges: string[] = [];
+  let rangeStart = sorted[0];
+  let rangeEnd = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === rangeEnd + 1) {
+      rangeEnd = sorted[i];
+    } else {
+      ranges.push(rangeStart === rangeEnd ? String(rangeStart) : `${rangeStart}–${rangeEnd}`);
+      rangeStart = sorted[i];
+      rangeEnd = sorted[i];
+    }
+  }
+  ranges.push(rangeStart === rangeEnd ? String(rangeStart) : `${rangeStart}–${rangeEnd}`);
+  return ranges.join(", ");
 }
 
 function getAssignmentTotalRows(assignment: GreenhouseVarietyAssignment) {
@@ -443,6 +483,86 @@ export function GreenhouseSetupPage() {
         };
       });
   }, [varietyAssignments, selectedGroupId, rowsByGroupAndNumber, varietiesById]);
+
+  const groupedVarietyAreaSummaries = useMemo((): GroupedVarietySummary[] => {
+    const orderMap = new Map<string, number>();
+    const groupMap = new Map<string, GroupedVarietySummary>();
+
+    for (const summary of varietyAreaSummaries) {
+      if (!groupMap.has(summary.varietyId)) {
+        orderMap.set(summary.varietyId, orderMap.size);
+        groupMap.set(summary.varietyId, {
+          varietyId: summary.varietyId,
+          varietyName: summary.varietyName,
+          varietyColor: summary.varietyColor,
+          rowDisplay: "",
+          totalRowCount: 0,
+          totalM2: 0,
+          totalFt2: 0,
+          totalPlants: 0,
+          totalSlabs: 0,
+          assignments: []
+        });
+      }
+      const grp = groupMap.get(summary.varietyId)!;
+      grp.totalM2 = roundTo(grp.totalM2 + summary.m2, 2);
+      grp.totalFt2 = roundTo(grp.totalFt2 + summary.ft2, 1);
+      grp.totalPlants += summary.plants;
+      grp.totalSlabs += summary.slabs;
+      grp.assignments.push(summary);
+    }
+
+    // Collect actual row numbers per variety and compress into display string.
+    const groupRows = rowsByGroupAndNumber[selectedGroupId ?? ""] ?? {};
+    for (const grp of groupMap.values()) {
+      const allRowNumbers: number[] = [];
+      for (const summary of grp.assignments) {
+        const assignment = selectedGroupAssignments.find((a) => a.id === summary.assignmentId);
+        if (!assignment) continue;
+        const step = getAssignmentPattern(assignment) === "every_other" ? 2 : 1;
+        for (let r = assignment.start_row; r <= assignment.end_row; r += step) {
+          if (groupRows[r]) allRowNumbers.push(r);
+        }
+      }
+      grp.rowDisplay = compressRowNumbers(allRowNumbers);
+      grp.totalRowCount = new Set(allRowNumbers).size;
+    }
+
+    return [...groupMap.values()].sort(
+      (a, b) => (orderMap.get(a.varietyId) ?? 0) - (orderMap.get(b.varietyId) ?? 0)
+    );
+  }, [varietyAreaSummaries, selectedGroupAssignments, rowsByGroupAndNumber, selectedGroupId]);
+
+  const groupedValveLinks = useMemo((): GroupedValveLink[] => {
+    const orderMap = new Map<string, number>();
+    const groupMap = new Map<string, GroupedValveLink>();
+
+    for (const rv of rowValves) {
+      if (!groupMap.has(rv.valve_id)) {
+        orderMap.set(rv.valve_id, orderMap.size);
+        const valve = valves.find((v) => v.id === rv.valve_id);
+        groupMap.set(rv.valve_id, {
+          valveId: rv.valve_id,
+          valveName: valve?.name ?? rv.valve_id,
+          rowNumbers: [],
+          rowDisplay: "",
+          rvIds: []
+        });
+      }
+      const grp = groupMap.get(rv.valve_id)!;
+      const row = rows.find((r) => r.id === rv.row_id);
+      if (row) grp.rowNumbers.push(row.row_number);
+      grp.rvIds.push(rv.id);
+    }
+
+    for (const grp of groupMap.values()) {
+      grp.rowDisplay = compressRowNumbers(grp.rowNumbers);
+    }
+
+    return [...groupMap.values()].sort(
+      (a, b) => (orderMap.get(a.valveId) ?? 0) - (orderMap.get(b.valveId) ?? 0)
+    );
+  }, [rowValves, valves, rows]);
 
   const isRowsExpanded = selectedGroupId
     ? expandedRowsByGroupId[selectedGroupId] === true
@@ -1097,6 +1217,18 @@ export function GreenhouseSetupPage() {
     await fetchSetup();
   }
 
+  async function removeAllValveLinks(rvIds: string[]) {
+    setError(null);
+    for (const id of rvIds) {
+      const res = await apiFetch(`/api/greenhouse/row-valves/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        setError("Failed to remove some links. Refresh to see current state.");
+        break;
+      }
+    }
+    await fetchSetup();
+  }
+
   return (
     <section className="page-shell">
       <header>
@@ -1361,45 +1493,47 @@ export function GreenhouseSetupPage() {
             ) : null}
 
             {selectedGroup && selectedGroupAssignments.length > 0 ? (
-              <div className="varieties-table-wrapper">
-                <table className="varieties-table">
-                  <thead>
-                    <tr>
-                      <th>Variety</th>
-                      <th>Color</th>
-                      <th>Row range</th>
-                      <th>m²</th>
-                      <th>ft²</th>
-                      <th>Plants</th>
-                      <th>Slabs</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {varietyAreaSummaries.map((summary) => {
-                      const assignment = selectedGroupAssignments.find(
-                        (a) => a.id === summary.assignmentId
-                      );
-                      if (!assignment) return null;
+              <div className="variety-card-list">
+                {groupedVarietyAreaSummaries.map((grp) => (
+                  <div key={grp.varietyId} className="variety-card">
+                    <div className="variety-card-info">
+                      <div className="variety-card-header">
+                        {grp.varietyColor ? (
+                          <span className={`color-badge ${grp.varietyColor}`}>
+                            {grp.varietyColor}
+                          </span>
+                        ) : null}
+                        <span className="variety-card-name">{grp.varietyName}</span>
+                      </div>
+                      <div className="variety-card-rows">
+                        {grp.rowDisplay || "–"}
+                        {grp.totalRowCount > 0 ? (
+                          <span className="variety-card-count">
+                            ({grp.totalRowCount} rows)
+                          </span>
+                        ) : null}
+                      </div>
+                      {grp.totalM2 > 0 || grp.totalPlants > 0 || grp.totalSlabs > 0 ? (
+                        <div className="variety-card-stats">
+                          {grp.totalM2 > 0 ? <span>{grp.totalM2} m²</span> : null}
+                          {grp.totalFt2 > 0 ? <span>{grp.totalFt2} ft²</span> : null}
+                          {grp.totalPlants > 0 ? (
+                            <span>{grp.totalPlants} plants</span>
+                          ) : null}
+                          {grp.totalSlabs > 0 ? (
+                            <span>{grp.totalSlabs} slabs</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
 
-                      return (
-                        <tr key={summary.assignmentId}>
-                          <td>{summary.varietyName}</td>
-                          <td>
-                            {summary.varietyColor ? (
-                              <span className={`color-badge ${summary.varietyColor}`}>
-                                {summary.varietyColor}
-                              </span>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                          <td>{summary.rowRange}</td>
-                          <td>{summary.m2 > 0 ? summary.m2 : "-"}</td>
-                          <td>{summary.ft2 > 0 ? summary.ft2 : "-"}</td>
-                          <td>{summary.plants > 0 ? summary.plants : "-"}</td>
-                          <td>{summary.slabs > 0 ? summary.slabs : "-"}</td>
-                          <td>
+                    <div className="variety-card-actions">
+                      {grp.assignments.length === 1 ? (
+                        (() => {
+                          const assignment = selectedGroupAssignments.find(
+                            (a) => a.id === grp.assignments[0].assignmentId
+                          );
+                          return assignment ? (
                             <div className="row-actions">
                               <button
                                 type="button"
@@ -1420,12 +1554,51 @@ export function GreenhouseSetupPage() {
                                 Delete
                               </button>
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          ) : null;
+                        })()
+                      ) : (
+                        <div className="variety-card-multi-actions">
+                          {grp.assignments.map((summary) => {
+                            const assignment = selectedGroupAssignments.find(
+                              (a) => a.id === summary.assignmentId
+                            );
+                            if (!assignment) return null;
+                            return (
+                              <div
+                                key={summary.assignmentId}
+                                className="variety-card-action-row"
+                              >
+                                <span className="variety-card-action-label">
+                                  {summary.rowRange}:
+                                </span>
+                                <div className="row-actions">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditAssignmentModal(assignment)}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="danger"
+                                    onClick={() =>
+                                      void deleteItem(
+                                        `${ASSIGNMENTS_URL}/${assignment.id}`,
+                                        "variety assignment"
+                                      )
+                                    }
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
@@ -1719,42 +1892,35 @@ export function GreenhouseSetupPage() {
             {rowValves.length === 0 ? (
               <p>No row-valve links yet.</p>
             ) : (
-              <div className="varieties-table-wrapper">
-                <table className="varieties-table valve-linked-table">
-                  <thead>
-                    <tr>
-                      <th>Group</th>
-                      <th>Row #</th>
-                      <th>Valve</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rowValves.map((rv) => {
-                      const valve = valves.find((v) => v.id === rv.valve_id);
-                      const row = rows.find((r) => r.id === rv.row_id);
-                      const group = row ? groups.find((g) => g.id === row.group_id) : undefined;
-                      return (
-                        <tr key={rv.id}>
-                          <td>{group?.name ?? "-"}</td>
-                          <td>{row?.row_number ?? "-"}</td>
-                          <td>{valve?.name ?? rv.valve_id}</td>
-                          <td>
-                            <div className="row-actions">
-                              <button
-                                type="button"
-                                className="danger"
-                                onClick={() => void removeRowValve(rv.id)}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="variety-card-list">
+                {groupedValveLinks.map((grp) => (
+                  <div key={grp.valveId} className="variety-card">
+                    <div className="variety-card-info">
+                      <div className="variety-card-header">
+                        <span className="variety-card-name">{grp.valveName}</span>
+                      </div>
+                      <div className="variety-card-rows">
+                        {grp.rowDisplay || "–"}
+                        {grp.rowNumbers.length > 0 ? (
+                          <span className="variety-card-count">
+                            ({grp.rowNumbers.length} rows)
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="variety-card-actions">
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void removeAllValveLinks(grp.rvIds)}
+                        >
+                          Remove all ({grp.rvIds.length})
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

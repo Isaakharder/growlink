@@ -102,6 +102,21 @@ function rowAreaM2(row: SetupRow): number {
   return (row.width_meters ?? 0) * (row.length_meters ?? 0);
 }
 
+function computeChemicalMl(m2: number, rate: number, rateUnit: RateUnit): number {
+  const acres = m2 * M2_TO_ACRES;
+  const ha = m2 * M2_TO_HECTARES;
+  switch (rateUnit) {
+    case "ml_per_acre":    return rate * acres;
+    case "L_per_acre":     return rate * acres * 1000;
+    case "ml_per_hectare": return rate * ha;
+    case "L_per_hectare":  return rate * ha * 1000;
+    case "g_per_acre":     return rate * acres;
+    case "kg_per_acre":    return rate * acres * 1000;
+    case "g_per_hectare":  return rate * ha;
+    case "kg_per_hectare": return rate * ha * 1000;
+  }
+}
+
 export function PestPlannerPage() {
   const [groups, setGroups] = useState<SetupGroup[]>([]);
   const [rows, setRows] = useState<SetupRow[]>([]);
@@ -401,6 +416,28 @@ export function PestPlannerPage() {
 
     return { ml, L: ml / 1000, areaLabel, isDry, unit: isDry ? "g" : "ml", unitLarge: isDry ? "kg" : "L" };
   }, [rateValue, rateUnit, totalM2]);
+
+  const perValveBreakdown = useMemo(() => {
+    if (targetMode !== "valve" || selectedValveIds.length === 0) return [];
+    if (!chemicalNeededResult) return [];
+    const rate = Number(rateValue);
+    if (!Number.isFinite(rate) || rate <= 0) return [];
+
+    return selectedValveIds.map((valveId) => {
+      const valve = feedValves.find((v) => v.id === valveId);
+      const valveName = valve?.name ?? "Unknown";
+      const valveRows = rowValves
+        .filter((rv) => rv.valve_id === valveId)
+        .map((rv) => rowById[rv.row_id])
+        .filter((r): r is SetupRow => r !== undefined);
+      if (valveRows.length === 0) {
+        return { valveId, valveName, hasRows: false, m2: 0, ml: 0 };
+      }
+      const m2 = valveRows.reduce((sum, r) => sum + rowAreaM2(r), 0);
+      const ml = computeChemicalMl(m2, rate, rateUnit);
+      return { valveId, valveName, hasRows: true, m2, ml };
+    });
+  }, [targetMode, selectedValveIds, feedValves, rowValves, rowById, rateValue, rateUnit, chemicalNeededResult]);
 
   // ── Sprayer derivations ────────────────────────────────────────────────────
 
@@ -865,6 +902,65 @@ export function PestPlannerPage() {
                 : "Enter an application rate to calculate product needed."}
             </p>
           )}
+
+          {perValveBreakdown.length > 0 && chemicalNeededResult ? (
+            <div
+              style={{
+                marginTop: "0.75rem",
+                borderTop: "1px solid var(--border)",
+                paddingTop: "0.6rem"
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "0.7rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: "var(--text-muted)",
+                  margin: "0 0 0.45rem"
+                }}
+              >
+                By valve
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                {perValveBreakdown.map((item) => (
+                  <div
+                    key={item.valveId}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      gap: "0.5rem",
+                      fontSize: "0.85rem"
+                    }}
+                  >
+                    <span style={{ color: "var(--text-muted)" }}>{item.valveName}</span>
+                    {item.hasRows ? (
+                      <span>
+                        <strong>
+                          {roundTo(item.ml, 1).toLocaleString()} {chemicalNeededResult.unit}
+                        </strong>
+                        <span
+                          style={{
+                            fontSize: "0.78em",
+                            color: "var(--text-muted)",
+                            marginLeft: "0.3rem"
+                          }}
+                        >
+                          ({roundTo(item.m2, 1)} m²)
+                        </span>
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: "0.8em", color: "var(--text-muted)" }}>
+                        No linked rows
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* ── 2. Chemical Details ─────────────────────── */}
