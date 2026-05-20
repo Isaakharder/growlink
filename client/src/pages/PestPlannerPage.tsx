@@ -315,6 +315,37 @@ export function PestPlannerPage() {
     [selectedValveIds, feedValves]
   );
 
+  // ── Valve selection ────────────────────────────────────────────────────────
+
+  const selectAllValvesRef = useRef<HTMLInputElement>(null);
+
+  const valveIdsWithRows = useMemo(
+    () => new Set(rowValves.map((rv) => rv.valve_id)),
+    [rowValves]
+  );
+
+  const allValvesSelected = feedValves.length > 0 && selectedValveIds.length === feedValves.length;
+  const someValvesSelected = selectedValveIds.length > 0 && selectedValveIds.length < feedValves.length;
+
+  useEffect(() => {
+    if (selectAllValvesRef.current) {
+      selectAllValvesRef.current.indeterminate = someValvesSelected;
+    }
+  }, [someValvesSelected]);
+
+  function toggleValve(id: string) {
+    setSelectedValveIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return Array.from(next);
+    });
+  }
+
+  function toggleAllValves() {
+    if (allValvesSelected) setSelectedValveIds([]);
+    else setSelectedValveIds(feedValves.map((v) => v.id));
+  }
+
   // ── Application rate calculation ───────────────────────────────────────────
 
   const chemicalNeededResult = useMemo(() => {
@@ -688,145 +719,9 @@ export function PestPlannerPage() {
 
       {/* ── 3-card top row ───────────────────────────────── */}
       <div className="pest-planner-card-grid">
-        {/* ── 1. Target Area ──────────────────────────── */}
+        {/* ── 1. Application Details ──────────────────── */}
         <div className="coming-soon-card">
-          <h2>1. Target Area</h2>
-
-          {groups.length === 0 ? (
-            <p>No greenhouse groups configured. Add groups in Greenhouse Setup.</p>
-          ) : (
-            <>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  marginTop: "0.75rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  fontSize: "0.9em"
-                }}
-              >
-                <input
-                  ref={selectAllRef}
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleAll}
-                />
-                All greenhouse groups
-              </label>
-
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.25rem",
-                  paddingLeft: "0.25rem",
-                  marginTop: "0.35rem",
-                  maxHeight: "160px",
-                  overflowY: "auto"
-                }}
-              >
-                {groups.map((g) => (
-                  <label
-                    key={g.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.4rem",
-                      cursor: "pointer",
-                      fontSize: "0.88em"
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedGroupIdsSet.has(g.id)}
-                      onChange={() => toggleGroup(g.id)}
-                    />
-                    {g.name}
-                    <span style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
-                      {g.type}
-                    </span>
-                  </label>
-                ))}
-              </div>
-
-              {selectedGroupIds.length === 0 ? (
-                <p style={{ marginTop: "0.65rem", fontSize: "0.85em" }}>
-                  Select at least one group.
-                </p>
-              ) : (
-                <>
-                  <p style={{ marginTop: "0.6rem", fontSize: "0.82em" }}>
-                    <strong>
-                      {selectedGroupIds.length} group
-                      {selectedGroupIds.length !== 1 ? "s" : ""} selected
-                    </strong>
-                    {selectedGroupNames.length <= 3
-                      ? `: ${selectedGroupNames.join(", ")}`
-                      : null}
-                  </p>
-
-                  {groupsWithNoDimensions.length > 0 ? (
-                    <p
-                      style={{
-                        marginTop: "0.2rem",
-                        fontSize: "0.78em",
-                        color: "var(--text-muted)"
-                      }}
-                    >
-                      No dimensions for{" "}
-                      {groupsWithNoDimensions.map((g) => g.name).join(", ")}.
-                    </p>
-                  ) : null}
-
-                  {totalM2 > 0 ? (
-                    <div
-                      className="greenhouse-group-stats"
-                      style={{
-                        marginTop: "0.65rem",
-                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
-                      }}
-                    >
-                      <div className="greenhouse-stat-item">
-                        <span className="greenhouse-stat-label">m²</span>
-                        <span className="greenhouse-stat-value">
-                          {roundTo(totalM2, 2).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="greenhouse-stat-item">
-                        <span className="greenhouse-stat-label">ft²</span>
-                        <span className="greenhouse-stat-value">
-                          {roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="greenhouse-stat-item">
-                        <span className="greenhouse-stat-label">ha</span>
-                        <span className="greenhouse-stat-value">
-                          {roundTo(totalM2 * M2_TO_HECTARES, 4)}
-                        </span>
-                      </div>
-                      <div className="greenhouse-stat-item">
-                        <span className="greenhouse-stat-label">acres</span>
-                        <span className="greenhouse-stat-value">
-                          {roundTo(totalM2 * M2_TO_ACRES, 4)}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p style={{ marginTop: "0.5rem", fontSize: "0.82em" }}>
-                      No row dimensions recorded. Add width and length in Greenhouse Setup.
-                    </p>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* ── 2. Application Details ──────────────────── */}
-        <div className="coming-soon-card">
-          <h2>2. Application Details</h2>
+          <h2>1. Application Details</h2>
 
           <div className="varieties-form" style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}>
             <label>
@@ -972,9 +867,9 @@ export function PestPlannerPage() {
           )}
         </div>
 
-        {/* ── 3. Chemical Details ─────────────────────── */}
+        {/* ── 2. Chemical Details ─────────────────────── */}
         <div className="coming-soon-card">
-          <h2>3. Chemical Details</h2>
+          <h2>2. Chemical Details</h2>
 
           {!selectedChemical ? (
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
@@ -1077,6 +972,312 @@ export function PestPlannerPage() {
                 </div>
               ) : null}
             </div>
+          )}
+        </div>
+
+        {/* ── 3. Target Area ──────────────────────────── */}
+        <div className="coming-soon-card">
+          <h2>3. Target Area</h2>
+
+          {/* Mode toggle */}
+          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.75rem" }}>
+            {(["phase", "valve"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setTargetMode(mode)}
+                style={{
+                  padding: "0.3rem 0.85rem",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  background: targetMode === mode ? "var(--brand)" : "var(--surface)",
+                  color: targetMode === mode ? "#fff" : "var(--text)",
+                  fontWeight: targetMode === mode ? 600 : 400,
+                  cursor: "pointer",
+                  fontSize: "0.85em"
+                }}
+              >
+                {mode === "phase" ? "By Phase" : "By Valve"}
+              </button>
+            ))}
+          </div>
+
+          {targetMode === "phase" ? (
+            groups.length === 0 ? (
+              <p style={{ marginTop: "0.65rem" }}>No greenhouse groups configured. Add groups in Greenhouse Setup.</p>
+            ) : (
+              <>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    marginTop: "0.75rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontSize: "0.9em"
+                  }}
+                >
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                  />
+                  All greenhouse groups
+                </label>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.25rem",
+                    paddingLeft: "0.25rem",
+                    marginTop: "0.35rem",
+                    maxHeight: "160px",
+                    overflowY: "auto"
+                  }}
+                >
+                  {groups.map((g) => (
+                    <label
+                      key={g.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        cursor: "pointer",
+                        fontSize: "0.88em"
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedGroupIdsSet.has(g.id)}
+                        onChange={() => toggleGroup(g.id)}
+                      />
+                      {g.name}
+                      <span style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
+                        {g.type}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+
+                {selectedGroupIds.length === 0 ? (
+                  <p style={{ marginTop: "0.65rem", fontSize: "0.85em" }}>
+                    Select at least one group.
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ marginTop: "0.6rem", fontSize: "0.82em" }}>
+                      <strong>
+                        {selectedGroupIds.length} group
+                        {selectedGroupIds.length !== 1 ? "s" : ""} selected
+                      </strong>
+                      {selectedGroupNames.length <= 3
+                        ? `: ${selectedGroupNames.join(", ")}`
+                        : null}
+                    </p>
+
+                    {groupsWithNoDimensions.length > 0 ? (
+                      <p
+                        style={{
+                          marginTop: "0.2rem",
+                          fontSize: "0.78em",
+                          color: "var(--text-muted)"
+                        }}
+                      >
+                        No dimensions for{" "}
+                        {groupsWithNoDimensions.map((g) => g.name).join(", ")}.
+                      </p>
+                    ) : null}
+
+                    {totalM2 > 0 ? (
+                      <div
+                        className="greenhouse-group-stats"
+                        style={{
+                          marginTop: "0.65rem",
+                          gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
+                        }}
+                      >
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">m²</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(totalM2, 2).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">ft²</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">ha</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(totalM2 * M2_TO_HECTARES, 4)}
+                          </span>
+                        </div>
+                        <div className="greenhouse-stat-item">
+                          <span className="greenhouse-stat-label">acres</span>
+                          <span className="greenhouse-stat-value">
+                            {roundTo(totalM2 * M2_TO_ACRES, 4)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p style={{ marginTop: "0.5rem", fontSize: "0.82em" }}>
+                        No row dimensions recorded. Add width and length in Greenhouse Setup.
+                      </p>
+                    )}
+                  </>
+                )}
+              </>
+            )
+          ) : feedValves.length === 0 ? (
+            <p style={{ marginTop: "0.75rem", fontSize: "0.85em" }}>
+              No irrigation valves configured. Add valves in Irrigation Setup first.
+            </p>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  marginTop: "0.75rem"
+                }}
+              >
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontSize: "0.9em",
+                    flex: 1
+                  }}
+                >
+                  <input
+                    ref={selectAllValvesRef}
+                    type="checkbox"
+                    checked={allValvesSelected}
+                    onChange={toggleAllValves}
+                  />
+                  All valves
+                </label>
+                {selectedValveIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="secondary"
+                    style={{ fontSize: "0.78em", padding: "0.2rem 0.5rem" }}
+                    onClick={() => setSelectedValveIds([])}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.25rem",
+                  paddingLeft: "0.25rem",
+                  marginTop: "0.35rem",
+                  maxHeight: "160px",
+                  overflowY: "auto"
+                }}
+              >
+                {feedValves.map((v) => {
+                  const hasRows = valveIdsWithRows.has(v.id);
+                  return (
+                    <label
+                      key={v.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        cursor: hasRows ? "pointer" : "default",
+                        fontSize: "0.88em",
+                        opacity: hasRows ? 1 : 0.55
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedValveIds.includes(v.id)}
+                        disabled={!hasRows}
+                        onChange={() => toggleValve(v.id)}
+                      />
+                      {v.name}
+                      {!hasRows ? (
+                        <span style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
+                          (No rows linked)
+                        </span>
+                      ) : null}
+                    </label>
+                  );
+                })}
+              </div>
+
+              {selectedValveIds.length === 0 ? (
+                <p style={{ marginTop: "0.65rem", fontSize: "0.85em" }}>
+                  Select at least one valve.
+                </p>
+              ) : (
+                <>
+                  <p style={{ marginTop: "0.6rem", fontSize: "0.82em" }}>
+                    <strong>
+                      {selectedValveIds.length} valve
+                      {selectedValveIds.length !== 1 ? "s" : ""} selected
+                    </strong>
+                    {selectedValveNames.length <= 3
+                      ? `: ${selectedValveNames.join(", ")}`
+                      : null}
+                  </p>
+
+                  {totalM2 > 0 ? (
+                    <div
+                      className="greenhouse-group-stats"
+                      style={{
+                        marginTop: "0.65rem",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))"
+                      }}
+                    >
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">m²</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2, 2).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">ft²</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">ha</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2 * M2_TO_HECTARES, 4)}
+                        </span>
+                      </div>
+                      <div className="greenhouse-stat-item">
+                        <span className="greenhouse-stat-label">acres</span>
+                        <span className="greenhouse-stat-value">
+                          {roundTo(totalM2 * M2_TO_ACRES, 4)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ marginTop: "0.5rem", fontSize: "0.82em" }}>
+                      No row dimensions recorded for the linked rows. Add width and length in
+                      Greenhouse Setup.
+                    </p>
+                  )}
+                </>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1204,9 +1405,9 @@ export function PestPlannerPage() {
                       Spray Run Estimate
                     </p>
 
-                    {selectedGroupIds.length === 0 ? (
+                    {!hasTargetArea ? (
                       <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
-                        Select target area in step 1.
+                        Select target area in step 3.
                       </p>
                     ) : totalRowLengthMeters === 0 ? (
                       <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
