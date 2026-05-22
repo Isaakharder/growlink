@@ -262,6 +262,37 @@ router.post("/quality/checks", async (req, res) => {
   const row_id =
     typeof body.row_id === "string" && body.row_id ? body.row_id : null;
 
+  const { data: emp, error: empError } = await supabase
+    .from("quality_employees")
+    .select("id")
+    .eq("id", employee_id)
+    .eq("organization_id", orgId)
+    .maybeSingle();
+  if (empError) return sendSafeError(res, 500, "Failed to validate employee.", "quality check employee lookup:", empError);
+  if (!emp) return res.status(400).json({ message: "Employee not found" });
+
+  if (phase_id) {
+    const { data: phase, error: phaseError } = await supabase
+      .from("greenhouse_groups")
+      .select("id")
+      .eq("id", phase_id)
+      .eq("organization_id", orgId)
+      .maybeSingle();
+    if (phaseError) return sendSafeError(res, 500, "Failed to validate phase.", "quality check phase lookup:", phaseError);
+    if (!phase) return res.status(400).json({ message: "Phase not found" });
+  }
+
+  if (row_id) {
+    const { data: row, error: rowError } = await supabase
+      .from("greenhouse_rows")
+      .select("id")
+      .eq("id", row_id)
+      .eq("organization_id", orgId)
+      .maybeSingle();
+    if (rowError) return sendSafeError(res, 500, "Failed to validate row.", "quality check row lookup:", rowError);
+    if (!row) return res.status(400).json({ message: "Row not found" });
+  }
+
   const { data, error } = await supabase
     .from("quality_checks")
     .insert({

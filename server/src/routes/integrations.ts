@@ -177,9 +177,11 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
   const weeklyTotals: DocklinkWeeklyColorTotal[] = [];
   let skippedRows = 0;
 
+  // Filter at the database level — never fetch another org's rows.
   const { data: viewRows, error: queryError } = await docklinkSupabase
     .from("growlink_weekly_color_totals")
-    .select("organization_id, iso_year, iso_week, pack_color, total_cases");
+    .select("organization_id, iso_year, iso_week, pack_color, total_cases")
+    .eq("organization_id", externalOrganizationId);
 
   if (queryError) {
     const lowerMessage = queryError.message.toLowerCase();
@@ -194,16 +196,22 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
   }
 
   const totalRowsReturned = viewRows?.length ?? 0;
-  console.log(`DockLink growlink_weekly_color_totals total rows returned: ${totalRowsReturned}`);
+  console.log(`DockLink growlink_weekly_color_totals rows returned for org ${externalOrganizationId}: ${totalRowsReturned}`);
 
-  // Server-side org filter (case-insensitive string comparison with trim)
+  // Safety re-check: discard any row whose organization_id doesn't match,
+  // in case the view's RLS or the eq() filter ever behaves unexpectedly.
   const filteredRows = (viewRows ?? []).filter(row =>
       String(row.organization_id).trim().toLowerCase() ===
       String(externalOrganizationId).trim().toLowerCase()
   );
 
   const rowsAfterFilter = filteredRows.length;
-  console.log(`DockLink rows after server-side org filter: ${rowsAfterFilter}`);
+  if (rowsAfterFilter !== totalRowsReturned) {
+    console.warn(
+      `DockLink safety filter removed ${totalRowsReturned - rowsAfterFilter} rows that did not match org ${externalOrganizationId}`
+    );
+  }
+  console.log(`DockLink rows after safety filter: ${rowsAfterFilter}`);
 
   if (!filteredRows || filteredRows.length === 0) {
     return {
@@ -324,20 +332,51 @@ async function syncDocklinkCases(req: Request): Promise<DocklinkSyncResult> {
   let imported = 0;
   let updated = 0;
 
+  // TODO: make DEFAULT_CASE_WEIGHT_KG configurable per organization
+  const DEFAULT_CASE_WEIGHT_KG = 5.15;
+
+  // Fetch the best known case_weight_kg per color from manually-entered rows.
+  // Used as a fallback when the synced week has no manual entry with a positive weight.
+  const { data: manualWeightRows } = await supabase
+    .from("color_case_entries")
+    .select("color, case_weight_kg")
+    .eq("organization_id", organizationId)
+    .neq("source", "docklink")
+    .gt("case_weight_kg", 0)
+    .order("year", { ascending: false })
+    .order("week", { ascending: false });
+
+  const manualWeightByColor = new Map<string, number>();
+  for (const row of manualWeightRows ?? []) {
+    const c = (row.color ?? "").toLowerCase();
+    if (c && !manualWeightByColor.has(c)) {
+      manualWeightByColor.set(c, row.case_weight_kg as number);
+    }
+  }
+
   for (const [key, data] of grouped) {
     const color_area_m2 = colorAreaMap[data.color] ?? 0;
 
-    // Try to find existing case_weight_kg from manual entry
+    // Look up the existing row for this (color, year, week) to get its id and any
+    // manually-set case weight (source may be docklink from a prior sync).
     const { data: existing } = await supabase
       .from("color_case_entries")
-      .select("case_weight_kg, id")
+      .select("case_weight_kg, id, source")
       .eq("organization_id", organizationId)
       .eq("color", data.color)
       .eq("year", data.year)
       .eq("week", data.week)
       .maybeSingle();
 
-    const case_weight_kg = existing?.case_weight_kg ?? 0;
+    // Priority: positive weight on existing same-week row → best known manual weight
+    // for this color → org-level default constant.
+    const existingWeight =
+      typeof existing?.case_weight_kg === "number" && existing.case_weight_kg > 0
+        ? existing.case_weight_kg
+        : null;
+    const case_weight_kg =
+      existingWeight ?? manualWeightByColor.get(data.color) ?? DEFAULT_CASE_WEIGHT_KG;
+
     const total_kg = data.totalCases * case_weight_kg;
     const kg_per_m2 = color_area_m2 > 0 ? total_kg / color_area_m2 : 0;
 

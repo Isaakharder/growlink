@@ -97,6 +97,66 @@ function validateSprayerPayload(input: unknown): SprayerPayload {
   };
 }
 
+// ── Snapshot sanitisers (M3) ─────────────────────────────────────────────────
+// Pick only the known top-level keys from each snapshot blob so that arbitrary
+// client-supplied fields are never persisted.
+
+const CHEMICAL_SNAP_KEYS = ["id", "name", "chemical_type", "phi", "chemical_group", "rate_value", "rate_unit"] as const;
+const TARGET_SNAP_KEYS = ["target_mode", "valve_ids", "valve_names", "group_ids", "group_names", "total_m2", "total_row_length_meters"] as const;
+const SPRAYER_SNAP_KEYS = ["id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open"] as const;
+const TANK_SNAP_KEYS = ["name", "volume_liters", "is_builtin"] as const;
+const CALC_SNAP_KEYS = [
+  "type", "total_chemical_ml", "total_chemical_l", "rate_value", "rate_unit",
+  "area_label", "total_volume_l", "spray_time_minutes", "spray_time_hours",
+  "total_flow_l_per_min", "tank_volume_l", "tank_count", "chem_per_liter_ml",
+  "chem_per_full_tank_ml", "final_tank_volume_l", "chem_for_final_tank_ml", "is_last_full"
+] as const;
+
+function pickSnapshotKeys<K extends string>(raw: unknown, keys: readonly K[]): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const obj = raw as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (k in obj) result[k] = obj[k];
+  }
+  return result;
+}
+
+// ── Progress snapshot validator (M4) ─────────────────────────────────────────
+
+function validateProgressSnapshot(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("progress_snapshot must be an object");
+  }
+  const snap = raw as Record<string, unknown>;
+  if (!Array.isArray(snap.phases)) {
+    throw new Error("progress_snapshot.phases must be an array");
+  }
+  for (const phase of snap.phases) {
+    if (!phase || typeof phase !== "object" || Array.isArray(phase)) {
+      throw new Error("Each phase must be an object");
+    }
+    const p = phase as Record<string, unknown>;
+    if (typeof p.phaseId !== "string" || !p.phaseId) throw new Error("phase.phaseId must be a non-empty string");
+    if (typeof p.phaseName !== "string") throw new Error("phase.phaseName must be a string");
+    if (typeof p.completed !== "boolean") throw new Error("phase.completed must be a boolean");
+    if (!Array.isArray(p.rows)) throw new Error("phase.rows must be an array");
+    for (const row of p.rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new Error("Each row must be an object");
+      }
+      const r = row as Record<string, unknown>;
+      if (typeof r.rowId !== "string" || !r.rowId) throw new Error("row.rowId must be a non-empty string");
+      if (typeof r.rowNumber !== "number") throw new Error("row.rowNumber must be a number");
+      if (typeof r.completed !== "boolean") throw new Error("row.completed must be a boolean");
+    }
+  }
+  const result: Record<string, unknown> = { phases: snap.phases };
+  if ("mixes" in snap) result.mixes = snap.mixes;
+  if ("activeMixNumber" in snap) result.activeMixNumber = snap.activeMixNumber;
+  return result;
+}
+
 const pestControlRouter = Router();
 
 pestControlRouter.get("/pest/sprayers", async (req, res) => {
@@ -205,6 +265,123 @@ pestControlRouter.delete("/pest/sprayers/:id", async (req, res) => {
   }
 
   return res.status(204).send();
+});
+
+// ── Sprayer Calibrations ──────────────────────────────────────────────────────
+
+const VALID_CALIBRATION_PSI = [50, 100, 150, 200] as const;
+type CalibrationPsi = (typeof VALID_CALIBRATION_PSI)[number];
+
+interface CalibrationUpsertRow {
+  organization_id: string;
+  sprayer_id: string;
+  psi: CalibrationPsi;
+  nozzle_1_ml_per_min: number;
+  nozzle_2_ml_per_min: number;
+  nozzle_3_ml_per_min: number;
+  notes: string | null;
+  updated_at: string;
+}
+
+pestControlRouter.get("/pest/calibrations", async (req, res) => {
+  const organizationId = req.organizationId;
+
+  const { data, error } = await supabase
+    .from("pest_sprayer_calibrations")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("sprayer_id")
+    .order("psi");
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load calibrations.", "Calibrations fetch:", error);
+  }
+
+  return res.json(data ?? []);
+});
+
+pestControlRouter.put("/pest/sprayers/:sprayerId/calibration", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { sprayerId } = req.params;
+
+  const { data: sprayer, error: sprayerError } = await supabase
+    .from("pest_sprayers")
+    .select("id")
+    .eq("id", sprayerId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (sprayerError) {
+    return sendSafeError(res, 500, "Failed to verify sprayer.", "Calibration sprayer check:", sprayerError);
+  }
+  if (!sprayer) {
+    return res.status(404).json({ message: "Sprayer not found." });
+  }
+
+  const body = req.body as Record<string, unknown>;
+  const rawRows = body.rows;
+  if (!Array.isArray(rawRows) || rawRows.length !== 4) {
+    return res.status(400).json({ message: "All 4 PSI points (50, 100, 150, 200) are required." });
+  }
+
+  const globalNotes = typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null;
+  const upsertRows: CalibrationUpsertRow[] = [];
+
+  for (const row of rawRows) {
+    if (!row || typeof row !== "object") {
+      return res.status(400).json({ message: "Invalid calibration row." });
+    }
+    const r = row as Record<string, unknown>;
+    const psi = Number(r.psi);
+
+    if (!VALID_CALIBRATION_PSI.includes(psi as CalibrationPsi)) {
+      return res.status(400).json({ message: `PSI must be one of 50, 100, 150, 200.` });
+    }
+
+    const n1 = Number(r.nozzle_1_ml_per_min);
+    const n2 = Number(r.nozzle_2_ml_per_min);
+    const n3 = Number(r.nozzle_3_ml_per_min);
+
+    if (!Number.isFinite(n1) || n1 <= 0) {
+      return res.status(400).json({ message: `Nozzle 1 at ${psi} PSI must be a positive number.` });
+    }
+    if (!Number.isFinite(n2) || n2 <= 0) {
+      return res.status(400).json({ message: `Nozzle 2 at ${psi} PSI must be a positive number.` });
+    }
+    if (!Number.isFinite(n3) || n3 <= 0) {
+      return res.status(400).json({ message: `Nozzle 3 at ${psi} PSI must be a positive number.` });
+    }
+
+    upsertRows.push({
+      organization_id: organizationId,
+      sprayer_id: sprayerId,
+      psi: psi as CalibrationPsi,
+      nozzle_1_ml_per_min: n1,
+      nozzle_2_ml_per_min: n2,
+      nozzle_3_ml_per_min: n3,
+      notes: globalNotes,
+      updated_at: new Date().toISOString()
+    });
+  }
+
+  const psiValues = upsertRows.map((r) => r.psi);
+  for (const required of VALID_CALIBRATION_PSI) {
+    if (!psiValues.includes(required)) {
+      return res.status(400).json({ message: `Missing PSI point: ${required}.` });
+    }
+  }
+
+  const { data, error } = await supabase
+    .from("pest_sprayer_calibrations")
+    .upsert(upsertRows, { onConflict: "sprayer_id,psi" })
+    .select("*")
+    .order("psi");
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to save calibration.", "Calibration upsert:", error);
+  }
+
+  return res.json(data ?? []);
 });
 
 // ── Chemicals ────────────────────────────────────────────────────────────────
@@ -457,7 +634,7 @@ pestControlRouter.post(
         .remove([chemical.label_pdf_path]);
     }
 
-    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
     const storagePath = `${organizationId}/${id}/${Date.now()}_${safeName}`;
 
     const { error: uploadError } = await supabase.storage
@@ -737,11 +914,11 @@ pestControlRouter.post("/pest/todos", async (req, res) => {
       type,
       status: "pending",
       chemical_id,
-      chemical_snapshot: body.chemical_snapshot ?? {},
-      target_snapshot: body.target_snapshot ?? {},
-      sprayer_snapshot: body.sprayer_snapshot ?? {},
-      tank_snapshot: body.tank_snapshot ?? {},
-      calculation_snapshot: body.calculation_snapshot ?? {},
+      chemical_snapshot: pickSnapshotKeys(body.chemical_snapshot, CHEMICAL_SNAP_KEYS),
+      target_snapshot: pickSnapshotKeys(body.target_snapshot, TARGET_SNAP_KEYS),
+      sprayer_snapshot: pickSnapshotKeys(body.sprayer_snapshot, SPRAYER_SNAP_KEYS),
+      tank_snapshot: pickSnapshotKeys(body.tank_snapshot, TANK_SNAP_KEYS),
+      calculation_snapshot: pickSnapshotKeys(body.calculation_snapshot, CALC_SNAP_KEYS),
       instructions,
       created_by: userId ?? null
     })
@@ -793,14 +970,18 @@ pestControlRouter.patch("/pest/todos/:id/progress", async (req, res) => {
   const { id } = req.params;
   const body = req.body as Record<string, unknown>;
 
-  if (!body.progress_snapshot || typeof body.progress_snapshot !== "object") {
-    return res.status(400).json({ message: "progress_snapshot is required" });
+  let progress_snapshot: Record<string, unknown>;
+  try {
+    progress_snapshot = validateProgressSnapshot(body.progress_snapshot);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Invalid progress_snapshot";
+    return res.status(400).json({ message });
   }
 
   const { data, error } = await supabase
     .from("pest_control_todos")
     .update({
-      progress_snapshot: body.progress_snapshot,
+      progress_snapshot,
       updated_at: new Date().toISOString()
     })
     .eq("id", id)

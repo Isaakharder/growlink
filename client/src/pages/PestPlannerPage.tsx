@@ -43,6 +43,11 @@ type Tank = {
   active: boolean;
 };
 
+type CalibrationPoint = {
+  psi: number;
+  avg_ml_per_min: number;
+};
+
 type ChemicalType = "fungicide" | "insecticide" | "herbicide" | "pesticide";
 
 type Chemical = {
@@ -81,6 +86,9 @@ const DRY_RATE_OPTIONS: { value: RateUnit; label: string }[] = [
   { value: "kg_per_hectare", label: "kg / hectare" }
 ];
 
+const PSI_OPTIONS: number[] = [];
+for (let p = 40; p <= 1000; p += 5) PSI_OPTIONS.push(p);
+
 function isDryChemical(inventoryUnit: string): boolean {
   const u = inventoryUnit.toLowerCase().trim();
   if (["g", "kg", "grams", "gram", "kilograms", "kilogram"].includes(u)) return true;
@@ -98,8 +106,30 @@ function roundTo(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
+function formatHoursMinutes(hours: number): string {
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h > 0 && m > 0) return `${h} hr ${m} min`;
+  if (h > 0) return `${h} hr`;
+  return `${m} min`;
+}
+
 function rowAreaM2(row: SetupRow): number {
   return (row.width_meters ?? 0) * (row.length_meters ?? 0);
+}
+
+function interpolateFlowPerNozzle(psi: number, points: CalibrationPoint[]): number | null {
+  if (points.length === 0) return null;
+  const sorted = [...points].sort((a, b) => a.psi - b.psi);
+  if (psi <= sorted[0].psi) return sorted[0].avg_ml_per_min / 1000;
+  if (psi >= sorted[sorted.length - 1].psi) return sorted[sorted.length - 1].avg_ml_per_min / 1000;
+  const exact = sorted.find((p) => p.psi === psi);
+  if (exact) return exact.avg_ml_per_min / 1000;
+  const lower = sorted.filter((p) => p.psi < psi).pop()!;
+  const upper = sorted.find((p) => p.psi > psi)!;
+  const t = (psi - lower.psi) / (upper.psi - lower.psi);
+  return (lower.avg_ml_per_min + t * (upper.avg_ml_per_min - lower.avg_ml_per_min)) / 1000;
 }
 
 function computeChemicalMl(m2: number, rate: number, rateUnit: RateUnit): number {
@@ -143,6 +173,8 @@ export function PestPlannerPage() {
   const [sprayerId, setSprayerId] = useState("");
   const [nozzlesOpen, setNozzlesOpen] = useState("");
   const [spraySpeed, setSpraySpeed] = useState("");
+  const [selectedPsi, setSelectedPsi] = useState("");
+  const [sprayerCalibrations, setSprayerCalibrations] = useState<Record<string, CalibrationPoint[]>>({});
 
   // ── Chemical
   const [chemicalId, setChemicalId] = useState("");
@@ -159,11 +191,12 @@ export function PestPlannerPage() {
       setError(null);
 
       try {
-        const [setupRes, sprayersRes, tanksRes, chemicalsRes] = await Promise.all([
+        const [setupRes, sprayersRes, tanksRes, chemicalsRes, calsRes] = await Promise.all([
           apiFetch("/api/greenhouse-setup"),
           apiFetch("/api/pest/sprayers"),
           apiFetch("/api/pest/tanks"),
-          apiFetch("/api/pest/chemicals")
+          apiFetch("/api/pest/chemicals"),
+          apiFetch("/api/pest/calibrations")
         ]);
 
         if (!setupRes.ok || !sprayersRes.ok || !tanksRes.ok || !chemicalsRes.ok) {
@@ -185,6 +218,20 @@ export function PestPlannerPage() {
         setSprayers(sprayersData);
         setTanks(tanksData);
         setChemicals(chemicalsData);
+
+        if (calsRes.ok) {
+          const calsData = (await calsRes.json()) as Array<{
+            sprayer_id: string;
+            psi: number;
+            avg_ml_per_min: number;
+          }>;
+          const bySprayerId: Record<string, CalibrationPoint[]> = {};
+          for (const row of calsData) {
+            if (!bySprayerId[row.sprayer_id]) bySprayerId[row.sprayer_id] = [];
+            bySprayerId[row.sprayer_id].push({ psi: row.psi, avg_ml_per_min: row.avg_ml_per_min });
+          }
+          setSprayerCalibrations(bySprayerId);
+        }
       } catch (loadError) {
         setError(
           loadError instanceof Error ? loadError.message : "Failed to load planner data"
@@ -509,7 +556,15 @@ export function PestPlannerPage() {
     const speed = Number(spraySpeed);
     if (!Number.isFinite(speed) || speed <= 0) return null;
 
-    const flowPerNozzle = selectedSprayer.nozzle_volume_l_per_min; // L/min per nozzle
+    const psiNum = Number(selectedPsi);
+    const calibPoints = sprayerCalibrations[selectedSprayer.id] ?? [];
+    const calibFlow =
+      Number.isFinite(psiNum) && psiNum > 0
+        ? interpolateFlowPerNozzle(psiNum, calibPoints)
+        : null;
+
+    const flowPerNozzle = calibFlow ?? selectedSprayer.nozzle_volume_l_per_min;
+    const usingCalibration = calibFlow !== null;
 
     const sprayTimeMinutes = totalRowLengthMeters / speed;
     const totalFlowLPerMin = flowPerNozzle * nozzlesOpenNum;
@@ -519,9 +574,11 @@ export function PestPlannerPage() {
       sprayTimeMinutes,
       sprayTimeHours: sprayTimeMinutes / 60,
       totalFlowLPerMin,
-      totalVolumeL
+      totalVolumeL,
+      flowPerNozzle,
+      usingCalibration
     };
-  }, [selectedSprayer, nozzlesOpenNum, nozzlesOpenError, totalRowLengthMeters, spraySpeed]);
+  }, [selectedSprayer, nozzlesOpenNum, nozzlesOpenError, totalRowLengthMeters, spraySpeed, selectedPsi, sprayerCalibrations]);
 
   const tankCalc = useMemo(() => {
     if (!sprayCalc || !effectiveTankVolume || !chemicalNeededResult) return null;
@@ -552,6 +609,7 @@ export function PestPlannerPage() {
     const s = sprayers.find((sp) => sp.id === id);
     setNozzlesOpen(s ? String(s.nozzle_count) : "");
     setSpraySpeed("");
+    setSelectedPsi("");
   }
 
   // ── Chemical derivations ───────────────────────────────────────────────────
@@ -650,7 +708,9 @@ export function PestPlannerPage() {
             nozzle_volume_l_per_min: selectedSprayer.nozzle_volume_l_per_min,
             nozzle_psi: selectedSprayer.nozzle_psi,
             speed_m_per_min: Number(spraySpeed) || null,
-            nozzles_open: nozzlesOpenNum
+            nozzles_open: nozzlesOpenNum,
+            selected_psi: Number(selectedPsi) || null,
+            flow_per_nozzle_l_per_min: sprayCalc?.flowPerNozzle ?? selectedSprayer.nozzle_volume_l_per_min
           }
         : {};
 
@@ -939,7 +999,10 @@ export function PestPlannerPage() {
                     {item.hasRows ? (
                       <span>
                         <strong>
-                          {roundTo(item.ml, 1).toLocaleString()} {chemicalNeededResult.unit}
+                          {chemicalNeededResult.unit === "g"
+                            ? (Math.round(item.ml / 5) * 5).toLocaleString()
+                            : roundTo(item.ml, 1).toLocaleString()}{" "}
+                          {chemicalNeededResult.unit}
                         </strong>
                         <span
                           style={{
@@ -1442,6 +1505,23 @@ export function PestPlannerPage() {
                     />
                   </label>
                 ) : null}
+
+                {selectedSprayer ? (
+                  <label>
+                    PSI
+                    <select
+                      value={selectedPsi}
+                      onChange={(event) => setSelectedPsi(event.target.value)}
+                    >
+                      <option value="">Select PSI…</option>
+                      {PSI_OPTIONS.map((psi) => (
+                        <option key={psi} value={String(psi)}>
+                          {psi} PSI
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </div>
 
               {selectedSprayer ? (
@@ -1455,12 +1535,6 @@ export function PestPlannerPage() {
                     }}
                   >
                     <div className="greenhouse-stat-item">
-                      <span className="greenhouse-stat-label">PSI</span>
-                      <span className="greenhouse-stat-value">
-                        {selectedSprayer.nozzle_psi}
-                      </span>
-                    </div>
-                    <div className="greenhouse-stat-item">
                       <span className="greenhouse-stat-label">Nozzles (total)</span>
                       <span className="greenhouse-stat-value">
                         {selectedSprayer.nozzle_count}
@@ -1469,10 +1543,28 @@ export function PestPlannerPage() {
                     <div className="greenhouse-stat-item">
                       <span className="greenhouse-stat-label">Flow/nozzle</span>
                       <span className="greenhouse-stat-value">
-                        {selectedSprayer.nozzle_volume_l_per_min} L/min
+                        {sprayCalc
+                          ? `${roundTo(sprayCalc.flowPerNozzle, 4)} L/min`
+                          : `${selectedSprayer.nozzle_volume_l_per_min} L/min`}
+                      </span>
+                    </div>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Nozzles open</span>
+                      <span className="greenhouse-stat-value">{nozzlesOpenNum || "—"}</span>
+                    </div>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Total flow rate</span>
+                      <span className="greenhouse-stat-value">
+                        {sprayCalc ? `${roundTo(sprayCalc.totalFlowLPerMin, 3)} L/min` : "—"}
                       </span>
                     </div>
                   </div>
+
+                  {selectedPsi !== "" && sprayCalc && !sprayCalc.usingCalibration ? (
+                    <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                      Using default sprayer flow. Calibrate this sprayer for PSI-based estimates.
+                    </p>
+                  ) : null}
 
                   {nozzlesOpenError ? (
                     <p className="form-error" style={{ marginTop: "0.5rem" }}>
@@ -1536,7 +1628,7 @@ export function PestPlannerPage() {
                         <div className="greenhouse-stat-item">
                           <span className="greenhouse-stat-label">Spray time (hrs)</span>
                           <span className="greenhouse-stat-value">
-                            {roundTo(sprayCalc.sprayTimeHours, 2)} hr
+                            {formatHoursMinutes(sprayCalc.sprayTimeHours)}
                           </span>
                         </div>
                         <div

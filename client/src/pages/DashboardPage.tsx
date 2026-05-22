@@ -141,6 +141,7 @@ type ColorCaseEntryRecord = {
   color: VarietyColor | string | null;
   total_cases: number;
   case_weight_kg: number;
+  total_kg: number;
 };
 
 type YieldTrendPoint = {
@@ -350,6 +351,7 @@ function normalizeColorCaseEntries(input: unknown): ColorCaseEntryRecord[] {
     const entry = rawEntry as Record<string, unknown>;
     const totalCases = readNumberField(entry, ["total_cases", "totalCases"]);
     const caseWeightKg = readNumberField(entry, ["case_weight_kg", "caseWeightKg"]);
+    const totalKg = readNumberField(entry, ["total_kg", "totalKg"]) ?? 0;
 
     if (totalCases === null || caseWeightKg === null || totalCases < 0 || caseWeightKg < 0) {
       continue;
@@ -358,7 +360,8 @@ function normalizeColorCaseEntries(input: unknown): ColorCaseEntryRecord[] {
     result.push({
       color: (entry.color as VarietyColor | string | null) ?? null,
       total_cases: totalCases,
-      case_weight_kg: caseWeightKg
+      case_weight_kg: caseWeightKg,
+      total_kg: totalKg
     });
   }
 
@@ -749,7 +752,7 @@ export function DashboardPage() {
           }
 
           const bucket = totalsByColor.get(color)!;
-          bucket.exportedKg += totalCases * caseWeightKg;
+          bucket.exportedKg += entry.total_kg;
         }
 
         const nextSummary = COLOR_ORDER.map((color) => {

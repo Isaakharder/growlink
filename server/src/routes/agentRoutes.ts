@@ -353,7 +353,57 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
       });
 
       if ((existingEntries ?? []).length === 0) {
-        // Create
+        // CREATE path.
+        // Claim the lot via import_run FIRST.  The unique constraint on
+        // (organization_id, lot_number) means only one agent can win this
+        // insert.  If the subsequent yield_entry insert fails we delete the
+        // claim so the lot is not permanently locked.
+
+        const { error: runClaimError } = await supabase
+          .from("yield_import_runs")
+          .insert({
+            organization_id: organizationId,
+            lot_number: parsed.lotNumber,
+            variety_id: variety.id,
+            iso_year: parsed.isoYear,
+            iso_week: parsed.isoWeek,
+            start_time: startTimeIso,
+            source_filename: file.filename,
+            created_by: null
+          });
+
+        if (runClaimError) {
+          if (runClaimError.code === "23505") {
+            // Another agent won the race for this lot.
+            console.log("[agent/pdf-import] lot already claimed by concurrent import, skipping", {
+              organizationId,
+              lotNumber: parsed.lotNumber
+            });
+            results.push({
+              filename: file.filename,
+              status: "skipped",
+              reason: "already_imported",
+              lotNumber: parsed.lotNumber
+            });
+          } else {
+            console.error("[agent/pdf-import] yield_import_runs claim failed (create)", {
+              organizationId,
+              lotNumber: parsed.lotNumber,
+              code: runClaimError.code,
+              message: runClaimError.message,
+              details: runClaimError.details,
+              hint: runClaimError.hint
+            });
+            results.push({
+              filename: file.filename,
+              status: "error",
+              reason: "Failed to record import run."
+            });
+          }
+          continue;
+        }
+
+        // Claim succeeded — now write the yield_entry.
         const totals = calculateTotals(sizeKgById, varietyForCalc);
 
         console.log("[agent/pdf-import] inserting new yield_entry", {
@@ -381,7 +431,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           .single();
 
         if (insertError || !insertedEntry) {
-          console.error("[agent/pdf-import] yield_entry insert failed", {
+          console.error("[agent/pdf-import] yield_entry insert failed — releasing import_run claim", {
             organizationId,
             lotNumber: parsed.lotNumber,
             varietyId: variety.id,
@@ -392,6 +442,20 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
             details: insertError?.details,
             hint: insertError?.hint
           });
+          // Release the claim so the lot can be retried.
+          const { error: releaseError } = await supabase
+            .from("yield_import_runs")
+            .delete()
+            .eq("organization_id", organizationId)
+            .eq("lot_number", parsed.lotNumber);
+          if (releaseError) {
+            console.error("[agent/pdf-import] failed to release import_run claim after yield_entry insert failure", {
+              organizationId,
+              lotNumber: parsed.lotNumber,
+              code: releaseError.code,
+              message: releaseError.message
+            });
+          }
           results.push({
             filename: file.filename,
             status: "error",
@@ -411,7 +475,23 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           totalKg: totals.total_kg
         });
 
-        const { error: runInsertError } = await supabase
+        results.push({
+          filename: file.filename,
+          status: "imported",
+          mode: "create",
+          lotNumber: parsed.lotNumber,
+          varietyName: variety.name,
+          isoYear: parsed.isoYear,
+          isoWeek: parsed.isoWeek,
+          totalKg: totals.total_kg
+        });
+      } else if ((existingEntries ?? []).length === 1) {
+        // APPEND path.
+        // Claim the lot via import_run FIRST for the same reason as the create
+        // path — the unique constraint prevents two agents from appending the
+        // same lot simultaneously.
+
+        const { error: runClaimError } = await supabase
           .from("yield_import_runs")
           .insert({
             organization_id: organizationId,
@@ -424,36 +504,37 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
             created_by: null
           });
 
-        if (runInsertError) {
-          console.error("[agent/pdf-import] yield_import_runs insert failed after yield_entry create", {
-            organizationId,
-            lotNumber: parsed.lotNumber,
-            entryId: insertedEntry.id,
-            code: runInsertError.code,
-            message: runInsertError.message,
-            details: runInsertError.details,
-            hint: runInsertError.hint
-          });
-          results.push({
-            filename: file.filename,
-            status: "error",
-            reason: "Failed to record import run."
-          });
+        if (runClaimError) {
+          if (runClaimError.code === "23505") {
+            console.log("[agent/pdf-import] lot already claimed by concurrent import (append), skipping", {
+              organizationId,
+              lotNumber: parsed.lotNumber
+            });
+            results.push({
+              filename: file.filename,
+              status: "skipped",
+              reason: "already_imported",
+              lotNumber: parsed.lotNumber
+            });
+          } else {
+            console.error("[agent/pdf-import] yield_import_runs claim failed (append)", {
+              organizationId,
+              lotNumber: parsed.lotNumber,
+              code: runClaimError.code,
+              message: runClaimError.message,
+              details: runClaimError.details,
+              hint: runClaimError.hint
+            });
+            results.push({
+              filename: file.filename,
+              status: "error",
+              reason: "Failed to record import run."
+            });
+          }
           continue;
         }
 
-        results.push({
-          filename: file.filename,
-          status: "imported",
-          mode: "create",
-          lotNumber: parsed.lotNumber,
-          varietyName: variety.name,
-          isoYear: parsed.isoYear,
-          isoWeek: parsed.isoWeek,
-          totalKg: totals.total_kg
-        });
-      } else if ((existingEntries ?? []).length === 1) {
-        // Append
+        // Claim succeeded — now merge into the existing yield_entry.
         const existingEntry = existingEntries[0] as {
           id: string;
           size_kg: Record<string, unknown> | null;
@@ -520,7 +601,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           .single();
 
         if (updateError || !updatedEntry) {
-          console.error("[agent/pdf-import] yield_entry update failed", {
+          console.error("[agent/pdf-import] yield_entry update failed — releasing import_run claim", {
             entryId: existingEntry.id,
             organizationId,
             lotNumber: parsed.lotNumber,
@@ -532,6 +613,20 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
             details: updateError?.details,
             hint: updateError?.hint
           });
+          // Release the claim so the lot can be retried.
+          const { error: releaseError } = await supabase
+            .from("yield_import_runs")
+            .delete()
+            .eq("organization_id", organizationId)
+            .eq("lot_number", parsed.lotNumber);
+          if (releaseError) {
+            console.error("[agent/pdf-import] failed to release import_run claim after yield_entry update failure", {
+              organizationId,
+              lotNumber: parsed.lotNumber,
+              code: releaseError.code,
+              message: releaseError.message
+            });
+          }
           results.push({
             filename: file.filename,
             status: "error",
@@ -550,37 +645,6 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           isoWeek: parsed.isoWeek,
           mergedTotalKg: mergedTotals.total_kg
         });
-
-        const { error: runInsertError } = await supabase
-          .from("yield_import_runs")
-          .insert({
-            organization_id: organizationId,
-            lot_number: parsed.lotNumber,
-            variety_id: variety.id,
-            iso_year: parsed.isoYear,
-            iso_week: parsed.isoWeek,
-            start_time: startTimeIso,
-            source_filename: file.filename,
-            created_by: null
-          });
-
-        if (runInsertError) {
-          console.error("[agent/pdf-import] yield_import_runs insert failed after yield_entry update", {
-            organizationId,
-            lotNumber: parsed.lotNumber,
-            entryId: updatedEntry.id,
-            code: runInsertError.code,
-            message: runInsertError.message,
-            details: runInsertError.details,
-            hint: runInsertError.hint
-          });
-          results.push({
-            filename: file.filename,
-            status: "error",
-            reason: "Failed to record import run."
-          });
-          continue;
-        }
 
         results.push({
           filename: file.filename,

@@ -150,8 +150,11 @@ type GroupedValveLink = {
   valveId: string;
   valveName: string;
   rowNumbers: number[];
-  rowDisplay: string;
   rvIds: string[];
+  minRow: number | null;
+  maxRow: number | null;
+  patternLabel: string;
+  totalM2: number;
 };
 
 type AssignmentFormState = {
@@ -331,11 +334,13 @@ export function GreenhouseSetupPage() {
   const [valveAssignForm, setValveAssignForm] = useState<ValveAssignForm>({
     valve_id: "",
     row_pattern: "all",
-    start_row: "1",
-    end_row: "1"
+    start_row: "",
+    end_row: ""
   });
   const [valveAssigning, setValveAssigning] = useState(false);
   const [valveAssignError, setValveAssignError] = useState<string | null>(null);
+  const [editingValveId, setEditingValveId] = useState<string | null>(null);
+  const [valveModalOpen, setValveModalOpen] = useState(false);
 
   const [pickingBinKgDraft, setPickingBinKgDraft] = useState("");
   const [caseKgDraft, setCaseKgDraft] = useState("");
@@ -536,6 +541,7 @@ export function GreenhouseSetupPage() {
   const groupedValveLinks = useMemo((): GroupedValveLink[] => {
     const orderMap = new Map<string, number>();
     const groupMap = new Map<string, GroupedValveLink>();
+    const rowObjectsMap = new Map<string, GreenhouseRow[]>();
 
     for (const rv of rowValves) {
       if (!groupMap.has(rv.valve_id)) {
@@ -545,24 +551,56 @@ export function GreenhouseSetupPage() {
           valveId: rv.valve_id,
           valveName: valve?.name ?? rv.valve_id,
           rowNumbers: [],
-          rowDisplay: "",
-          rvIds: []
+          rvIds: [],
+          minRow: null,
+          maxRow: null,
+          patternLabel: "All rows",
+          totalM2: 0
         });
+        rowObjectsMap.set(rv.valve_id, []);
       }
       const grp = groupMap.get(rv.valve_id)!;
       const row = rows.find((r) => r.id === rv.row_id);
-      if (row) grp.rowNumbers.push(row.row_number);
+      if (row) {
+        grp.rowNumbers.push(row.row_number);
+        rowObjectsMap.get(rv.valve_id)!.push(row);
+      }
       grp.rvIds.push(rv.id);
     }
 
     for (const grp of groupMap.values()) {
-      grp.rowDisplay = compressRowNumbers(grp.rowNumbers);
+      if (grp.rowNumbers.length === 0) continue;
+      const sorted = grp.rowNumbers.slice().sort((a, b) => a - b);
+      grp.minRow = sorted[0];
+      grp.maxRow = sorted[sorted.length - 1];
+      if (sorted.length === 1) {
+        grp.patternLabel = "All rows";
+      } else {
+        const gaps = sorted.slice(1).map((n, i) => n - sorted[i]);
+        const allGap1 = gaps.every((g) => g === 1);
+        const allGap2 = gaps.every((g) => g === 2);
+        const sameParity = sorted.every((n) => n % 2 === sorted[0] % 2);
+        if (allGap1) {
+          grp.patternLabel = "All rows";
+        } else if (allGap2 && sameParity) {
+          grp.patternLabel = "Every other row";
+        } else {
+          grp.patternLabel = "Custom pattern";
+        }
+      }
+      const linkedRows = rowObjectsMap.get(grp.valveId) ?? [];
+      grp.totalM2 = linkedRows.reduce((sum, r) => sum + rowAreaM2(r), 0);
     }
 
     return [...groupMap.values()].sort(
       (a, b) => (orderMap.get(a.valveId) ?? 0) - (orderMap.get(b.valveId) ?? 0)
     );
   }, [rowValves, valves, rows]);
+
+  const sortedRowNumbers = useMemo(() => {
+    const nums = Array.from(new Set(rows.map((r) => r.row_number)));
+    return nums.sort((a, b) => a - b);
+  }, [rows]);
 
   const isRowsExpanded = selectedGroupId
     ? expandedRowsByGroupId[selectedGroupId] === true
@@ -1163,17 +1201,26 @@ export function GreenhouseSetupPage() {
       setValveAssignError("Select a valve.");
       return;
     }
-    if (!Number.isInteger(startRow) || startRow < 1) {
-      setValveAssignError("Start row must be 1 or greater.");
+    if (!valveAssignForm.start_row) {
+      setValveAssignError("Select a start row.");
       return;
     }
-    if (!Number.isInteger(endRow) || endRow < startRow) {
+    if (!valveAssignForm.end_row || endRow < startRow) {
       setValveAssignError("End row must be >= start row.");
       return;
     }
 
     setValveAssigning(true);
     try {
+      if (editingValveId) {
+        const grp = groupedValveLinks.find((g) => g.valveId === editingValveId);
+        if (grp) {
+          for (const id of grp.rvIds) {
+            await apiFetch(`/api/greenhouse/row-valves/${id}`, { method: "DELETE" });
+          }
+        }
+      }
+
       const res = await apiFetch("/api/greenhouse/row-valves", {
         method: "POST",
         body: JSON.stringify({
@@ -1189,7 +1236,7 @@ export function GreenhouseSetupPage() {
         throw new Error(body?.message ?? "Failed to assign rows");
       }
 
-      setValveAssignForm((prev) => ({ ...prev, start_row: "1", end_row: "1" }));
+      closeValveModal();
       await fetchSetup();
     } catch (err) {
       setValveAssignError(err instanceof Error ? err.message : "Failed to assign rows");
@@ -1227,6 +1274,30 @@ export function GreenhouseSetupPage() {
       }
     }
     await fetchSetup();
+  }
+
+  function closeValveModal() {
+    setValveModalOpen(false);
+    setEditingValveId(null);
+    setValveAssignForm({ valve_id: "", row_pattern: "all", start_row: "", end_row: "" });
+    setValveAssignError(null);
+  }
+
+  function openEditValve(grp: GroupedValveLink) {
+    const nums = grp.rowNumbers.slice().sort((a, b) => a - b);
+    const startRow = nums[0];
+    const endRow = nums[nums.length - 1];
+    const rowPattern: "all" | "every_other" =
+      grp.patternLabel === "Every other row" ? "every_other" : "all";
+    setEditingValveId(grp.valveId);
+    setValveAssignForm({
+      valve_id: grp.valveId,
+      row_pattern: rowPattern,
+      start_row: startRow !== undefined ? String(startRow) : "",
+      end_row: endRow !== undefined ? String(endRow) : ""
+    });
+    setValveAssignError(null);
+    setValveModalOpen(true);
   }
 
   return (
@@ -1800,97 +1871,30 @@ export function GreenhouseSetupPage() {
           <div className="greenhouse-tab-content">
             <div className="varieties-toolbar greenhouse-toolbar">
               <span className="greenhouse-toolbar-label">Link rows to irrigation valves</span>
+              {valves.length > 0 && sortedRowNumbers.length > 0 ? (
+                <button
+                  className="primary-action-button"
+                  type="button"
+                  onClick={() => {
+                    setValveModalOpen(true);
+                    setEditingValveId(null);
+                    setValveAssignForm({ valve_id: "", row_pattern: "all", start_row: "", end_row: "" });
+                    setValveAssignError(null);
+                  }}
+                >
+                  Assign rows to valve
+                </button>
+              ) : null}
             </div>
 
             {valves.length === 0 ? (
               <p>No irrigation valves found. Set up valves in Irrigation Setup first.</p>
-            ) : (
-              <form className="valve-assign-form" onSubmit={(event) => void assignValveRows(event)}>
-                <div className="valve-assign-row">
-                  <label>
-                    Valve
-                    <select
-                      value={valveAssignForm.valve_id}
-                      onChange={(event) =>
-                        setValveAssignForm((current) => ({
-                          ...current,
-                          valve_id: event.target.value
-                        }))
-                      }
-                      required
-                    >
-                      <option value="">Select valve…</option>
-                      {valves.map((valve) => (
-                        <option key={valve.id} value={valve.id}>
-                          {valve.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    Row pattern
-                    <select
-                      value={valveAssignForm.row_pattern}
-                      onChange={(event) =>
-                        setValveAssignForm((current) => ({
-                          ...current,
-                          row_pattern: event.target.value as "all" | "every_other"
-                        }))
-                      }
-                    >
-                      <option value="all">All rows</option>
-                      <option value="every_other">Every other row</option>
-                    </select>
-                  </label>
-
-                  <label>
-                    Start row
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={valveAssignForm.start_row}
-                      onChange={(event) =>
-                        setValveAssignForm((current) => ({
-                          ...current,
-                          start_row: event.target.value
-                        }))
-                      }
-                      required
-                    />
-                  </label>
-
-                  <label>
-                    End row
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={valveAssignForm.end_row}
-                      onChange={(event) =>
-                        setValveAssignForm((current) => ({
-                          ...current,
-                          end_row: event.target.value
-                        }))
-                      }
-                      required
-                    />
-                  </label>
-
-                  <button className="setup-action-button" type="submit" disabled={valveAssigning}>
-                    {valveAssigning ? "Assigning…" : "Assign"}
-                  </button>
-                </div>
-
-                {valveAssignError ? (
-                  <p className="form-error">{valveAssignError}</p>
-                ) : null}
-              </form>
-            )}
+            ) : sortedRowNumbers.length === 0 ? (
+              <p>Create rows in Rows &amp; Sections before linking valves.</p>
+            ) : null}
 
             {rowValves.length === 0 ? (
-              <p>No row-valve links yet.</p>
+              <p className="valve-empty-state">No rows are linked to valves yet.</p>
             ) : (
               <div className="variety-card-list">
                 {groupedValveLinks.map((grp) => (
@@ -1900,16 +1904,26 @@ export function GreenhouseSetupPage() {
                         <span className="variety-card-name">{grp.valveName}</span>
                       </div>
                       <div className="variety-card-rows">
-                        {grp.rowDisplay || "–"}
-                        {grp.rowNumbers.length > 0 ? (
-                          <span className="variety-card-count">
-                            ({grp.rowNumbers.length} rows)
-                          </span>
-                        ) : null}
+                        {grp.minRow !== null && grp.maxRow !== null
+                          ? `Rows ${grp.minRow} – ${grp.maxRow}`
+                          : "–"}
+                      </div>
+                      <div className="variety-card-stats">
+                        <span>{grp.patternLabel}</span>
+                        <span>{grp.rowNumbers.length} total rows</span>
+                        {/* totalM2 is 0 when row width_meters/length_meters are not set */}
+                        <span>
+                          {grp.totalM2 > 0
+                            ? `${roundTo(grp.totalM2, 1)} m²`
+                            : "Square meters: —"}
+                        </span>
                       </div>
                     </div>
                     <div className="variety-card-actions">
                       <div className="row-actions">
+                        <button type="button" onClick={() => openEditValve(grp)}>
+                          Edit
+                        </button>
                         <button
                           type="button"
                           className="danger"
@@ -2236,6 +2250,119 @@ export function GreenhouseSetupPage() {
                   {saving ? "Saving..." : "Save"}
                 </button>
                 <button type="button" className="secondary" onClick={closeAssignmentModal}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {valveModalOpen ? (
+        <div className="modal-overlay" onClick={closeValveModal}>
+          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>
+              {editingValveId
+                ? "Edit valve row assignment"
+                : "Assign rows to irrigation valve"}
+            </h2>
+            <form className="varieties-form" onSubmit={(event) => void assignValveRows(event)}>
+              <label>
+                Valve
+                <select
+                  value={valveAssignForm.valve_id}
+                  onChange={(event) =>
+                    setValveAssignForm((current) => ({
+                      ...current,
+                      valve_id: event.target.value
+                    }))
+                  }
+                  required
+                  disabled={editingValveId !== null}
+                >
+                  <option value="">Select valve…</option>
+                  {valves.map((valve) => (
+                    <option key={valve.id} value={valve.id}>
+                      {valve.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Row pattern
+                <select
+                  value={valveAssignForm.row_pattern}
+                  onChange={(event) =>
+                    setValveAssignForm((current) => ({
+                      ...current,
+                      row_pattern: event.target.value as "all" | "every_other"
+                    }))
+                  }
+                >
+                  <option value="all">All rows</option>
+                  <option value="every_other">Every other row</option>
+                </select>
+              </label>
+              <label>
+                Start row
+                <select
+                  value={valveAssignForm.start_row}
+                  onChange={(event) =>
+                    setValveAssignForm((current) => ({
+                      ...current,
+                      start_row: event.target.value
+                    }))
+                  }
+                  required
+                >
+                  <option value="">Select…</option>
+                  {sortedRowNumbers.map((n) => (
+                    <option key={n} value={String(n)}>
+                      Row {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                End row
+                <select
+                  value={valveAssignForm.end_row}
+                  onChange={(event) =>
+                    setValveAssignForm((current) => ({
+                      ...current,
+                      end_row: event.target.value
+                    }))
+                  }
+                  required
+                >
+                  <option value="">Select…</option>
+                  {sortedRowNumbers.map((n) => (
+                    <option key={n} value={String(n)}>
+                      Row {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {valveAssignError ? (
+                <p className="form-error" style={{ gridColumn: "1 / -1" }}>
+                  {valveAssignError}
+                </p>
+              ) : null}
+              <div className="form-actions">
+                <button
+                  type="submit"
+                  disabled={
+                    valveAssigning ||
+                    !valveAssignForm.valve_id ||
+                    !valveAssignForm.start_row ||
+                    !valveAssignForm.end_row ||
+                    parseInt(valveAssignForm.end_row, 10) <
+                      parseInt(valveAssignForm.start_row, 10)
+                  }
+                >
+                  {valveAssigning ? "Saving…" : editingValveId ? "Update" : "Assign"}
+                </button>
+                <button type="button" className="secondary" onClick={closeValveModal}>
                   Cancel
                 </button>
               </div>

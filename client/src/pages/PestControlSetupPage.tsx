@@ -1,6 +1,37 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
 
+type CalibrationRecord = {
+  id: string;
+  sprayer_id: string;
+  psi: number;
+  nozzle_1_ml_per_min: number;
+  nozzle_2_ml_per_min: number;
+  nozzle_3_ml_per_min: number;
+  avg_ml_per_min: number;
+  notes: string | null;
+};
+
+type CalibrationFormPsiRow = {
+  nozzle_1: string;
+  nozzle_2: string;
+  nozzle_3: string;
+};
+
+type CalibrationFormState = {
+  readings: Record<number, CalibrationFormPsiRow>;
+  notes: string;
+};
+
+const CALIBRATION_PSI_POINTS = [50, 100, 150, 200] as const;
+
+const EMPTY_PSI_ROW: CalibrationFormPsiRow = { nozzle_1: "", nozzle_2: "", nozzle_3: "" };
+
+const INITIAL_CAL_FORM: CalibrationFormState = {
+  readings: { 50: { ...EMPTY_PSI_ROW }, 100: { ...EMPTY_PSI_ROW }, 150: { ...EMPTY_PSI_ROW }, 200: { ...EMPTY_PSI_ROW } },
+  notes: ""
+};
+
 type SprayerTank = { id: string; name: string; volume_liters: number };
 
 type Sprayer = {
@@ -51,6 +82,7 @@ type TankFormState = {
 
 const SPRAYERS_URL = "/api/pest/sprayers";
 const TANKS_URL = "/api/pest/tanks";
+const CALIBRATIONS_URL = "/api/pest/calibrations";
 
 const INITIAL_SPRAYER_FORM: SprayerFormState = {
   name: "",
@@ -125,19 +157,31 @@ export function PestControlSetupPage() {
   const [tankSaving, setTankSaving] = useState(false);
   const [tankError, setTankError] = useState<string | null>(null);
 
+  // Calibration modal state
+  const [calibrations, setCalibrations] = useState<CalibrationRecord[]>([]);
+  const [calSprayerId, setCalSprayerId] = useState<string | null>(null);
+  const [isCalModalOpen, setIsCalModalOpen] = useState(false);
+  const [calForm, setCalForm] = useState<CalibrationFormState>(INITIAL_CAL_FORM);
+  const [calSaving, setCalSaving] = useState(false);
+  const [calError, setCalError] = useState<string | null>(null);
+
   async function fetchData() {
     setLoading(true);
     setError(null);
     try {
-      const [sprayersRes, tanksRes] = await Promise.all([
+      const [sprayersRes, tanksRes, calsRes] = await Promise.all([
         apiFetch(SPRAYERS_URL),
-        apiFetch(TANKS_URL)
+        apiFetch(TANKS_URL),
+        apiFetch(CALIBRATIONS_URL)
       ]);
       if (!sprayersRes.ok || !tanksRes.ok) {
         throw new Error("Failed to load setup data");
       }
       setSprayers((await sprayersRes.json()) as Sprayer[]);
       setTanks((await tanksRes.json()) as Tank[]);
+      if (calsRes.ok) {
+        setCalibrations((await calsRes.json()) as CalibrationRecord[]);
+      }
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "Failed to load setup data");
     } finally {
@@ -150,12 +194,13 @@ export function PestControlSetupPage() {
   }, []);
 
   useEffect(() => {
-    if (!isSprayerModalOpen && !isTankModalOpen) return;
+    if (!isSprayerModalOpen && !isTankModalOpen && !isCalModalOpen) return;
 
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         if (isSprayerModalOpen) closeSprayerModal();
         if (isTankModalOpen) closeTankModal();
+        if (isCalModalOpen) closeCalModal();
       }
     }
 
@@ -357,6 +402,93 @@ export function PestControlSetupPage() {
     }
   }
 
+  // ── Calibration modal helpers ──────────────────────────────────────────────
+
+  function closeCalModal() {
+    setIsCalModalOpen(false);
+    setCalSprayerId(null);
+    setCalForm(INITIAL_CAL_FORM);
+    setCalError(null);
+  }
+
+  function openCalModal(sprayerId: string) {
+    const existing = calibrations.filter((c) => c.sprayer_id === sprayerId);
+    const readings: Record<number, CalibrationFormPsiRow> = {
+      50: { ...EMPTY_PSI_ROW },
+      100: { ...EMPTY_PSI_ROW },
+      150: { ...EMPTY_PSI_ROW },
+      200: { ...EMPTY_PSI_ROW }
+    };
+    let notes = "";
+    for (const row of existing) {
+      readings[row.psi] = {
+        nozzle_1: String(row.nozzle_1_ml_per_min),
+        nozzle_2: String(row.nozzle_2_ml_per_min),
+        nozzle_3: String(row.nozzle_3_ml_per_min)
+      };
+      if (row.notes) notes = row.notes;
+    }
+    setCalSprayerId(sprayerId);
+    setCalForm({ readings, notes });
+    setCalError(null);
+    setCalSaving(false);
+    setIsCalModalOpen(true);
+  }
+
+  async function handleCalSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCalError(null);
+
+    const rows = CALIBRATION_PSI_POINTS.map((psi) => {
+      const r = calForm.readings[psi];
+      return {
+        psi,
+        nozzle_1_ml_per_min: Number(r.nozzle_1),
+        nozzle_2_ml_per_min: Number(r.nozzle_2),
+        nozzle_3_ml_per_min: Number(r.nozzle_3)
+      };
+    });
+
+    for (const row of rows) {
+      for (const [key, val] of [
+        ["Nozzle 1", row.nozzle_1_ml_per_min],
+        ["Nozzle 2", row.nozzle_2_ml_per_min],
+        ["Nozzle 3", row.nozzle_3_ml_per_min]
+      ] as [string, number][]) {
+        if (!Number.isFinite(val) || val <= 0) {
+          setCalError(`${key} at ${row.psi} PSI must be a positive number.`);
+          return;
+        }
+      }
+    }
+
+    setCalSaving(true);
+    try {
+      const response = await apiFetch(`${SPRAYERS_URL}/${calSprayerId}/calibration`, {
+        method: "PUT",
+        body: JSON.stringify({ notes: calForm.notes.trim() || null, rows })
+      });
+      if (!response.ok) {
+        let message = "Failed to save calibration";
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch { /* use fallback */ }
+        throw new Error(message);
+      }
+      const saved = (await response.json()) as CalibrationRecord[];
+      setCalibrations((prev) => [
+        ...prev.filter((c) => c.sprayer_id !== calSprayerId),
+        ...saved
+      ]);
+      closeCalModal();
+    } catch (submitError) {
+      setCalError(submitError instanceof Error ? submitError.message : "Failed to save calibration");
+    } finally {
+      setCalSaving(false);
+    }
+  }
+
   function sprayerTankLabel(sprayer: Sprayer): string {
     if (sprayer.has_tank) {
       return sprayer.tank_volume_liters != null ? `Built-in (${sprayer.tank_volume_liters} L)` : "Built-in (—)";
@@ -400,6 +532,7 @@ export function PestControlSetupPage() {
                   <th>PSI</th>
                   <th>Speed range (m/min)</th>
                   <th>Tank</th>
+                  <th>Calibration</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -419,7 +552,21 @@ export function PestControlSetupPage() {
                     </td>
                     <td>{sprayerTankLabel(sprayer)}</td>
                     <td>
+                      {calibrations.filter((c) => c.sprayer_id === sprayer.id).length >= 4 ? (
+                        <span style={{ color: "var(--success, #0f7660)", fontSize: "0.82em" }}>
+                          Calibrated
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)", fontSize: "0.82em" }}>
+                          Not calibrated
+                        </span>
+                      )}
+                    </td>
+                    <td>
                       <div className="row-actions">
+                        <button type="button" onClick={() => openCalModal(sprayer.id)}>
+                          Calibrate
+                        </button>
                         <button type="button" onClick={() => beginEditSprayer(sprayer)}>
                           Edit
                         </button>
@@ -639,6 +786,80 @@ export function PestControlSetupPage() {
                   {sprayerSaving ? "Saving..." : "Save"}
                 </button>
                 <button type="button" className="secondary" onClick={closeSprayerModal}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Calibration modal ─────────────────────────────────────────────── */}
+      {isCalModalOpen && calSprayerId ? (
+        <div className="modal-overlay" onClick={closeCalModal}>
+          <div className="variety-modal cal-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Calibrate Sprayer</h2>
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: "0.3rem 0 1.1rem" }}>
+              Run the sprayer and measure output from the same 3 nozzles at each pressure.
+              Enter the collected volume (mL/min) for each nozzle.
+            </p>
+
+            <form onSubmit={(e) => void handleCalSubmit(e)}>
+              {CALIBRATION_PSI_POINTS.map((psi) => (
+                <div key={psi} className="cal-psi-section">
+                  <div className="cal-psi-header">
+                    <strong>{psi} PSI</strong>
+                    <span className="cal-psi-unit">mL/min per nozzle</span>
+                  </div>
+                  <div className="cal-nozzle-grid">
+                    {([1, 2, 3] as const).map((n) => {
+                      const fieldKey = `nozzle_${n}` as keyof CalibrationFormPsiRow;
+                      return (
+                        <label key={n}>
+                          Nozzle {n}
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={calForm.readings[psi][fieldKey]}
+                            onChange={(e) =>
+                              setCalForm((f) => ({
+                                ...f,
+                                readings: {
+                                  ...f.readings,
+                                  [psi]: { ...f.readings[psi], [fieldKey]: e.target.value }
+                                }
+                              }))
+                            }
+                            required
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              <label className="cal-notes">
+                Notes (optional)
+                <textarea
+                  value={calForm.notes}
+                  onChange={(e) => setCalForm((f) => ({ ...f, notes: e.target.value }))}
+                  rows={2}
+                  style={{ resize: "vertical", width: "100%", boxSizing: "border-box" }}
+                />
+              </label>
+
+              {calError ? (
+                <p className="form-error" style={{ marginTop: "0.5rem" }}>{calError}</p>
+              ) : null}
+
+              <div className="form-actions" style={{ marginTop: "1.1rem" }}>
+                <button type="submit" disabled={calSaving}>
+                  {calSaving ? "Saving..." : "Save"}
+                </button>
+                <button type="button" className="secondary" onClick={closeCalModal}>
                   Cancel
                 </button>
               </div>

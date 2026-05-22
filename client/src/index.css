@@ -1811,6 +1811,76 @@ body {
   min-width: 400px;
 }
 
+.valve-empty-state {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+/* ── Sprayer calibration modal ─────────────────────────────────────────────── */
+
+.cal-modal {
+  width: min(720px, 100%);
+  overflow-x: hidden;
+}
+
+.cal-psi-section {
+  margin-bottom: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.875rem 1rem;
+  background: var(--surface-soft);
+}
+
+.cal-psi-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
+}
+
+.cal-psi-header strong {
+  font-size: 0.95em;
+  font-weight: 700;
+}
+
+.cal-psi-unit {
+  color: var(--text-muted);
+  font-size: 0.8em;
+  font-weight: 400;
+}
+
+.cal-nozzle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.625rem;
+}
+
+.cal-nozzle-grid label {
+  font-size: 0.875em;
+  margin: 0;
+}
+
+.cal-nozzle-grid input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cal-notes {
+  margin-top: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 520px) {
+  .cal-nozzle-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .modal-overlay {

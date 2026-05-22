@@ -739,6 +739,42 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
       average_fruit_weight_g: number | null;
     };
 
+    // Claim the lots first — the unique constraint on (organization_id, lot_number)
+    // prevents a concurrent import of the same lots from racing past this point.
+    const importRunRows = payload.sourceRuns.map((run) => ({
+      organization_id: organizationId,
+      lot_number: run.lotNumber,
+      variety_id: payload.varietyId,
+      iso_year: payload.isoYear,
+      iso_week: payload.isoWeek,
+      start_time: parseFlowMasterStartTimeToIso(run.startTime),
+      source_filename: run.sourceFilename,
+      created_by: req.userId
+    }));
+
+    const { error: claimError } = await supabase
+      .from("yield_import_runs")
+      .insert(importRunRows);
+
+    if (claimError) {
+      if (claimError.code === "23505") {
+        return res.status(409).json({
+          message: "One or more lots were already imported."
+        });
+      }
+      console.error("PDF import history insert failed (append mode):", {
+        organizationId,
+        lotCount: payload.sourceRuns.length,
+        code: claimError.code,
+        message: claimError.message,
+        details: claimError.details,
+        hint: claimError.hint
+      });
+      return res.status(500).json({
+        message: "Failed to record import history."
+      });
+    }
+
     const existingSizeKgRaw = existingEntry.size_kg ?? {};
     const existingSizeKg: Record<string, number> = {};
 
@@ -787,37 +823,23 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
       .single();
 
     if (updateError || !updated) {
+      // Release the claims so the lots can be retried.
+      const lotNumbers = importRunRows.map((r) => r.lot_number);
+      const { error: releaseError } = await supabase
+        .from("yield_import_runs")
+        .delete()
+        .eq("organization_id", organizationId)
+        .in("lot_number", lotNumbers);
+      if (releaseError) {
+        console.error("PDF import history release failed (append mode):", {
+          organizationId,
+          lotNumbers,
+          code: releaseError.code,
+          message: releaseError.message
+        });
+      }
       return res.status(500).json({
         message: "Failed to append PDF preview data into weekly entry."
-      });
-    }
-
-    const importRunRows = payload.sourceRuns.map((run) => ({
-      organization_id: organizationId,
-      lot_number: run.lotNumber,
-      variety_id: payload.varietyId,
-      iso_year: payload.isoYear,
-      iso_week: payload.isoWeek,
-      start_time: parseFlowMasterStartTimeToIso(run.startTime),
-      source_filename: run.sourceFilename,
-      created_by: req.userId
-    }));
-
-    const { error: importRunInsertError } = await supabase
-      .from("yield_import_runs")
-      .insert(importRunRows);
-
-    if (importRunInsertError) {
-      console.error("PDF import history insert failed (append mode):", {
-        organizationId,
-        lotCount: payload.sourceRuns.length,
-        code: importRunInsertError.code,
-        message: importRunInsertError.message,
-        details: importRunInsertError.details,
-        hint: importRunInsertError.hint
-      });
-      return res.status(409).json({
-        message: "One or more lots were already imported."
       });
     }
 
@@ -825,6 +847,42 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
       success: true,
       mode: "append",
       entry: updated
+    });
+  }
+
+  // Claim the lots first — the unique constraint on (organization_id, lot_number)
+  // prevents a concurrent import of the same lots from racing past this point.
+  const createImportRunRows = payload.sourceRuns.map((run) => ({
+    organization_id: organizationId,
+    lot_number: run.lotNumber,
+    variety_id: payload.varietyId,
+    iso_year: payload.isoYear,
+    iso_week: payload.isoWeek,
+    start_time: parseFlowMasterStartTimeToIso(run.startTime),
+    source_filename: run.sourceFilename,
+    created_by: req.userId
+  }));
+
+  const { error: claimError } = await supabase
+    .from("yield_import_runs")
+    .insert(createImportRunRows);
+
+  if (claimError) {
+    if (claimError.code === "23505") {
+      return res.status(409).json({
+        message: "One or more lots were already imported."
+      });
+    }
+    console.error("PDF import history insert failed (create mode):", {
+      organizationId,
+      lotCount: payload.sourceRuns.length,
+      code: claimError.code,
+      message: claimError.message,
+      details: claimError.details,
+      hint: claimError.hint
+    });
+    return res.status(500).json({
+      message: "Failed to record import history."
     });
   }
 
@@ -843,37 +901,23 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
     .single();
 
   if (insertError || !inserted) {
+    // Release the claims so the lots can be retried.
+    const claimedLotNumbers = createImportRunRows.map((r) => r.lot_number);
+    const { error: releaseError } = await supabase
+      .from("yield_import_runs")
+      .delete()
+      .eq("organization_id", organizationId)
+      .in("lot_number", claimedLotNumbers);
+    if (releaseError) {
+      console.error("PDF import history release failed (create mode):", {
+        organizationId,
+        lotNumbers: claimedLotNumbers,
+        code: releaseError.code,
+        message: releaseError.message
+      });
+    }
     return res.status(500).json({
       message: "Failed to import PDF preview data into weekly entry."
-    });
-  }
-
-  const importRunRows = payload.sourceRuns.map((run) => ({
-    organization_id: organizationId,
-    lot_number: run.lotNumber,
-    variety_id: payload.varietyId,
-    iso_year: payload.isoYear,
-    iso_week: payload.isoWeek,
-    start_time: parseFlowMasterStartTimeToIso(run.startTime),
-    source_filename: run.sourceFilename,
-    created_by: req.userId
-  }));
-
-  const { error: importRunInsertError } = await supabase
-    .from("yield_import_runs")
-    .insert(importRunRows);
-
-  if (importRunInsertError) {
-    console.error("PDF import history insert failed (create mode):", {
-      organizationId,
-      lotCount: payload.sourceRuns.length,
-      code: importRunInsertError.code,
-      message: importRunInsertError.message,
-      details: importRunInsertError.details,
-      hint: importRunInsertError.hint
-    });
-    return res.status(409).json({
-      message: "One or more lots were already imported."
     });
   }
 

@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 import { requireOrganizationContext } from "./middleware/requireOrganizationContext";
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
 import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportRuns";
@@ -37,6 +38,26 @@ function buildAllowedOrigins(): Set<string> {
 
 const allowedOrigins = buildAllowedOrigins();
 
+// General API limiter — applied to every /api route.
+// Generous enough not to affect normal use, tight enough to blunt abuse.
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,   // 15 minutes
+  limit: 300,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "Too many requests. Please try again later." }
+});
+
+// Strict limiter for expensive write-heavy endpoints:
+// DockLink sync (full-table fetch) and PDF batch upload (CPU + DB intensive).
+const strictLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,   // 15 minutes
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "Too many requests for this operation. Please wait before retrying." }
+});
+
 const app = express();
 
 app.use(
@@ -64,7 +85,13 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+
+// Rate limiting — applied before any route logic runs.
+app.use("/api", apiLimiter);
+app.use("/api/agent/pdf-import", strictLimiter);
+app.use("/api/integrations/docklink/sync-color-cases", strictLimiter);
+app.use("/api/pdf-import", strictLimiter);
 
 app.use("/api", healthRouter);
 app.use("/api", adminOrganizationsRouter);

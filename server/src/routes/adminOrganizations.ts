@@ -147,8 +147,7 @@ adminOrganizationsRouter.post(
         status: inviteError?.status,
         code: inviteError?.code,
         details: getSupabaseErrorDetails(inviteError),
-        name: inviteError?.name,
-        full: inviteError
+        name: inviteError?.name
       });
       // Roll back org so we don't leave an orphaned organization row
       await supabase.from("organizations").delete().eq("id", organizationId);
