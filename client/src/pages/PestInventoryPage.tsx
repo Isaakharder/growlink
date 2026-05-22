@@ -82,6 +82,12 @@ export function PestInventoryPage() {
   const [form, setForm] = useState<ChemicalFormState>(INITIAL_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
+  const [restockChemicalId, setRestockChemicalId] = useState<string | null>(null);
+  const [restockAmount, setRestockAmount] = useState<string>("");
+  const [restockNote, setRestockNote] = useState<string>("");
+  const [restockSaving, setRestockSaving] = useState(false);
+  const [restockError, setRestockError] = useState<string | null>(null);
 
   // PDF upload state
   const [pendingPdf, setPendingPdf] = useState<File | null>(null);
@@ -112,15 +118,18 @@ export function PestInventoryPage() {
   }, []);
 
   useEffect(() => {
-    if (!isModalOpen) return;
+    if (!isModalOpen && !isRestockModalOpen) return;
 
     function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") closeModal();
+      if (event.key === "Escape") {
+        if (isModalOpen) closeModal();
+        if (isRestockModalOpen) closeRestockModal();
+      }
     }
 
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [isModalOpen]);
+  }, [isModalOpen, isRestockModalOpen]);
 
   function openAddModal() {
     setEditingId(null);
@@ -250,6 +259,73 @@ export function PestInventoryPage() {
     }
   }
 
+  function openRestockModal(chemical: Chemical) {
+    setRestockChemicalId(chemical.id);
+    setRestockAmount("");
+    setRestockNote("");
+    setRestockError(null);
+    setIsRestockModalOpen(true);
+  }
+
+  function closeRestockModal() {
+    setIsRestockModalOpen(false);
+    setRestockChemicalId(null);
+    setRestockAmount("");
+    setRestockNote("");
+    setRestockError(null);
+    setRestockSaving(false);
+  }
+
+  async function handleRestockSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRestockError(null);
+
+    if (!restockChemicalId) {
+      setRestockError("Select a chemical to restock.");
+      return;
+    }
+
+    const amount = Number(restockAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setRestockError("Restock amount must be greater than 0.");
+      return;
+    }
+
+    setRestockSaving(true);
+    try {
+      const response = await apiFetch(`${CHEMICALS_URL}/${restockChemicalId}/restock`, {
+        method: "POST",
+        body: JSON.stringify({
+          amount,
+          note: restockNote.trim() || undefined
+        })
+      });
+
+      if (!response.ok) {
+        let message = "Restock failed";
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch {
+          // use fallback
+        }
+        throw new Error(message);
+      }
+
+      const updated = (await response.json()) as Chemical;
+      setChemicals((current) =>
+        current.map((chemical) => (chemical.id === updated.id ? updated : chemical))
+      );
+      closeRestockModal();
+    } catch (submitError) {
+      setRestockError(
+        submitError instanceof Error ? submitError.message : "Failed to restock chemical"
+      );
+    } finally {
+      setRestockSaving(false);
+    }
+  }
+
   async function removeLabel(chemical: Chemical) {
     if (!window.confirm("Remove the uploaded label PDF?")) return;
     setRemovingLabel(true);
@@ -290,6 +366,9 @@ export function PestInventoryPage() {
 
   const editingChemical = editingId
     ? chemicals.find((c) => c.id === editingId) ?? null
+    : null;
+  const restockChemical = restockChemicalId
+    ? chemicals.find((c) => c.id === restockChemicalId) ?? null
     : null;
 
   return (
@@ -374,6 +453,9 @@ export function PestInventoryPage() {
                     </td>
                     <td>
                       <div className="row-actions">
+                        <button type="button" onClick={() => openRestockModal(c)}>
+                          Restock
+                        </button>
                         <button type="button" onClick={() => beginEdit(c)}>
                           Edit
                         </button>
@@ -639,6 +721,62 @@ export function PestInventoryPage() {
                   {saving ? "Saving..." : "Save"}
                 </button>
                 <button type="button" className="secondary" onClick={closeModal}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {isRestockModalOpen && restockChemical ? (
+        <div className="modal-overlay" onClick={closeRestockModal}>
+          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Restock chemical</h2>
+
+            <form className="varieties-form" onSubmit={handleRestockSubmit}>
+              <label>
+                Chemical
+                <input type="text" value={restockChemical.name} readOnly />
+              </label>
+
+              <label>
+                Current inventory
+                <input
+                  type="text"
+                  value={`${restockChemical.inventory_qty} ${restockChemical.inventory_unit}`}
+                  readOnly
+                />
+              </label>
+
+              <label>
+                Restock amount ({restockChemical.inventory_unit})
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={restockAmount}
+                  onChange={(event) => setRestockAmount(event.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Note (optional)
+                <textarea
+                  value={restockNote}
+                  rows={3}
+                  onChange={(event) => setRestockNote(event.target.value)}
+                />
+              </label>
+
+              {restockError ? <p className="form-error">{restockError}</p> : null}
+
+              <div className="form-actions">
+                <button type="submit" disabled={restockSaving}>
+                  {restockSaving ? "Saving..." : "Save"}
+                </button>
+                <button type="button" className="secondary" onClick={closeRestockModal} disabled={restockSaving}>
                   Cancel
                 </button>
               </div>

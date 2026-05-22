@@ -11,6 +11,7 @@ type SetupGroup = {
 type SetupRow = {
   id: string;
   group_id: string;
+  row_number?: number;
   width_meters: number | null;
   length_meters: number | null;
 };
@@ -473,15 +474,31 @@ export function PestPlannerPage() {
     return selectedValveIds.map((valveId) => {
       const valve = feedValves.find((v) => v.id === valveId);
       const valveName = valve?.name ?? "Unknown";
-      const valveRows = rowValves
-        .filter((rv) => rv.valve_id === valveId)
+      const linkedLinks = rowValves.filter((rv) => rv.valve_id === valveId);
+      const valveRows = linkedLinks
         .map((rv) => rowById[rv.row_id])
         .filter((r): r is SetupRow => r !== undefined);
+
+      // DEBUG: drench by-valve area — remove after diagnosis
+      console.group(`[drench-valve] ${valveName} (id=${valveId})`);
+      console.log(`  linked row_ids (${linkedLinks.length}):`, linkedLinks.map((rv) => rv.row_id));
+      console.log(`  resolved rows (${valveRows.length}):`, valveRows.map((r) => ({
+        row_id: r.id,
+        row_number: r.row_number ?? "?",
+        width_meters: r.width_meters,
+        length_meters: r.length_meters,
+        area_m2: rowAreaM2(r),
+      })));
+      const orphaned = linkedLinks.filter((rv) => !rowById[rv.row_id]).map((rv) => rv.row_id);
+      if (orphaned.length > 0) console.warn(`  ORPHANED row_ids (not in rows list):`, orphaned);
+      console.groupEnd();
+
       if (valveRows.length === 0) {
         return { valveId, valveName, hasRows: false, m2: 0, ml: 0 };
       }
       const m2 = valveRows.reduce((sum, r) => sum + rowAreaM2(r), 0);
       const ml = computeChemicalMl(m2, rate, rateUnit);
+      console.log(`[drench-valve] ${valveName} total m2=${m2.toFixed(2)}`);
       return { valveId, valveName, hasRows: true, m2, ml };
     });
   }, [targetMode, selectedValveIds, feedValves, rowValves, rowById, rateValue, rateUnit, chemicalNeededResult]);
@@ -752,6 +769,27 @@ export function PestPlannerPage() {
           }
         : { ...calc_base, type: applicationType };
 
+    // For valve-drench plans, pre-build the progress snapshot so mobile can show
+    // per-valve cards immediately without needing a greenhouse-setup lookup.
+    const progress_snapshot =
+      applicationType === "drench" &&
+      targetMode === "valve" &&
+      chemicalNeededResult &&
+      perValveBreakdown.length > 0
+        ? {
+            type: "valve_drench",
+            valves: perValveBreakdown.map((v) => ({
+              valveId: v.valveId,
+              valveName: v.valveName,
+              areaM2: v.m2,
+              productAmount: v.ml,
+              productUnit: chemicalNeededResult.unit,
+              completed: false,
+              completedAt: null
+            }))
+          }
+        : null;
+
     try {
       const res = await apiFetch("/api/pest/todos", {
         method: "POST",
@@ -763,6 +801,7 @@ export function PestPlannerPage() {
           sprayer_snapshot,
           tank_snapshot,
           calculation_snapshot,
+          progress_snapshot,
           instructions: instructions.trim() || null
         })
       });

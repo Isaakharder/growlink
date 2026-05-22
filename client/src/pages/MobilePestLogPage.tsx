@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 
 // ── Snapshot types ────────────────────────────────────────────────────────────
@@ -16,8 +16,11 @@ type ChemicalSnapshot = {
 };
 
 type TargetSnapshot = {
+  target_mode?: string;
   group_ids?: string[];
   group_names?: string[];
+  valve_ids?: string[];
+  valve_names?: string[];
   total_m2?: number | null;
   total_row_length_meters?: number | null;
 };
@@ -96,6 +99,21 @@ type ProgressSnapshot = {
   activeMixNumber?: number | null;
 };
 
+type ValveEntry = {
+  valveId: string;
+  valveName: string;
+  areaM2: number;
+  productAmount: number;
+  productUnit: string;
+  completed: boolean;
+  completedAt: string | null;
+};
+
+type ValveDrenchSnapshot = {
+  type: "valve_drench";
+  valves: ValveEntry[];
+};
+
 type PestTodo = {
   id: string;
   type: "spray" | "drench";
@@ -171,6 +189,13 @@ export function MobilePestLogPage() {
   const [sectionFrom, setSectionFrom] = useState("");
   const [sectionTo, setSectionTo] = useState("");
   const [showPrevMixes, setShowPrevMixes] = useState(false);
+  const [valveDrenchProgress, setValveDrenchProgress] = useState<ValveDrenchSnapshot | null>(null);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+
+  // ── Long-press delete state ────────────────────────────────────────────────
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -194,6 +219,7 @@ export function MobilePestLogPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     setProgress(null);
+    setValveDrenchProgress(null);
     setSelectedPhaseIdx(0);
     setShowCompleteSection(false);
     setShowPrevMixes(false);
@@ -206,7 +232,15 @@ export function MobilePestLogPage() {
     const todo = todos.find((t) => t.id === selectedId);
     if (!todo) return;
 
-    const snap = todo.progress_snapshot as Partial<ProgressSnapshot>;
+    const snapRaw = todo.progress_snapshot as Record<string, unknown>;
+
+    // Valve-drench: progress snapshot already has valve breakdown
+    if (snapRaw.type === "valve_drench" && Array.isArray(snapRaw.valves)) {
+      setValveDrenchProgress(snapRaw as ValveDrenchSnapshot);
+      return;
+    }
+
+    const snap = snapRaw as Partial<ProgressSnapshot>;
     if (snap.phases && snap.phases.length > 0) {
       setProgress(snap as ProgressSnapshot);
       const firstIncomplete = snap.phases.findIndex((p) => !p.completed);
@@ -276,6 +310,103 @@ export function MobilePestLogPage() {
       // non-fatal
     } finally {
       if (showSaving) setSavingProgress(false);
+    }
+  }
+
+  // ── Long-press delete helpers ─────────────────────────────────────────────
+
+  function startLongPress(todoId: string) {
+    longPressTimer.current = setTimeout(() => {
+      setDeleteTargetId(todoId);
+    }, 5000);
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTargetId) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/pest/todos/${deleteTargetId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to delete plan");
+      }
+      setTodos((prev) => prev.filter((t) => t.id !== deleteTargetId));
+      setDeleteTargetId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete plan");
+      setDeleteTargetId(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // ── Valve-drench progress ──────────────────────────────────────────────────
+
+  async function patchValveDrenchProgress(todoId: string, snap: ValveDrenchSnapshot) {
+    setSavingProgress(true);
+    try {
+      const res = await apiFetch(`/api/pest/todos/${todoId}/progress`, {
+        method: "PATCH",
+        body: JSON.stringify({ progress_snapshot: snap })
+      });
+      if (res.ok) {
+        setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap as unknown as Record<string, unknown> } : t)));
+      }
+    } catch {
+      // non-fatal
+    } finally {
+      setSavingProgress(false);
+    }
+  }
+
+  async function completeValve(todoId: string, valveId: string) {
+    if (!valveDrenchProgress) return;
+    const todo = todos.find((t) => t.id === todoId);
+    if (!todo) return;
+
+    if (todo.status === "pending") markInProgress(todo.id);
+
+    const now = new Date().toISOString();
+    const newSnap: ValveDrenchSnapshot = {
+      ...valveDrenchProgress,
+      valves: valveDrenchProgress.valves.map((v) =>
+        v.valveId === valveId ? { ...v, completed: true, completedAt: now } : v
+      )
+    };
+    setValveDrenchProgress(newSnap);
+    await patchValveDrenchProgress(todoId, newSnap);
+
+    if (newSnap.valves.every((v) => v.completed)) {
+      await completeValveDrenchJob(todoId);
+    }
+  }
+
+  async function completeValveDrenchJob(todoId: string) {
+    setCompleting(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/pest/todos/${todoId}/complete`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to save record");
+      }
+      setShowCompletionModal(true);
+      await fetchTodos();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save record");
+    } finally {
+      setCompleting(false);
     }
   }
 
@@ -745,8 +876,8 @@ export function MobilePestLogPage() {
               </div>
             ) : null}
           </div>
-        ) : calc.total_chemical_ml != null && Number.isFinite(calc.total_chemical_ml) ? (
-          /* Fallback: drench or spray with no tank plan */
+        ) : !valveDrenchProgress && calc.total_chemical_ml != null && Number.isFinite(calc.total_chemical_ml) ? (
+          /* Fallback: drench or spray with no tank plan (not shown for valve drench — each valve card shows its own amount) */
           <div
             className="mobile-yield-card"
             style={{ marginTop: "0.85rem", background: "var(--brand-soft)", border: "1px solid var(--brand)" }}
@@ -763,10 +894,72 @@ export function MobilePestLogPage() {
           </div>
         ) : null}
 
+        {/* ── Valve drench tracking ────────────────────────────────────────── */}
+        {valveDrenchProgress ? (
+          <div style={{ marginTop: "1rem" }}>
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: "0 0 0.65rem" }}>
+              <strong>{valveDrenchProgress.valves.filter((v) => v.completed).length}</strong>
+              {" "}of{" "}
+              <strong>{valveDrenchProgress.valves.length}</strong> valves complete
+            </p>
+            <div style={{ display: "grid", gap: "0.55rem" }}>
+              {valveDrenchProgress.valves.map((valve) => (
+                <div
+                  key={valve.valveId}
+                  className="mobile-yield-card"
+                  style={{
+                    padding: "0.65rem 0.85rem",
+                    opacity: valve.completed ? 0.7 : 1,
+                    border: valve.completed ? "1px solid var(--brand)" : "1px solid var(--border)"
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+                    <div>
+                      <p style={{ margin: 0, fontWeight: 700, fontSize: "0.95em" }}>
+                        {valve.completed ? "✓ " : ""}{valve.valveName}
+                      </p>
+                      <p style={{ margin: "0.15rem 0 0", fontSize: "0.78em", color: "var(--text-muted)" }}>
+                        {roundTo(valve.areaM2, 1).toLocaleString()} m²
+                      </p>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <p style={{ margin: 0, fontWeight: 700, fontSize: "1em", color: "var(--brand)" }}>
+                        {valve.productUnit === "g"
+                          ? (Math.round(valve.productAmount / 5) * 5).toLocaleString()
+                          : roundTo(valve.productAmount, 1).toLocaleString()}{" "}
+                        {valve.productUnit}
+                      </p>
+                      {valve.completed && valve.completedAt ? (
+                        <p style={{ margin: "0.1rem 0 0", fontSize: "0.72em", color: "var(--text-muted)" }}>
+                          Done {formatTime(valve.completedAt)}
+                        </p>
+                      ) : (
+                        (selectedTodo.status === "pending" || selectedTodo.status === "in_progress") ? (
+                          <button
+                            type="button"
+                            disabled={completing || savingProgress}
+                            style={{ marginTop: "0.4rem", fontSize: "0.8em", padding: "0.3rem 0.7rem" }}
+                            onClick={() => void completeValve(selectedTodo.id, valve.valveId)}
+                          >
+                            {completing ? "…" : "Complete"}
+                          </button>
+                        ) : null
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {savingProgress ? (
+              <p style={{ fontSize: "0.78em", color: "var(--text-muted)", marginTop: "0.4rem" }}>Saving…</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* ── Phase / Row tracking ─────────────────────────────────────────── */}
-        {loadingProgress ? (
+        {!valveDrenchProgress && loadingProgress ? (
           <p style={{ marginTop: "1rem" }}>Loading rows…</p>
-        ) : progress && progress.phases.length > 0 ? (
+        ) : !valveDrenchProgress && progress && progress.phases.length > 0 ? (
           <div style={{ marginTop: "1rem" }}>
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: "0 0 0.65rem" }}>
               <strong>{doneRows}</strong> of <strong>{totalRows}</strong> rows complete
@@ -913,7 +1106,7 @@ export function MobilePestLogPage() {
               </div>
             ) : null}
           </div>
-        ) : progress && progress.phases.length === 0 ? (
+        ) : !valveDrenchProgress && progress && progress.phases.length === 0 ? (
           <div className="mobile-yield-card" style={{ marginTop: "1rem" }}>
             <p style={{ margin: 0, fontSize: "0.85em", color: "var(--text-muted)" }}>
               No greenhouse rows found for the selected phases. You can mark the job complete manually below.
@@ -931,7 +1124,7 @@ export function MobilePestLogPage() {
 
         {/* ── Job status actions ────────────────────────────────────────────── */}
         {(selectedTodo.status === "pending" || selectedTodo.status === "in_progress") ? (
-          progress && progress.phases.length === 0 ? (
+          !valveDrenchProgress && progress && progress.phases.length === 0 ? (
             <div style={{ marginTop: "1.25rem" }}>
               <button
                 type="button"
@@ -976,6 +1169,53 @@ export function MobilePestLogPage() {
             ) : null}
           </div>
         ) : null}
+
+        {/* ── Valve drench completion modal ─────────────────────────────────── */}
+        {showCompletionModal ? (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.55)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 9999,
+              padding: "1.5rem"
+            }}
+          >
+            <div
+              style={{
+                background: "var(--surface)",
+                borderRadius: "12px",
+                padding: "1.75rem 1.5rem",
+                maxWidth: "340px",
+                width: "100%",
+                textAlign: "center",
+                boxShadow: "0 8px 32px rgba(0,0,0,0.22)"
+              }}
+            >
+              <p style={{ fontSize: "2rem", margin: "0 0 0.5rem" }}>✓</p>
+              <h2 style={{ margin: "0 0 0.5rem" }}>Plan Complete</h2>
+              <p style={{ margin: "0 0 0.25rem", color: "var(--text-muted)", fontSize: "0.9em" }}>
+                Saved to Records
+              </p>
+              <p style={{ margin: "0 0 1.25rem", color: "var(--text-muted)", fontSize: "0.9em" }}>
+                Inventory has been updated
+              </p>
+              <button
+                type="button"
+                style={{ width: "100%" }}
+                onClick={() => {
+                  setShowCompletionModal(false);
+                  setSelectedId(null);
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
     );
   }
@@ -1007,9 +1247,17 @@ export function MobilePestLogPage() {
         const chem = todo.chemical_snapshot;
         const target = todo.target_snapshot;
         const calc = todo.calculation_snapshot;
-        const snap = todo.progress_snapshot as Partial<ProgressSnapshot>;
-        const totalR = snap.phases?.reduce((s, p) => s + p.rows.length, 0) ?? 0;
-        const doneR = snap.phases?.reduce((s, p) => s + p.rows.filter((r) => r.completed).length, 0) ?? 0;
+        const snapRaw = todo.progress_snapshot as Record<string, unknown>;
+        const isValveDrench = snapRaw.type === "valve_drench" && Array.isArray(snapRaw.valves);
+        const vdSnap = isValveDrench ? (snapRaw as ValveDrenchSnapshot) : null;
+        const totalV = vdSnap ? vdSnap.valves.length : 0;
+        const doneV = vdSnap ? vdSnap.valves.filter((v) => v.completed).length : 0;
+        const snap = snapRaw as Partial<ProgressSnapshot>;
+        const totalR = !isValveDrench ? (snap.phases?.reduce((s, p) => s + p.rows.length, 0) ?? 0) : 0;
+        const doneR = !isValveDrench ? (snap.phases?.reduce((s, p) => s + p.rows.filter((r) => r.completed).length, 0) ?? 0) : 0;
+        const totalProg = isValveDrench ? totalV : totalR;
+        const doneProg = isValveDrench ? doneV : doneR;
+        const progLabel = isValveDrench ? "valves" : "rows";
 
         return (
           <button
@@ -1017,13 +1265,21 @@ export function MobilePestLogPage() {
             type="button"
             className="pest-todo-card"
             onClick={() => setSelectedId(todo.id)}
+            onMouseDown={() => startLongPress(todo.id)}
+            onMouseUp={cancelLongPress}
+            onMouseLeave={cancelLongPress}
+            onTouchStart={() => startLongPress(todo.id)}
+            onTouchEnd={cancelLongPress}
+            onTouchCancel={cancelLongPress}
           >
             <div className="pest-todo-card-header">
               <span className="pest-todo-type-badge" data-type={todo.type}>
                 {todo.type === "spray" ? "Spray" : "Drench"}
               </span>
-              {totalR > 0 ? (
-                <span style={{ fontSize: "0.75em", color: "var(--text-muted)" }}>{doneR}/{totalR} rows</span>
+              {totalProg > 0 ? (
+                <span style={{ fontSize: "0.75em", color: "var(--text-muted)" }}>
+                  {doneProg}/{totalProg} {progLabel}
+                </span>
               ) : (
                 <span className="pest-todo-status-badge" data-status={todo.status}>
                   {todo.status === "in_progress" ? "In Progress" : "Pending"}
@@ -1031,7 +1287,9 @@ export function MobilePestLogPage() {
               )}
             </div>
             <p className="pest-todo-card-chemical">{chem.name ?? "—"}</p>
-            {target.group_names && target.group_names.length > 0 ? (
+            {isValveDrench && target.valve_names && target.valve_names.length > 0 ? (
+              <p className="pest-todo-card-target">{target.valve_names.join(", ")}</p>
+            ) : !isValveDrench && target.group_names && target.group_names.length > 0 ? (
               <p className="pest-todo-card-target">{target.group_names.join(", ")}</p>
             ) : null}
             <div className="pest-todo-card-stats">
@@ -1045,13 +1303,13 @@ export function MobilePestLogPage() {
                 <span>~{roundTo(safeNum(calc.spray_time_minutes), 0)} min</span>
               ) : null}
             </div>
-            {totalR > 0 ? (
+            {totalProg > 0 ? (
               <div style={{ marginTop: "0.4rem" }}>
                 <div style={{ height: "4px", background: "var(--border)", borderRadius: "2px", overflow: "hidden" }}>
                   <div
                     style={{
                       height: "100%",
-                      width: `${totalR > 0 ? (doneR / totalR) * 100 : 0}%`,
+                      width: `${(doneProg / totalProg) * 100}%`,
                       background: "var(--brand)",
                       borderRadius: "2px",
                       transition: "width 0.3s"
@@ -1106,6 +1364,58 @@ export function MobilePestLogPage() {
               })}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* ── Delete confirm modal ──────────────────────────────────────────── */}
+      {deleteTargetId ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "1.5rem"
+          }}
+        >
+          <div
+            style={{
+              background: "var(--surface)",
+              borderRadius: "12px",
+              padding: "1.75rem 1.5rem",
+              maxWidth: "320px",
+              width: "100%",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.22)"
+            }}
+          >
+            <h2 style={{ margin: "0 0 0.5rem" }}>Delete this plan?</h2>
+            <p style={{ margin: "0 0 1.25rem", fontSize: "0.9em", color: "var(--text-muted)" }}>
+              This will remove the plan from the mobile list. This cannot be undone.
+            </p>
+            {error ? <p className="form-error" style={{ marginBottom: "0.75rem" }}>{error}</p> : null}
+            <div style={{ display: "flex", gap: "0.65rem" }}>
+              <button
+                type="button"
+                className="secondary"
+                style={{ flex: 1 }}
+                disabled={deleting}
+                onClick={() => { setDeleteTargetId(null); setError(null); }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={{ flex: 1, background: "var(--error, #d32f2f)", borderColor: "var(--error, #d32f2f)" }}
+                disabled={deleting}
+                onClick={() => void confirmDelete()}
+              >
+                {deleting ? "Deleting…" : "Yes, delete"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </section>

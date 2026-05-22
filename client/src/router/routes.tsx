@@ -15,6 +15,7 @@ import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
 import { PestControlSetupPage } from "../pages/PestControlSetupPage";
 import { PestInventoryPage } from "../pages/PestInventoryPage";
+import { PestControlRecordsPage } from "../pages/PestControlRecordsPage";
 import { PestPlannerPage } from "../pages/PestPlannerPage";
 import { QualityCheckPage } from "../pages/QualityCheckPage";
 import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
@@ -73,12 +74,7 @@ export const appRouter = createBrowserRouter([
           },
           {
             path: "pest-control/records",
-            element: (
-              <PagePlaceholder
-                title="Pest Control Records"
-                description="Historical pest control records and compliance-ready logs will be organized in this area."
-              />
-            )
+            element: <PestControlRecordsPage />
           },
           {
             path: "pest-control",

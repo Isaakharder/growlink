@@ -129,6 +129,25 @@ function validateProgressSnapshot(raw: unknown): Record<string, unknown> {
     throw new Error("progress_snapshot must be an object");
   }
   const snap = raw as Record<string, unknown>;
+
+  // Valve-drench shape
+  if (snap.type === "valve_drench") {
+    if (!Array.isArray(snap.valves)) throw new Error("progress_snapshot.valves must be an array");
+    for (const valve of snap.valves) {
+      if (!valve || typeof valve !== "object" || Array.isArray(valve)) throw new Error("Each valve must be an object");
+      const v = valve as Record<string, unknown>;
+      if (typeof v.valveId !== "string" || !v.valveId) throw new Error("valve.valveId must be a non-empty string");
+      if (typeof v.valveName !== "string") throw new Error("valve.valveName must be a string");
+      if (typeof v.areaM2 !== "number") throw new Error("valve.areaM2 must be a number");
+      if (typeof v.productAmount !== "number") throw new Error("valve.productAmount must be a number");
+      if (typeof v.productUnit !== "string" || !v.productUnit) throw new Error("valve.productUnit must be a non-empty string");
+      if (typeof v.completed !== "boolean") throw new Error("valve.completed must be a boolean");
+      if (v.completedAt !== null && typeof v.completedAt !== "string") throw new Error("valve.completedAt must be a string or null");
+    }
+    return { type: "valve_drench", valves: snap.valves };
+  }
+
+  // Phase-based shape
   if (!Array.isArray(snap.phases)) {
     throw new Error("progress_snapshot.phases must be an array");
   }
@@ -403,6 +422,11 @@ type ChemicalPayload = {
   registration_number: string | null;
 };
 
+type ChemicalRestockPayload = {
+  amount: number;
+  note: string | null;
+};
+
 function parseBoolean(value: unknown, fieldName: string): boolean {
   if (value === true || value === false) {
     return value;
@@ -461,6 +485,23 @@ function validateChemicalPayload(input: unknown): ChemicalPayload {
     chemical_type: chemical_type_raw as ChemicalType | null,
     active_ingredients: parseOptionalText(body.active_ingredients),
     registration_number: parseOptionalText(body.registration_number)
+  };
+}
+
+function validateChemicalRestockPayload(input: unknown): ChemicalRestockPayload {
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid request body");
+  }
+
+  const body = input as Record<string, unknown>;
+  const amount = typeof body.amount === "number" ? body.amount : Number(body.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("amount must be greater than 0");
+  }
+
+  return {
+    amount,
+    note: parseOptionalText(body.note)
   };
 }
 
@@ -542,6 +583,67 @@ pestControlRouter.put("/pest/chemicals/:id", async (req, res) => {
       500,
       "Failed to update chemical.",
       "Chemical update error:",
+      error
+    );
+  }
+
+  return res.json(data);
+});
+
+pestControlRouter.post("/pest/chemicals/:id/restock", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  let payload: ChemicalRestockPayload;
+
+  try {
+    payload = validateChemicalRestockPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data: chemical, error: fetchError } = await supabase
+    .from("pest_chemicals")
+    .select("id, inventory_qty, inventory_unit")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(
+      res,
+      500,
+      "Failed to restock chemical.",
+      "Chemical restock fetch error:",
+      fetchError
+    );
+  }
+
+  if (!chemical) {
+    return res.status(404).json({ message: "Chemical not found" });
+  }
+
+  const currentInventoryQty = Number(chemical.inventory_qty);
+  if (!Number.isFinite(currentInventoryQty) || currentInventoryQty < 0) {
+    return res.status(500).json({ message: "Chemical has invalid inventory quantity" });
+  }
+
+  const inventory_qty = currentInventoryQty + payload.amount;
+
+  const { data, error } = await supabase
+    .from("pest_chemicals")
+    .update({ inventory_qty, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+
+  if (error) {
+    return sendSafeError(
+      res,
+      500,
+      "Failed to restock chemical.",
+      "Chemical restock update error:",
       error
     );
   }
@@ -907,6 +1009,17 @@ pestControlRouter.post("/pest/todos", async (req, res) => {
 
   const instructions = typeof body.instructions === "string" ? body.instructions.trim() || null : null;
 
+  // Accept a pre-built progress_snapshot (e.g. valve_drench) sent from the planner.
+  let initial_progress_snapshot: Record<string, unknown> | null = null;
+  if (body.progress_snapshot != null) {
+    try {
+      initial_progress_snapshot = validateProgressSnapshot(body.progress_snapshot);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid progress_snapshot";
+      return res.status(400).json({ message });
+    }
+  }
+
   const { data, error } = await supabase
     .from("pest_control_todos")
     .insert({
@@ -919,6 +1032,7 @@ pestControlRouter.post("/pest/todos", async (req, res) => {
       sprayer_snapshot: pickSnapshotKeys(body.sprayer_snapshot, SPRAYER_SNAP_KEYS),
       tank_snapshot: pickSnapshotKeys(body.tank_snapshot, TANK_SNAP_KEYS),
       calculation_snapshot: pickSnapshotKeys(body.calculation_snapshot, CALC_SNAP_KEYS),
+      progress_snapshot: initial_progress_snapshot,
       instructions,
       created_by: userId ?? null
     })
@@ -1033,11 +1147,24 @@ pestControlRouter.post("/pest/todos/:id/complete", async (req, res) => {
     }
   }
 
-  // Verify all rows and phases are complete (skip check when no phases were tracked)
+  // Verify completion — branch on snapshot type
   type SnapRow = { completed: boolean };
   type SnapPhase = { completed: boolean; rows?: SnapRow[] };
-  const snap = todo.progress_snapshot as { phases?: SnapPhase[] };
-  if (snap.phases && snap.phases.length > 0) {
+  type SnapValve = { completed: boolean };
+  const snap = todo.progress_snapshot as {
+    type?: string;
+    phases?: SnapPhase[];
+    valves?: SnapValve[];
+  };
+
+  if (snap.type === "valve_drench") {
+    if (!snap.valves || snap.valves.length === 0) {
+      return res.status(400).json({ message: "No valves found in plan." });
+    }
+    if (!snap.valves.every((v) => v.completed)) {
+      return res.status(400).json({ message: "All valves must be completed before finishing." });
+    }
+  } else if (snap.phases && snap.phases.length > 0) {
     const allPhasesComplete = snap.phases.every((p) => p.completed);
     const allRowsComplete = snap.phases.every((p) => (p.rows ?? []).every((r) => r.completed));
     if (!allPhasesComplete || !allRowsComplete) {
@@ -1089,7 +1216,133 @@ pestControlRouter.post("/pest/todos/:id/complete", async (req, res) => {
     return sendSafeError(res, 500, "Failed to complete todo.", "Todo update error:", updateError);
   }
 
+  // ── Inventory deduction ─────────────────────────────────────────────────────
+  // For valve_drench: sum the displayed-rounded per-valve amounts from the
+  // progress_snapshot (matching exactly what the operator was told to apply).
+  //   dry (g)  → each valve rounded to nearest 5 g
+  //   wet (ml) → each valve rounded to 1 decimal ml
+  // For all other todos: use calculation_snapshot.total_chemical_ml (raw total).
+  const chemId = (todo.chemical_id as string | null) ?? null;
+  if (chemId) {
+    const chemSnap = todo.chemical_snapshot as Record<string, unknown> | null;
+    const rateUnit = typeof chemSnap?.rate_unit === "string" ? chemSnap.rate_unit : null;
+
+    let totalBaseUnits: number | null = null;
+    let isDry = false;
+
+    if (snap.type === "valve_drench" && Array.isArray(snap.valves) && snap.valves.length > 0) {
+      type ValveAmt = { productAmount: unknown; productUnit: unknown };
+      const valves = snap.valves as unknown as ValveAmt[];
+      const firstUnit = typeof valves[0]?.productUnit === "string" ? valves[0].productUnit : "";
+      isDry = firstUnit === "g";
+      let sum = 0;
+      for (const v of valves) {
+        const amt = typeof v.productAmount === "number" ? v.productAmount : 0;
+        const unit = typeof v.productUnit === "string" ? v.productUnit : "";
+        // Mirror the display rounding used by the mobile valve cards.
+        const rounded = unit === "g"
+          ? Math.round(amt / 5) * 5          // nearest 5 g
+          : Math.round(amt * 10) / 10;        // 1 decimal ml
+        sum += rounded;
+      }
+      totalBaseUnits = sum;
+    } else if (rateUnit) {
+      const calcSnap = todo.calculation_snapshot as Record<string, unknown> | null;
+      totalBaseUnits = typeof calcSnap?.total_chemical_ml === "number" ? calcSnap.total_chemical_ml : null;
+      isDry = rateUnit.startsWith("g_") || rateUnit.startsWith("kg_");
+    }
+
+    if (totalBaseUnits != null && totalBaseUnits > 0) {
+      const { data: chemRow } = await supabase
+        .from("pest_chemicals")
+        .select("inventory_qty, inventory_unit")
+        .eq("id", chemId)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+
+      if (chemRow) {
+        const invUnit = (chemRow.inventory_unit as string | null) ?? "";
+        // Convert base units (g for dry, ml for wet) to the stored inventory unit.
+        let deductInInvUnit: number | null = null;
+        if (!isDry) {
+          if (invUnit === "ml") deductInInvUnit = totalBaseUnits;
+          else if (invUnit === "L") deductInInvUnit = totalBaseUnits / 1000;
+        } else {
+          if (invUnit === "g") deductInInvUnit = totalBaseUnits;
+          else if (invUnit === "kg") deductInInvUnit = totalBaseUnits / 1000;
+        }
+
+        if (deductInInvUnit != null) {
+          const currentQty = typeof chemRow.inventory_qty === "number" ? chemRow.inventory_qty : 0;
+          const newQty = Math.max(0, currentQty - deductInInvUnit);
+          await supabase
+            .from("pest_chemicals")
+            .update({ inventory_qty: newQty, updated_at: now })
+            .eq("id", chemId)
+            .eq("organization_id", organizationId);
+        } else {
+          console.warn(
+            `[pest-complete] Cannot deduct inventory: unit mismatch` +
+            ` (base=${isDry ? "g" : "ml"}, inv=${invUnit}) for chemical ${chemId}`
+          );
+        }
+      }
+    }
+  }
+
   return res.json({ ok: true, todo: updatedTodo });
+});
+
+// GET /pest/records — org-scoped completed records, newest first
+pestControlRouter.get("/pest/records", async (req, res) => {
+  const organizationId = req.organizationId;
+
+  const { data, error } = await supabase
+    .from("pest_control_records")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("completed_at", { ascending: false });
+
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load records.", "Records fetch error:", error);
+  }
+
+  return res.json(data ?? []);
+});
+
+// DELETE /pest/todos/:id — only allows deleting pending/in-progress todos
+pestControlRouter.delete("/pest/todos/:id", async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+
+  const { data: todo, error: fetchError } = await supabase
+    .from("pest_control_todos")
+    .select("id, status")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to load todo.", "Todo delete fetch error:", fetchError);
+  }
+  if (!todo) {
+    return res.status(404).json({ message: "Todo not found" });
+  }
+  if (todo.status === "completed") {
+    return res.status(409).json({ message: "Completed plans cannot be deleted." });
+  }
+
+  const { error: deleteError } = await supabase
+    .from("pest_control_todos")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+
+  if (deleteError) {
+    return sendSafeError(res, 500, "Failed to delete todo.", "Todo delete error:", deleteError);
+  }
+
+  return res.json({ success: true });
 });
 
 export { pestControlRouter };
