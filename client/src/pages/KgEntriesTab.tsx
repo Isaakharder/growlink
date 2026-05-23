@@ -53,6 +53,7 @@ const OPTIONS_URL = "/api/yield-entry-options";
 const ENTRIES_URL = "/api/yield-entries";
 const PDF_PREVIEW_URL = "/api/pdf-import/preview";
 const PDF_IMPORT_URL = "/api/pdf-import/import";
+const PENDING_IMPORTS_URL = "/api/agent-pending-imports";
 
 type PdfPreviewFileSuccess = {
   filename: string;
@@ -127,6 +128,12 @@ type GroupedPdfPreviewCard = {
   mappedCount: number;
   unmappedCount: number;
   hasImportableReadings: boolean;
+};
+
+type PendingAgentWeek = {
+  isoYear: number | null;
+  isoWeek: number | null;
+  count: number;
 };
 
 const KNOWN_SIZE_ORDER = ["Small", "Medium", "Large", "SXL", "XL", "XXL"];
@@ -216,6 +223,7 @@ export function KgEntriesTab() {
   const [pdfImportedCardKeys, setPdfImportedCardKeys] = useState<Set<string>>(new Set());
   const [pdfCardImportingKeys, setPdfCardImportingKeys] = useState<Set<string>>(new Set());
   const [pdfCardImportErrors, setPdfCardImportErrors] = useState<Record<string, string>>({});
+  const [pendingWeeks, setPendingWeeks] = useState<PendingAgentWeek[]>([]);
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<YieldEntryFormState>({
@@ -321,8 +329,41 @@ export function KgEntriesTab() {
     }
   }
 
+  async function fetchPendingWeeks() {
+    try {
+      const res = await apiFetch(PENDING_IMPORTS_URL);
+      if (!res.ok) return;
+      const body = (await res.json()) as { weeks?: PendingAgentWeek[] };
+      setPendingWeeks(body.weeks ?? []);
+    } catch {
+      // Non-critical — week cards simply won't appear if this fails.
+    }
+  }
+
+  async function handlePendingWeekClick(isoYear: number | null, isoWeek: number | null) {
+    const params =
+      isoYear !== null && isoWeek !== null
+        ? `?isoYear=${isoYear}&isoWeek=${isoWeek}`
+        : "";
+    try {
+      const res = await apiFetch(`${PENDING_IMPORTS_URL}${params}`);
+      if (!res.ok) return;
+      const body = (await res.json()) as { files?: PdfPreviewFile[] };
+      setPdfPreviewFiles(body.files ?? []);
+      setPdfPreviewError(null);
+      setPdfImportStatus(null);
+      setPdfImportedCardKeys(new Set());
+      setPdfCardImportingKeys(new Set());
+      setPdfCardImportErrors({});
+      setIsPdfPreviewOpen(true);
+    } catch {
+      // Silently ignore — user can retry by clicking the card again.
+    }
+  }
+
   useEffect(() => {
     void fetchOptionsAndEntries();
+    void fetchPendingWeeks();
   }, []);
 
   useEffect(() => {
@@ -968,6 +1009,7 @@ export function KgEntriesTab() {
 
       setPdfImportedCardKeys((current) => new Set(current).add(group.key));
       await refreshEntriesAfterImport();
+      void fetchPendingWeeks();
       return true;
     } catch (error) {
       setPdfCardImportErrors((current) => ({
@@ -1117,18 +1159,27 @@ export function KgEntriesTab() {
               onClick={() => setIsPdfPreviewOpen(true)}
               disabled={loading}
             >
-              PDF Upload
-            </button>
-            <button
-              type="button"
-              className="cases-entry-open-button"
-              onClick={() => alert("CSV Upload coming soon")}
-              disabled={loading}
-            >
-              CSV Upload
+              PDF / CSV Upload
             </button>
           </div>
         </div>
+
+        {pendingWeeks.length > 0 && (
+          <div className="pending-agent-weeks">
+            {pendingWeeks.map((week) => (
+              <button
+                key={`pending-${week.isoYear ?? "null"}-${week.isoWeek ?? "null"}`}
+                type="button"
+                className="pending-agent-week-card"
+                onClick={() => void handlePendingWeekClick(week.isoYear, week.isoWeek)}
+              >
+                {week.isoYear !== null && week.isoWeek !== null
+                  ? `Week ${week.isoWeek} — ${week.count} imported file${week.count === 1 ? "" : "s"} pending review`
+                  : `Unknown week — ${week.count} imported file${week.count === 1 ? "" : "s"} pending review`}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="coming-soon-card yield-entry-recent-entries">
           <h2>Recent Entries</h2>
@@ -1227,7 +1278,7 @@ export function KgEntriesTab() {
               <input
                 ref={pdfFileInputRef}
                 type="file"
-                accept="application/pdf,.pdf"
+                accept="application/pdf,.pdf,text/csv,.csv"
                 multiple
                 onChange={handlePdfFileInputChange}
                 disabled={pdfPreviewUploading}

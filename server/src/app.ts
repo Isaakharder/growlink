@@ -5,6 +5,7 @@ import { requireOrganizationContext } from "./middleware/requireOrganizationCont
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
 import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportRuns";
 import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
+import { agentPendingImportsRouter } from "./routes/agentPendingImports";
 import { agentRouter } from "./routes/agentRoutes";
 import { greenhouseSetupRouter } from "./routes/greenhouseSetup";
 import { pestControlRouter } from "./routes/pestControl";
@@ -99,6 +100,7 @@ app.use("/api", adminFlowMasterImportRunsRouter);
 app.use("/api", adminUploadKeysRouter);
 app.use("/api", agentRouter);
 app.use("/api", requireOrganizationContext);
+app.use("/api", agentPendingImportsRouter);
 app.use("/api", pdfImportRouter);
 app.use("/api", greenhouseSetupRouter);
 app.use("/api", pestControlRouter);

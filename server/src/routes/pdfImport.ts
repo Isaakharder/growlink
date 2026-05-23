@@ -1,7 +1,8 @@
 import { Request, Router } from "express";
 import multer from "multer";
 import { supabase } from "../config/supabase";
-import { parseFlowMasterPdfBuffer } from "../utils/flowMasterPdfParser";
+import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
+import { parseFlowMasterCsvBuffer } from "../utils/flowMasterCsvParser";
 
 const pdfImportRouter = Router();
 
@@ -15,10 +16,13 @@ const upload = multer({
     files: MAX_FILES_PER_REQUEST
   },
   fileFilter(_req, file, cb) {
-    const isPdfMime = file.mimetype === "application/pdf";
-    const isPdfExt = /\.pdf$/i.test(file.originalname);
+    const isPdf = file.mimetype === "application/pdf" || /\.pdf$/i.test(file.originalname);
+    const isCsv =
+      file.mimetype === "text/csv" ||
+      file.mimetype === "application/csv" ||
+      /\.csv$/i.test(file.originalname);
 
-    if (isPdfMime || isPdfExt) {
+    if (isPdf || isCsv) {
       cb(null, true);
       return;
     }
@@ -422,24 +426,33 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
       existingEntryKeySet.add(`${entry.variety_id}::${entry.year}::${entry.week}`);
     }
 
-    const parsedFiles = await Promise.all(
-      uploadedFiles.map(async (file) => {
+    type ParsedEntry = { filename: string; parsed: FlowMasterParseResult | null; parseError: string | null };
+    const fileParseArrays = await Promise.all(
+      uploadedFiles.map(async (file): Promise<ParsedEntry[]> => {
+        const isCsv =
+          /\.csv$/i.test(file.originalname) ||
+          file.mimetype === "text/csv" ||
+          file.mimetype === "application/csv";
         try {
+          if (isCsv) {
+            const csvResults = parseFlowMasterCsvBuffer(file.buffer, file.originalname);
+            if (csvResults.length === 0) {
+              return [{ filename: file.originalname, parsed: null, parseError: "CSV contained no importable runs." }];
+            }
+            return csvResults.map((parsed) => ({ filename: file.originalname, parsed, parseError: null as null }));
+          }
           const parsed = await parseFlowMasterPdfBuffer(file.buffer, file.originalname);
-          return {
-            filename: file.originalname,
-            parsed,
-            parseError: null as null
-          };
+          return [{ filename: file.originalname, parsed, parseError: null as null }];
         } catch (error) {
-          return {
+          return [{
             filename: file.originalname,
             parsed: null,
-            parseError: error instanceof Error ? error.message : "Failed to parse PDF."
-          };
+            parseError: error instanceof Error ? error.message : "Failed to parse file."
+          }];
         }
       })
     );
+    const parsedFiles = fileParseArrays.flat();
 
     const uploadedLots = Array.from(
       new Set(
@@ -843,6 +856,20 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
       });
     }
 
+    const { error: appendCleanupError } = await supabase
+      .from("agent_pending_imports")
+      .delete()
+      .eq("organization_id", organizationId)
+      .in("lot_number", lotNumbers);
+    if (appendCleanupError) {
+      console.warn("[pdf-import/import] pending import cleanup failed (append):", {
+        organizationId,
+        lotNumbers,
+        code: appendCleanupError.code,
+        message: appendCleanupError.message
+      });
+    }
+
     return res.status(200).json({
       success: true,
       mode: "append",
@@ -918,6 +945,20 @@ pdfImportRouter.post("/pdf-import/import", async (req, res) => {
     }
     return res.status(500).json({
       message: "Failed to import PDF preview data into weekly entry."
+    });
+  }
+
+  const { error: createCleanupError } = await supabase
+    .from("agent_pending_imports")
+    .delete()
+    .eq("organization_id", organizationId)
+    .in("lot_number", lotNumbers);
+  if (createCleanupError) {
+    console.warn("[pdf-import/import] pending import cleanup failed (create):", {
+      organizationId,
+      lotNumbers,
+      code: createCleanupError.code,
+      message: createCleanupError.message
     });
   }
 
