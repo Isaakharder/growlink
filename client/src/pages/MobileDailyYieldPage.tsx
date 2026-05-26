@@ -22,7 +22,6 @@ type GreenhouseSetupRow = {
   plants_per_slab: number;
   stems_per_plant: number;
   total_stems?: number;
-  totalStems?: number;
 };
 
 type GreenhouseVarietyAssignment = {
@@ -138,9 +137,7 @@ function getRowTotalStems(row: GreenhouseSetupRow): number {
   const explicitTotal =
     typeof row.total_stems === "number"
       ? row.total_stems
-      : typeof row.totalStems === "number"
-        ? row.totalStems
-        : NaN;
+      : NaN;
 
   if (Number.isFinite(explicitTotal) && explicitTotal > 0) {
     return explicitTotal;
@@ -749,10 +746,10 @@ export function MobileDailyYieldPage() {
         ...prev,
         [selectedVarietyId]: [...(prev[selectedVarietyId] ?? []), saved]
       }));
-      setBinFillPercent("0");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save sample");
     } finally {
+      setBinFillPercent("0");
       setSavingSample(false);
     }
   }
@@ -976,7 +973,7 @@ export function MobileDailyYieldPage() {
 
         {sampleCount === 1 ? (
           <p className="mobile-projection-hint">
-            Must enter 4 more lines for more accurate projections.
+            Add {MINIMUM_SAMPLE_COUNT - sampleCount} more samples to enable projections.
           </p>
         ) : null}
 

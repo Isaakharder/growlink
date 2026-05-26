@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -941,6 +942,71 @@ greenhouseSetupRouter.put("/greenhouse-setup/bin-settings", async (req, res) => 
   }
 
   return res.status(201).json(data);
+});
+
+// ── CSV size settings routes ──────────────────────────────────────────────────
+
+greenhouseSetupRouter.get("/greenhouse-setup/csv-size-settings", async (req, res) => {
+  const settings = await fetchCsvSizeSettings(req.organizationId);
+  return res.json(settings);
+});
+
+greenhouseSetupRouter.patch("/greenhouse-setup/csv-size-settings", async (req, res) => {
+  const organizationId = req.organizationId;
+  const body = req.body as Record<string, unknown>;
+
+  const ignoredSizeLabels: string[] = Array.isArray(body.ignoredSizeLabels)
+    ? (body.ignoredSizeLabels as unknown[])
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.trim().toUpperCase())
+        .filter((s) => s.length > 0)
+    : [];
+
+  const sizeAliases: Record<string, string> = {};
+  if (body.sizeAliases && typeof body.sizeAliases === "object" && !Array.isArray(body.sizeAliases)) {
+    for (const [k, v] of Object.entries(body.sizeAliases as Record<string, unknown>)) {
+      if (typeof v === "string" && k.trim().length > 0) {
+        sizeAliases[k.trim().toUpperCase()] = v.trim();
+      }
+    }
+  }
+
+  const csv_size_settings = { ignoredSizeLabels, sizeAliases };
+  const now = new Date().toISOString();
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("daily_yield_bin_settings")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to load settings.", "CSV size settings fetch error:", fetchError);
+  }
+
+  if (existing) {
+    const { error } = await supabase
+      .from("daily_yield_bin_settings")
+      .update({ csv_size_settings, updated_at: now })
+      .eq("id", existing.id)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      return sendSafeError(res, 500, "Failed to update CSV size settings.", "CSV size settings update error:", error);
+    }
+  } else {
+    const { error } = await supabase
+      .from("daily_yield_bin_settings")
+      .insert({ organization_id: organizationId, csv_size_settings, updated_at: now });
+
+    if (error) {
+      return sendSafeError(res, 500, "Failed to save CSV size settings.", "CSV size settings insert error:", error);
+    }
+  }
+
+  return res.json(csv_size_settings);
 });
 
 export { greenhouseSetupRouter };

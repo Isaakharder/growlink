@@ -2,7 +2,8 @@ import { Request, Router } from "express";
 import multer from "multer";
 import { supabase } from "../config/supabase";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
-import { parseFlowMasterCsvBuffer } from "../utils/flowMasterCsvParser";
+import { parseFlowMasterCsvBuffer, type CsvSizeEntry } from "../utils/flowMasterCsvParser";
+import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
 
 const pdfImportRouter = Router();
 
@@ -64,6 +65,7 @@ type PdfPreviewSuccess = {
   };
   unknownSizes: string[];
   warnings: string[];
+  csvSizes: CsvSizeEntry[];
 };
 
 type PdfPreviewFailure = {
@@ -372,7 +374,7 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
 
     const organizationId = req.organizationId;
 
-    const [varietiesResult, yieldSizesResult, yieldEntriesResult] = await Promise.all([
+    const [varietiesResult, yieldSizesResult, yieldEntriesResult, csvSettings] = await Promise.all([
       supabase
         .from("varieties")
         .select("id, name")
@@ -380,13 +382,14 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
         .eq("status", "active"),
       supabase
         .from("yield_sizes")
-        .select("name")
+        .select("id, name")
         .eq("organization_id", organizationId)
         .eq("status", "active"),
       supabase
         .from("yield_entries")
         .select("variety_id, year, week")
-        .eq("organization_id", organizationId)
+        .eq("organization_id", organizationId),
+      fetchCsvSizeSettings(organizationId),
     ]);
 
     if (varietiesResult.error) {
@@ -435,7 +438,12 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
           file.mimetype === "application/csv";
         try {
           if (isCsv) {
-            const csvResults = parseFlowMasterCsvBuffer(file.buffer, file.originalname);
+            const csvResults = parseFlowMasterCsvBuffer(
+              file.buffer,
+              file.originalname,
+              csvSettings.ignoredSizeLabels,
+              csvSettings.sizeAliases
+            );
             if (csvResults.length === 0) {
               return [{ filename: file.originalname, parsed: null, parseError: "CSV contained no importable runs." }];
             }
@@ -604,7 +612,8 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
               found: hasExistingWeeklyData
             },
             unknownSizes,
-            warnings: uniqueWarnings
+            warnings: uniqueWarnings,
+            csvSizes: parsed.csvSizes
           };
         } catch (error) {
           const message =

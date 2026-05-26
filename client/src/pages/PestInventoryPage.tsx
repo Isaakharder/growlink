@@ -19,6 +19,7 @@ type Chemical = {
   pest_target: string;
   notes: string | null;
   phi: string | null;
+  rei: string | null;
   chemical_group: string | null;
   chemical_type: ChemicalType | null;
   active_ingredients: string | null;
@@ -36,6 +37,7 @@ type ChemicalFormState = {
   pest_target: string;
   notes: string;
   phi: string;
+  rei: string;
   chemical_group: string;
   chemical_type: ChemicalType | "";
   active_ingredients: string;
@@ -52,6 +54,7 @@ const INITIAL_FORM: ChemicalFormState = {
   pest_target: "",
   notes: "",
   phi: "",
+  rei: "",
   chemical_group: "",
   chemical_type: "",
   active_ingredients: "",
@@ -67,6 +70,7 @@ function toFormState(c: Chemical): ChemicalFormState {
     pest_target: c.pest_target,
     notes: c.notes ?? "",
     phi: c.phi ?? "",
+    rei: c.rei ?? "",
     chemical_group: c.chemical_group ?? "",
     chemical_type: c.chemical_type ?? "",
     active_ingredients: c.active_ingredients ?? "",
@@ -194,6 +198,7 @@ export function PestInventoryPage() {
           pest_target: form.pest_target.trim(),
           notes: form.notes.trim() || null,
           phi: form.phi.trim() || null,
+          rei: form.rei.trim() || null,
           chemical_group: form.chemical_group.trim() || null,
           chemical_type: form.chemical_type || null,
           active_ingredients: form.active_ingredients.trim() || null,
@@ -522,6 +527,18 @@ export function PestInventoryPage() {
                   placeholder="e.g. 0 days, 12 hours, 3 days"
                   onChange={(event) =>
                     setForm((current) => ({ ...current, phi: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                REI (re-entry interval)
+                <input
+                  type="text"
+                  value={form.rei}
+                  placeholder="e.g. 4 hours, 24 hours"
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, rei: event.target.value }))
                   }
                 />
               </label>

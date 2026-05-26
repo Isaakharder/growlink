@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PDFParse } from "pdf-parse";
 
+export type CsvSizeEntry = {
+  rawLabel: string;       // normalized uppercase raw label from CSV (e.g. "X-L", "{OVERSIZED}")
+  mappedSizeName: string | null; // resolved GrowLink name, null if unknown
+  kg: number;             // total kg for this label across all rows in the lot
+};
+
 export type FlowMasterParseResult = {
   sourceFile: string;
   lotNumber: string | null;
@@ -15,6 +21,9 @@ export type FlowMasterParseResult = {
   sizeKg: Record<string, number>;
   unknownSizes: string[];
   warnings: string[];
+  // Populated only for CSV files; empty for PDFs.
+  // Includes ALL raw size labels (even ignored ones) so the UI can show toggle checkboxes.
+  csvSizes: CsvSizeEntry[];
 };
 
 // Maps Flow Master PDF size labels → GrowLink size names.
@@ -182,6 +191,7 @@ function extractFromText(text: string, sourceFile: string): FlowMasterParseResul
     sizeKg,
     unknownSizes,
     warnings,
+    csvSizes: [],
   };
 }
 

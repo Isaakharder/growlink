@@ -479,26 +479,11 @@ export function PestPlannerPage() {
         .map((rv) => rowById[rv.row_id])
         .filter((r): r is SetupRow => r !== undefined);
 
-      // DEBUG: drench by-valve area — remove after diagnosis
-      console.group(`[drench-valve] ${valveName} (id=${valveId})`);
-      console.log(`  linked row_ids (${linkedLinks.length}):`, linkedLinks.map((rv) => rv.row_id));
-      console.log(`  resolved rows (${valveRows.length}):`, valveRows.map((r) => ({
-        row_id: r.id,
-        row_number: r.row_number ?? "?",
-        width_meters: r.width_meters,
-        length_meters: r.length_meters,
-        area_m2: rowAreaM2(r),
-      })));
-      const orphaned = linkedLinks.filter((rv) => !rowById[rv.row_id]).map((rv) => rv.row_id);
-      if (orphaned.length > 0) console.warn(`  ORPHANED row_ids (not in rows list):`, orphaned);
-      console.groupEnd();
-
       if (valveRows.length === 0) {
         return { valveId, valveName, hasRows: false, m2: 0, ml: 0 };
       }
       const m2 = valveRows.reduce((sum, r) => sum + rowAreaM2(r), 0);
       const ml = computeChemicalMl(m2, rate, rateUnit);
-      console.log(`[drench-valve] ${valveName} total m2=${m2.toFixed(2)}`);
       return { valveId, valveName, hasRows: true, m2, ml };
     });
   }, [targetMode, selectedValveIds, feedValves, rowValves, rowById, rateValue, rateUnit, chemicalNeededResult]);
@@ -550,11 +535,6 @@ export function PestPlannerPage() {
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
   }, [nozzlesOpen]);
 
-  const flowLPerMin = useMemo(() => {
-    if (!selectedSprayer || nozzlesOpenNum < 1) return null;
-    return selectedSprayer.nozzle_volume_l_per_min * nozzlesOpenNum;
-  }, [selectedSprayer, nozzlesOpenNum]);
-
   const nozzlesOpenError = useMemo(() => {
     if (!selectedSprayer || !nozzlesOpen) return null;
     const n = Number(nozzlesOpen);
@@ -583,6 +563,12 @@ export function PestPlannerPage() {
     const flowPerNozzle = calibFlow ?? selectedSprayer.nozzle_volume_l_per_min;
     const usingCalibration = calibFlow !== null;
 
+    const sortedCalib = [...calibPoints].sort((a, b) => a.psi - b.psi);
+    const psiOutOfRange =
+      usingCalibration &&
+      sortedCalib.length > 0 &&
+      (psiNum < sortedCalib[0].psi || psiNum > sortedCalib[sortedCalib.length - 1].psi);
+
     const sprayTimeMinutes = totalRowLengthMeters / speed;
     const totalFlowLPerMin = flowPerNozzle * nozzlesOpenNum;
     const totalVolumeL = sprayTimeMinutes * totalFlowLPerMin;
@@ -593,7 +579,8 @@ export function PestPlannerPage() {
       totalFlowLPerMin,
       totalVolumeL,
       flowPerNozzle,
-      usingCalibration
+      usingCalibration,
+      psiOutOfRange
     };
   }, [selectedSprayer, nozzlesOpenNum, nozzlesOpenError, totalRowLengthMeters, spraySpeed, selectedPsi, sprayerCalibrations]);
 
@@ -811,6 +798,7 @@ export function PestPlannerPage() {
       }
       setTodoSavedMessage(jobCreatedMessage);
       setInstructions("");
+      setApplicationType("");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save plan");
     } finally {
@@ -1254,7 +1242,7 @@ export function PestPlannerPage() {
                       />
                       {g.name}
                       <span style={{ fontSize: "0.82em", color: "var(--text-muted)" }}>
-                        {g.type}
+                        {g.type.charAt(0).toUpperCase() + g.type.slice(1)}
                       </span>
                     </label>
                   ))}
@@ -1605,6 +1593,12 @@ export function PestPlannerPage() {
                     </p>
                   ) : null}
 
+                  {sprayCalc?.psiOutOfRange ? (
+                    <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                      Estimate uses nearest calibrated PSI.
+                    </p>
+                  ) : null}
+
                   {nozzlesOpenError ? (
                     <p className="form-error" style={{ marginTop: "0.5rem" }}>
                       {nozzlesOpenError}
@@ -1738,7 +1732,7 @@ export function PestPlannerPage() {
                               <div className="greenhouse-stat-item">
                                 <span className="greenhouse-stat-label">Chemical per L water</span>
                                 <span className="greenhouse-stat-value">
-                                  {roundTo(tankCalc.chemPerLiterMl, 3)} ml/L
+                                  {roundTo(tankCalc.chemPerLiterMl, 3)} {chemicalNeededResult?.isDry ? "g/L" : "ml/L"}
                                 </span>
                               </div>
                               <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
@@ -1746,7 +1740,7 @@ export function PestPlannerPage() {
                                   Full tank ({effectiveTankVolume} L water)
                                 </span>
                                 <span className="greenhouse-stat-value">
-                                  {roundTo(tankCalc.chemPerFullTankMl, 1)} ml chemical
+                                  {roundTo(tankCalc.chemPerFullTankMl, 1)} {chemicalNeededResult?.isDry ? "g" : "ml"} chemical
                                 </span>
                               </div>
                               {!tankCalc.isLastFull && (
@@ -1755,7 +1749,7 @@ export function PestPlannerPage() {
                                     Final tank ({roundTo(tankCalc.finalTankVolumeL, 1)} L water)
                                   </span>
                                   <span className="greenhouse-stat-value">
-                                    {roundTo(tankCalc.chemForFinalTankMl, 1)} ml chemical
+                                    {roundTo(tankCalc.chemForFinalTankMl, 1)} {chemicalNeededResult?.isDry ? "g" : "ml"} chemical
                                   </span>
                                 </div>
                               )}

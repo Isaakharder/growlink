@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { canonicalizeSizeName } from "./pdfImport";
+import { type CsvSizeEntry } from "../utils/flowMasterCsvParser";
 
 const agentPendingImportsRouter = Router();
 
@@ -17,6 +18,7 @@ type PendingImportRow = {
   parsed_total_kg: number | null;
   warnings: unknown[];
   unknown_sizes: unknown[];
+  raw_payload: Record<string, unknown> | null;
 };
 
 type ActiveVariety = { id: string; name: string };
@@ -53,6 +55,7 @@ type PdfPreviewSuccess = {
   duplicateStatus: { found: boolean };
   unknownSizes: string[];
   warnings: string[];
+  csvSizes: CsvSizeEntry[];
 };
 
 // GET /api/agent-pending-imports[?isoYear=YYYY&isoWeek=WW]
@@ -67,7 +70,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", async (req, res) => {
   const { data: pendingRows, error: pendingError } = await supabase
     .from("agent_pending_imports")
     .select(
-      "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes"
+      "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes, raw_payload"
     )
     .eq("organization_id", organizationId)
     .order("uploaded_at", { ascending: false });
@@ -176,7 +179,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", async (req, res) => {
     const sizeBreakdown: Record<string, number> = {};
     for (const [sizeName, rawKg] of Object.entries(rawSizeKg)) {
       const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
-      if (Number.isFinite(kg) && kg > 0) {
+      if (Number.isFinite(kg) && kg >= 0) {
         sizeBreakdown[sizeName] = kg;
       }
     }
@@ -216,6 +219,18 @@ agentPendingImportsRouter.get("/agent-pending-imports", async (req, res) => {
       warnings.push("Existing weekly data found. Import will add these PDF totals to the week.");
     }
 
+    // Extract csvSizes stored in raw_payload at upload time.
+    const rawCsvSizes = row.raw_payload?.csvSizes;
+    const csvSizes: CsvSizeEntry[] = Array.isArray(rawCsvSizes)
+      ? (rawCsvSizes as unknown[]).filter(
+          (e): e is CsvSizeEntry =>
+            e !== null &&
+            typeof e === "object" &&
+            typeof (e as CsvSizeEntry).rawLabel === "string" &&
+            typeof (e as CsvSizeEntry).kg === "number"
+        )
+      : [];
+
     return {
       id: row.id,
       filename: row.source_filename,
@@ -244,7 +259,8 @@ agentPendingImportsRouter.get("/agent-pending-imports", async (req, res) => {
       },
       duplicateStatus: { found: hasExistingWeeklyData },
       unknownSizes,
-      warnings: Array.from(new Set(warnings))
+      warnings: Array.from(new Set(warnings)),
+      csvSizes
     };
   });
 

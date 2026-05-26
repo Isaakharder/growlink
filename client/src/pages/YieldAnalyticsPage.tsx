@@ -72,6 +72,7 @@ type ReconciliationRow = {
   harvestedKg: number;
   shippedCases: number;
   estimatedKgPerCase: number;
+  isKgPerCaseEstimated: boolean;
   estimatedShippedKg: number;
   remainingKg: number;
 };
@@ -99,7 +100,7 @@ function roundTo(value: number, decimals: number) {
 }
 
 function formatWholePercent(value: number) {
-  return `${Math.round(Number(value) || 0)}%`;
+  return `${Math.round(value || 0)}%`;
 }
 
 function formatKgPerM2(value: number | null) {
@@ -691,7 +692,7 @@ export function YieldAnalyticsPage() {
       "Entries",
       "Total kg",
       "Avg fruit wt (g)",
-      "kg / m²",
+      "kg/m²",
       ...filteredVarietySummary.sizes.map((size) => `${size.name} %`)
     ];
 
@@ -815,9 +816,10 @@ export function YieldAnalyticsPage() {
       const harvestedKg = harvestedByColor[color] ?? 0;
       const shippedCases = shippedCasesByColor[color] ?? 0;
       const denominator = weightedCaseKgDenominator[color] ?? 0;
-      const estimatedKgPerCase = denominator > 0
-        ? weightedCaseKgNumerator[color] / denominator
-        : DEFAULT_KG_PER_CASE;
+      const isKgPerCaseEstimated = denominator <= 0;
+      const estimatedKgPerCase = isKgPerCaseEstimated
+        ? DEFAULT_KG_PER_CASE
+        : weightedCaseKgNumerator[color] / denominator;
       const estimatedShippedKg = shippedCases * estimatedKgPerCase;
       const remainingKg = harvestedKg - estimatedShippedKg;
 
@@ -826,6 +828,7 @@ export function YieldAnalyticsPage() {
         harvestedKg,
         shippedCases,
         estimatedKgPerCase,
+        isKgPerCaseEstimated,
         estimatedShippedKg,
         remainingKg
       };
@@ -1035,7 +1038,7 @@ export function YieldAnalyticsPage() {
                     <td>{row.color.charAt(0).toUpperCase() + row.color.slice(1)}</td>
                     <td>{roundTo(row.harvestedKg, 1)}</td>
                     <td>{roundTo(row.shippedCases, 1)}</td>
-                    <td>{roundTo(row.estimatedKgPerCase, 1)}</td>
+                    <td>{row.isKgPerCaseEstimated ? `~${roundTo(row.estimatedKgPerCase, 1)}` : roundTo(row.estimatedKgPerCase, 1)}</td>
                     <td>{roundTo(row.estimatedShippedKg, 1)}</td>
                     <td>{roundTo(row.remainingKg, 1)}</td>
                   </tr>

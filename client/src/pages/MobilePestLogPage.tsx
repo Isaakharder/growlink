@@ -142,7 +142,11 @@ const RATE_UNIT_LABELS: Record<string, string> = {
   ml_per_acre: "ml/acre",
   L_per_acre: "L/acre",
   ml_per_hectare: "ml/hectare",
-  L_per_hectare: "L/hectare"
+  L_per_hectare: "L/hectare",
+  g_per_acre: "g/acre",
+  kg_per_acre: "kg/acre",
+  g_per_hectare: "g/hectare",
+  kg_per_hectare: "kg/hectare"
 };
 
 function roundTo(value: number, decimals: number): number {
@@ -179,6 +183,8 @@ export function MobilePestLogPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [completedTodos, setCompletedTodos] = useState<PestTodo[]>([]);
+  const [loadingCompleted, setLoadingCompleted] = useState(false);
   const [completedMessage, setCompletedMessage] = useState<string | null>(null);
 
   const [progress, setProgress] = useState<ProgressSnapshot | null>(null);
@@ -197,13 +203,19 @@ export function MobilePestLogPage() {
   const [deleting, setDeleting] = useState(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (longPressTimer.current !== null) clearTimeout(longPressTimer.current);
+    };
+  }, []);
+
   // ── Data fetching ──────────────────────────────────────────────────────────
 
   async function fetchTodos() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiFetch("/api/pest/todos");
+      const res = await apiFetch("/api/pest/todos?status=active");
       if (!res.ok) throw new Error("Failed to load pest log");
       setTodos((await res.json()) as PestTodo[]);
     } catch (err) {
@@ -213,9 +225,28 @@ export function MobilePestLogPage() {
     }
   }
 
+  async function fetchCompletedTodos() {
+    setLoadingCompleted(true);
+    try {
+      const res = await apiFetch("/api/pest/todos?status=completed");
+      if (!res.ok) throw new Error("Failed to load completed");
+      setCompletedTodos((await res.json()) as PestTodo[]);
+    } catch {
+      // non-fatal; completed list stays empty
+    } finally {
+      setLoadingCompleted(false);
+    }
+  }
+
   useEffect(() => { void fetchTodos(); }, []);
 
+  useEffect(() => {
+    if (showCompleted && completedTodos.length === 0) void fetchCompletedTodos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompleted]);
+
   // ── Progress initialization ────────────────────────────────────────────────
+  // Intentional: reset detail state whenever the selected plan changes; no deps needed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     setProgress(null);
@@ -385,7 +416,9 @@ export function MobilePestLogPage() {
     await patchValveDrenchProgress(todoId, newSnap);
 
     if (newSnap.valves.every((v) => v.completed)) {
-      await completeValveDrenchJob(todoId);
+      if (window.confirm("All valves complete. Save drench record?")) {
+        await completeValveDrenchJob(todoId);
+      }
     }
   }
 
@@ -539,7 +572,7 @@ export function MobilePestLogPage() {
     if (hasTankPlan && progress) {
       const withoutMix = progress.phases
         .flatMap((p) => p.rows)
-        .filter((r) => r.completed && (r.completedByMixNumber ?? null) == null);
+        .filter((r) => r.completed && (r.completedByMixNumber ?? null) === null);
       if (withoutMix.length > 0) {
         const proceed = window.confirm(
           `${withoutMix.length} row${withoutMix.length !== 1 ? "s" : ""} completed without mix tracking. Save ${label} record anyway?`
@@ -691,9 +724,9 @@ export function MobilePestLogPage() {
 
   // ── Derived values ─────────────────────────────────────────────────────────
 
-  const selectedTodo = todos.find((t) => t.id === selectedId) ?? null;
+  const allTodos = [...todos, ...completedTodos];
+  const selectedTodo = allTodos.find((t) => t.id === selectedId) ?? null;
   const pendingTodos = todos.filter((t) => t.status === "pending" || t.status === "in_progress");
-  const completedTodos = todos.filter((t) => t.status === "completed" || t.status === "cancelled");
 
   const totalRows = progress?.phases.reduce((s, p) => s + p.rows.length, 0) ?? 0;
   const doneRows = progress?.phases.reduce((s, p) => s + p.rows.filter((r) => r.completed).length, 0) ?? 0;
@@ -706,6 +739,7 @@ export function MobilePestLogPage() {
     const chem = selectedTodo.chemical_snapshot;
     const calc = selectedTodo.calculation_snapshot;
     const isSpray = selectedTodo.type === "spray";
+    const isDry = !!(calc.rate_unit?.startsWith("g_") || calc.rate_unit?.startsWith("kg_"));
 
     const hasTankMix =
       isSpray &&
@@ -772,13 +806,13 @@ export function MobilePestLogPage() {
               </span>
               <span className="pest-mix-summary-sep">·</span>
               <span className="pest-mix-summary-stat">
-                {safeNum(calc.tank_volume_l)} L / {roundTo(safeNum(calc.chem_per_full_tank_ml), 1)} ml ea.
+                {safeNum(calc.tank_volume_l)} L / {roundTo(safeNum(calc.chem_per_full_tank_ml), 1)} {isDry ? "g" : "ml"} ea.
               </span>
               {!calc.is_last_full && calc.final_tank_volume_l != null && calc.chem_for_final_tank_ml != null ? (
                 <>
                   <span className="pest-mix-summary-sep">·</span>
                   <span className="pest-mix-summary-stat">
-                    Last: {roundTo(safeNum(calc.final_tank_volume_l), 1)} L / {roundTo(safeNum(calc.chem_for_final_tank_ml), 1)} ml
+                    Last: {roundTo(safeNum(calc.final_tank_volume_l), 1)} L / {roundTo(safeNum(calc.chem_for_final_tank_ml), 1)} {isDry ? "g" : "ml"}
                   </span>
                 </>
               ) : null}
@@ -925,6 +959,7 @@ export function MobilePestLogPage() {
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
                       <p style={{ margin: 0, fontWeight: 700, fontSize: "1em", color: "var(--brand)" }}>
                         {valve.productUnit === "g"
+                          // Round grams to nearest 5 g for practical field accuracy
                           ? (Math.round(valve.productAmount / 5) * 5).toLocaleString()
                           : roundTo(valve.productAmount, 1).toLocaleString()}{" "}
                         {valve.productUnit}
@@ -1322,17 +1357,21 @@ export function MobilePestLogPage() {
         );
       })}
 
-      {completedTodos.length > 0 ? (
-        <div style={{ marginTop: "1.5rem" }}>
+      <div style={{ marginTop: "1.5rem" }}>
           <button
             type="button"
             className="secondary"
             style={{ fontSize: "0.85em" }}
             onClick={() => setShowCompleted((prev) => !prev)}
           >
-            {showCompleted ? "Hide" : "Show"} completed ({completedTodos.length})
+            {showCompleted ? "Hide" : "Show"} completed{completedTodos.length > 0 ? ` (${completedTodos.length})` : ""}
           </button>
           {showCompleted ? (
+            loadingCompleted ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>Loading…</p>
+            ) : completedTodos.length === 0 ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>No completed jobs.</p>
+            ) : (
             <div style={{ marginTop: "0.75rem" }}>
               {completedTodos.map((todo) => {
                 const chem = todo.chemical_snapshot;
@@ -1363,9 +1402,9 @@ export function MobilePestLogPage() {
                 );
               })}
             </div>
-          ) : null}
-        </div>
-      ) : null}
+          )
+        ) : null}
+      </div>
 
       {/* ── Delete confirm modal ──────────────────────────────────────────── */}
       {deleteTargetId ? (

@@ -103,7 +103,7 @@ function validateSprayerPayload(input: unknown): SprayerPayload {
 
 const CHEMICAL_SNAP_KEYS = ["id", "name", "chemical_type", "phi", "chemical_group", "rate_value", "rate_unit"] as const;
 const TARGET_SNAP_KEYS = ["target_mode", "valve_ids", "valve_names", "group_ids", "group_names", "total_m2", "total_row_length_meters"] as const;
-const SPRAYER_SNAP_KEYS = ["id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open"] as const;
+const SPRAYER_SNAP_KEYS = ["id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open", "selected_psi", "flow_per_nozzle_l_per_min"] as const;
 const TANK_SNAP_KEYS = ["name", "volume_liters", "is_builtin"] as const;
 const CALC_SNAP_KEYS = [
   "type", "total_chemical_ml", "total_chemical_l", "rate_value", "rate_unit",
@@ -655,6 +655,22 @@ pestControlRouter.delete("/pest/chemicals/:id", async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
+  // Block delete when any active todos reference this chemical
+  const { data: activeTodos, error: todosError } = await supabase
+    .from("pest_control_todos")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("chemical_id", id)
+    .in("status", ["pending", "in_progress"])
+    .limit(1);
+
+  if (todosError) {
+    return sendSafeError(res, 500, "Failed to check active jobs.", "Todos check error:", todosError);
+  }
+  if (activeTodos && activeTodos.length > 0) {
+    return res.status(409).json({ message: "Cannot delete: this chemical has pending or in-progress jobs." });
+  }
+
   // Fetch label path before delete so we can clean up storage
   const { data: chemical } = await supabase
     .from("pest_chemicals")
@@ -886,7 +902,7 @@ function validateTankPayload(input: unknown): TankPayload {
     throw new Error("volume_liters must be greater than 0");
   }
 
-  const active = body.active !== false;
+  const active = body.active === undefined ? true : parseBoolean(body.active, "active");
 
   return { name, volume_liters, active };
 }
@@ -973,7 +989,9 @@ pestControlRouter.get("/pest/todos", async (req, res) => {
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
 
-  if (status === "pending" || status === "completed" || status === "cancelled") {
+  if (status === "active") {
+    query = query.in("status", ["pending", "in_progress"]);
+  } else if (status === "pending" || status === "in_progress" || status === "completed" || status === "cancelled") {
     query = query.eq("status", status as string);
   }
 

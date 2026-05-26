@@ -230,6 +230,8 @@ export function MobileIrrigationLogPage() {
   const avgDrainMl = useMemo(() => averageOf(drainVolumeValues), [drainVolumeValues]);
   const avgFeedMlPerDripper = useMemo(() => averageOf(normalizedFeedVolumeValues), [normalizedFeedVolumeValues]);
   const avgDrainMlPerDripper = useMemo(() => averageOf(normalizedDrainVolumeValues), [normalizedDrainVolumeValues]);
+  // avgFeedMlPerDripper / avgDrainMlPerDripper are already normalised per dripper.
+  // Pass dripper counts as 1 so calculateDrainPercent does not divide again.
   const drainPercent = useMemo(() => {
     if (avgFeedMlPerDripper === null || avgDrainMlPerDripper === null) {
       return null;

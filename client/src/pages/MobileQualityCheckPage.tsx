@@ -27,6 +27,18 @@ type QualityMetric = {
   active: boolean;
 };
 
+type QualityCheck = {
+  employee_id: string;
+  checked_at: string;
+};
+
+function localDateStr(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function safeNum(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -44,11 +56,15 @@ export function MobileQualityCheckPage() {
   const [phaseId, setPhaseId] = useState("");
   const [rowId, setRowId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
-  const [stemsChecked, setStemsChecked] = useState("");
+  const [slabsChecked, setSlabsChecked] = useState("");
+  const [stemsPerSlab, setStemsPerSlab] = useState("1");
   const [notes, setNotes] = useState("");
 
   // Metric counts keyed by metric id
   const [counts, setCounts] = useState<Record<string, number>>({});
+
+  const [todayChecks, setTodayChecks] = useState<QualityCheck[]>([]);
+  const [duplicateWarning, setDuplicateWarning] = useState<{ pendingEmployeeId: string } | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState("");
@@ -58,22 +74,27 @@ export function MobileQualityCheckPage() {
       setLoading(true);
       setError(null);
       try {
-        const [setupRes, empRes, metRes] = await Promise.all([
+        const [setupRes, empRes, metRes, chkRes] = await Promise.all([
           apiFetch("/api/greenhouse-setup"),
           apiFetch("/api/quality/employees"),
-          apiFetch("/api/quality/metrics")
+          apiFetch("/api/quality/metrics"),
+          apiFetch("/api/quality/checks")
         ]);
-        if (!setupRes.ok || !empRes.ok || !metRes.ok) {
+        if (!setupRes.ok || !empRes.ok || !metRes.ok || !chkRes.ok) {
           throw new Error("Failed to load data");
         }
         const setupData = (await setupRes.json()) as { groups: SetupGroup[]; rows: SetupRow[] };
         const empData = (await empRes.json()) as QualityEmployee[];
         const metData = (await metRes.json()) as QualityMetric[];
+        const chkData = (await chkRes.json()) as QualityCheck[];
 
         setGroups(setupData.groups ?? []);
         setAllRows(setupData.rows ?? []);
         setEmployees(empData.filter((e) => e.active));
         setMetrics(metData.filter((m) => m.active));
+
+        const today = localDateStr(new Date());
+        setTodayChecks(chkData.filter((c) => localDateStr(new Date(c.checked_at)) === today));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load data");
       } finally {
@@ -124,12 +145,15 @@ export function MobileQualityCheckPage() {
     setSavedMessage("");
   }
 
-  const stemsNum = safeNum(stemsChecked);
+  const slabsNum = safeNum(slabsChecked);
+  const stemsPerSlabNum = safeNum(stemsPerSlab);
+  const stemsNum = slabsNum * stemsPerSlabNum;
   const canSave =
     phaseId !== "" &&
     rowId !== "" &&
     employeeId !== "" &&
-    stemsNum > 0;
+    slabsNum > 0 &&
+    stemsPerSlabNum > 0;
 
   async function handleSave() {
     if (!canSave || saving) return;
@@ -162,10 +186,20 @@ export function MobileQualityCheckPage() {
         throw new Error(body?.message ?? "Failed to save");
       }
       setSavedMessage("Quality check saved.");
+      setPhaseId("");
       setRowId("");
-      setStemsChecked("");
+      setSlabsChecked("");
+      setStemsPerSlab("1");
       setNotes("");
       setCounts({});
+      // Refresh today's checks so the duplicate warning stays accurate
+      apiFetch("/api/quality/checks").then(async (r) => {
+        if (r.ok) {
+          const all = (await r.json()) as QualityCheck[];
+          const today = localDateStr(new Date());
+          setTodayChecks(all.filter((c) => localDateStr(new Date(c.checked_at)) === today));
+        }
+      }).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -247,7 +281,15 @@ export function MobileQualityCheckPage() {
           <select
             className="quality-select"
             value={employeeId}
-            onChange={(e) => { setEmployeeId(e.target.value); setSavedMessage(""); }}
+            onChange={(e) => {
+              const id = e.target.value;
+              setSavedMessage("");
+              if (id && todayChecks.some((c) => c.employee_id === id)) {
+                setDuplicateWarning({ pendingEmployeeId: id });
+              } else {
+                setEmployeeId(id);
+              }
+            }}
           >
             <option value="">Select employee…</option>
             {employees.map((emp) => (
@@ -372,26 +414,49 @@ export function MobileQualityCheckPage() {
         ) : null}
       </div>
 
-      {/* Stems + Notes */}
+      {/* Slabs, Stems + Notes */}
       <div className="pest-section-form" style={{ marginBottom: "0.75rem" }}>
         <p style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", margin: "0 0 0.5rem" }}>
-          5. Stems &amp; Notes
+          5. Slabs, Stems & Notes
         </p>
 
-        <label style={{ display: "block", marginBottom: "0.6rem" }}>
-          <span style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.25rem" }}>
-            Stems checked <span style={{ color: "#dc3545" }}>*</span>
-          </span>
-          <input
-            className="quality-input"
-            type="number"
-            min="1"
-            step="1"
-            value={stemsChecked}
-            placeholder="e.g. 100"
-            onChange={(e) => { setStemsChecked(e.target.value); setSavedMessage(""); }}
-          />
-        </label>
+        <div style={{ display: "flex", gap: "0.75rem", marginBottom: "0.4rem" }}>
+          <label style={{ flex: 1 }}>
+            <span style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.25rem" }}>
+              Slabs checked <span style={{ color: "#dc3545" }}>*</span>
+            </span>
+            <input
+              className="quality-input"
+              type="number"
+              min="1"
+              step="1"
+              value={slabsChecked}
+              placeholder="e.g. 10"
+              onChange={(e) => { setSlabsChecked(e.target.value); setSavedMessage(""); }}
+            />
+          </label>
+          <label style={{ flex: 1 }}>
+            <span style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.25rem" }}>
+              Stems per slab <span style={{ color: "#dc3545" }}>*</span>
+            </span>
+            <input
+              className="quality-input"
+              type="number"
+              min="1"
+              step="1"
+              value={stemsPerSlab}
+              placeholder="e.g. 10"
+              onChange={(e) => { setStemsPerSlab(e.target.value); setSavedMessage(""); }}
+            />
+          </label>
+        </div>
+        {slabsNum > 0 && stemsPerSlabNum > 0 ? (
+          <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "0 0 0.6rem" }}>
+            Calculated stems checked: <strong>{stemsNum}</strong>
+          </p>
+        ) : (
+          <div style={{ marginBottom: "0.6rem" }} />
+        )}
 
         <label style={{ display: "block" }}>
           <span style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.25rem" }}>Notes (optional)</span>
@@ -432,6 +497,62 @@ export function MobileQualityCheckPage() {
         <p style={{ fontSize: "0.9rem", color: "var(--brand)", textAlign: "center", fontWeight: 600, marginTop: "0.5rem" }}>
           {savedMessage}
         </p>
+      ) : null}
+
+      {/* Duplicate employee warning modal */}
+      {duplicateWarning ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "1.5rem"
+          }}
+        >
+          <div
+            style={{
+              background: "var(--surface)",
+              borderRadius: "12px",
+              padding: "1.75rem 1.5rem",
+              maxWidth: "320px",
+              width: "100%",
+              textAlign: "center",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.22)"
+            }}
+          >
+            <p style={{ fontSize: "1.6rem", margin: "0 0 0.5rem" }}>⚠️</p>
+            <p style={{ margin: "0 0 1.25rem", fontSize: "0.95rem" }}>
+              This employee has already been quality checked today.
+            </p>
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <button
+                type="button"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setDuplicateWarning(null);
+                  setEmployeeId("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-action-button"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setEmployeeId(duplicateWarning.pendingEmployeeId);
+                  setDuplicateWarning(null);
+                }}
+              >
+                Check Again
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </section>
   );

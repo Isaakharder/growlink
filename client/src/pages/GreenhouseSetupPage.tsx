@@ -1165,6 +1165,24 @@ export function GreenhouseSetupPage() {
     }
   }
 
+  async function deleteGroup(groupId: string) {
+    const assignmentCount = varietyAssignments.filter((a) => a.group_id === groupId).length;
+    const message =
+      assignmentCount > 0
+        ? `This group has ${assignmentCount} variety assignment${assignmentCount !== 1 ? "s" : ""}. Deleting it will remove all row sections, rows, and variety assignments, which may affect yield workflows. Delete anyway?`
+        : "Delete this greenhouse group?";
+    if (!window.confirm(message)) return;
+
+    setError(null);
+    try {
+      const response = await apiFetch(`${GROUPS_URL}/${groupId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Failed to delete greenhouse group");
+      await fetchSetup();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete greenhouse group");
+    }
+  }
+
   function toggleRowsExpanded() {
     if (!selectedGroupId) {
       return;
@@ -1361,9 +1379,7 @@ export function GreenhouseSetupPage() {
                           <button
                             type="button"
                             className="danger"
-                            onClick={() =>
-                              void deleteItem(`${GROUPS_URL}/${group.id}`, "greenhouse group")
-                            }
+                            onClick={() => void deleteGroup(group.id)}
                           >
                             Delete
                           </button>
@@ -1855,8 +1871,8 @@ export function GreenhouseSetupPage() {
                             )}
                           </td>
                           <td>{areaM2 > 0 ? areaM2 : "-"}</td>
-                          <td>{roundTo(totalPlants, 2)}</td>
-                          <td>{roundTo(totalStems, 2)}</td>
+                          <td>{totalPlants.toLocaleString()}</td>
+                          <td>{totalStems.toLocaleString()}</td>
                         </tr>
                       );
                     })}
@@ -2010,6 +2026,11 @@ export function GreenhouseSetupPage() {
           <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
             <h2>{editingRowSectionId ? "Edit Row Section" : "Add Row Section"}</h2>
             <p>These values apply to each generated row.</p>
+            {editingRowSectionId ? (
+              <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: "-0.25rem 0 0.75rem" }}>
+                Note: changing slab, plant, or stem values after yield samples have been taken can affect projections.
+              </p>
+            ) : null}
 
             <form className="varieties-form" onSubmit={submitRowSection}>
               <label>

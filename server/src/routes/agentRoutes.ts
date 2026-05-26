@@ -4,6 +4,7 @@ import { supabase } from "../config/supabase";
 import { requireUploadKey } from "../middleware/requireUploadKey";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
 import { parseFlowMasterCsvBuffer } from "../utils/flowMasterCsvParser";
+import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
 
 const agentRouter = Router();
 
@@ -98,6 +99,8 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
     const organizationId = req.organizationId;
     const uploadKeyLabel = req.uploadKeyLabel ?? null;
 
+    const csvSettings = await fetchCsvSizeSettings(organizationId);
+
     // Parse all files in parallel; CSVs may fan into multiple runs per file.
     type ParsedEntry = { filename: string; parsed: FlowMasterParseResult | null; parseError: string | null };
     const fileParseArrays = await Promise.all(
@@ -108,7 +111,12 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           file.mimetype === "application/csv";
         try {
           if (isCsv) {
-            const csvResults = parseFlowMasterCsvBuffer(file.buffer, file.originalname);
+            const csvResults = parseFlowMasterCsvBuffer(
+              file.buffer,
+              file.originalname,
+              csvSettings.ignoredSizeLabels,
+              csvSettings.sizeAliases
+            );
             if (csvResults.length === 0) {
               return [{ filename: file.originalname, parsed: null, parseError: "CSV contained no importable runs." }];
             }

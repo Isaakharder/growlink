@@ -206,7 +206,7 @@ export function PestControlSetupPage() {
 
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [isSprayerModalOpen, isTankModalOpen]);
+  }, [isSprayerModalOpen, isTankModalOpen, isCalModalOpen]);
 
   // ── Sprayer modal helpers ──────────────────────────────────────────────────
 

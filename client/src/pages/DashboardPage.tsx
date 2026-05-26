@@ -32,14 +32,6 @@ type IrrigationGroup = {
   created_at?: string;
 };
 
-type LinkedEquipment = {
-  id: string;
-  name: string;
-  group_id: string;
-  dripper_count: number;
-  status: StatusType;
-};
-
 type ExistingLog = {
   id: string;
   log_date: string;
@@ -58,15 +50,6 @@ type ExistingLog = {
   notes: string | null;
   created_at: string;
   updated_at: string;
-};
-
-type IrrigationLogGroup = {
-  id: string;
-  type: GroupType;
-  name: string;
-  feedValves: LinkedEquipment[];
-  drainBuckets: LinkedEquipment[];
-  existingLog: ExistingLog | null;
 };
 
 type ServiceState = {
@@ -131,7 +114,6 @@ type ColorYieldSummary = {
   color: VarietyColor;
   totalKg: number;
   totalAreaM2: number;
-  kgPerM2: number | null;
   harvestedKgPerM2: number | null;
   exportedKg: number;
   exportedKgPerM2: number | null;
@@ -766,7 +748,6 @@ export function DashboardPage() {
             color,
             totalKg: bucket.totalKg,
             totalAreaM2: bucket.totalAreaM2,
-            kgPerM2: harvestedKgPerM2,
             harvestedKgPerM2,
             exportedKg: bucket.exportedKg,
             exportedKgPerM2
@@ -1018,21 +999,18 @@ export function DashboardPage() {
 
     if (!feed.length || !drain.length) return "—";
 
-    const avgFeed =
-      feed.reduce((sum, reading) => sum + reading.volumeMl, 0) / feed.length;
-    const avgFeedDrippers =
-      feed.reduce((sum, reading) => sum + reading.dripperCount, 0) / feed.length;
-    const avgDrain =
-      drain.reduce((sum, reading) => sum + reading.volumeMl, 0) / drain.length;
-    const avgDrainDrippers =
-      drain.reduce((sum, reading) => sum + reading.dripperCount, 0) / drain.length;
-    const feedPerDripper = avgFeed / (avgFeedDrippers || 1);
-    const drainPerDripper = avgDrain / (avgDrainDrippers || 1);
+    // Normalise each reading by its own dripper count, then average.
+    // Averaging raw volumes and dripper counts separately gives a wrong result
+    // when readings have different dripper counts.
+    const avgFeedPerDripper =
+      feed.reduce((sum, r) => sum + r.volumeMl / r.dripperCount, 0) / feed.length;
+    const avgDrainPerDripper =
+      drain.reduce((sum, r) => sum + r.volumeMl / r.dripperCount, 0) / drain.length;
 
-    if (!Number.isFinite(feedPerDripper) || feedPerDripper <= 0) return "—";
-    if (!Number.isFinite(drainPerDripper) || drainPerDripper < 0) return "—";
+    if (!Number.isFinite(avgFeedPerDripper) || avgFeedPerDripper <= 0) return "—";
+    if (!Number.isFinite(avgDrainPerDripper) || avgDrainPerDripper < 0) return "—";
 
-    return formatPercent((drainPerDripper / feedPerDripper) * 100, 2);
+    return formatPercent((avgDrainPerDripper / avgFeedPerDripper) * 100, 2);
   }
 
   function getAvgFeedMl(log: ExistingLog | null) {
@@ -1064,7 +1042,7 @@ export function DashboardPage() {
       <header className="dashboard-header">
         <div>
           <h1>Dashboard</h1>
-          <p>Live service connectivity snapshot for backend and forecasting systems.</p>
+          <p>Greenhouse operations overview — irrigation, crop yield, and analytics.</p>
         </div>
 
         <button
@@ -1204,7 +1182,7 @@ export function DashboardPage() {
                     </div>
 
                     <div className="dashboard-yield-color-metric">
-                      <span className="dashboard-yield-color-metric-label">Shipped Cases</span>
+                      <span className="dashboard-yield-color-metric-label">Shipped (kg/m²)</span>
                       <span className="dashboard-yield-color-metric-value">
                         {entry.exportedKgPerM2 === null
                           ? "—"

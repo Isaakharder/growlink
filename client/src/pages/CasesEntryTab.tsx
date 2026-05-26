@@ -179,14 +179,10 @@ export function CasesEntryTab() {
     [form.total_cases, form.case_weight_kg]
   );
 
-  const docklinkYearOptions = useMemo(() => {
+  const caseEntryYearOptions = useMemo(() => {
     const years = new Set<number>([currentYear]);
 
     for (const entry of entries) {
-      if (entry.source !== "docklink") {
-        continue;
-      }
-
       if (Number.isInteger(entry.year)) {
         years.add(entry.year);
       }
@@ -197,12 +193,12 @@ export function CasesEntryTab() {
 
   useEffect(() => {
     const selected = Number(selectedSummaryYear);
-    if (!docklinkYearOptions.includes(selected)) {
-      setSelectedSummaryYear(String(docklinkYearOptions[0] ?? currentYear));
+    if (!caseEntryYearOptions.includes(selected)) {
+      setSelectedSummaryYear(String(caseEntryYearOptions[0] ?? currentYear));
     }
-  }, [currentYear, docklinkYearOptions, selectedSummaryYear]);
+  }, [currentYear, caseEntryYearOptions, selectedSummaryYear]);
 
-  const weeklyDocklinkCaseCards = useMemo(() => {
+  const weeklyCaseCards = useMemo(() => {
     const selectedYear = Number(selectedSummaryYear);
 
     if (!Number.isInteger(selectedYear)) {
@@ -212,10 +208,6 @@ export function CasesEntryTab() {
     const byWeek = new Map<number, Record<VarietyColor, number>>();
 
     for (const entry of entries) {
-      if (entry.source !== "docklink") {
-        continue;
-      }
-
       if (entry.year !== selectedYear) {
         continue;
       }
@@ -691,7 +683,7 @@ export function CasesEntryTab() {
           onClick={openEntryModal}
           disabled={loading}
         >
-          Enter Cases
+          Add Case Entry
         </button>
       </div>
 
@@ -738,7 +730,7 @@ export function CasesEntryTab() {
                   <th>Total cases</th>
                   <th>Case weight</th>
                   <th>Total kg</th>
-                  <th>Kg/m²</th>
+                  <th>kg/m²</th>
                   <th>Source</th>
                   <th>Actions</th>
                 </tr>
@@ -774,9 +766,10 @@ export function CasesEntryTab() {
                       : Number.isFinite(Number(entry.color_area_m2)) && Number(entry.color_area_m2) > 0
                         ? Number(entry.color_area_m2)
                         : 0;
+                  const roundedDisplayKg = Math.round(displayTotalKg);
                   const displayKgPerM2 =
                     displayAreaM2 > 0
-                      ? displayTotalKg / displayAreaM2
+                      ? roundedDisplayKg / displayAreaM2
                       : source === "docklink"
                         ? null
                         : Number.isFinite(Number(entry.kg_per_m2)) && Number(entry.kg_per_m2) >= 0
@@ -789,8 +782,11 @@ export function CasesEntryTab() {
                       <td>{entry.year}</td>
                       <td>{entry.week}</td>
                       <td>{formatRounded(safeTotalCases, 3)}</td>
-                      <td>{formatRounded(safeCaseWeight, 2)}</td>
-                      <td>{String(Math.round(displayTotalKg))}</td>
+                      <td>
+                        {formatRounded(safeCaseWeight, 2)}
+                        {source === "docklink" && varietyStats?.avgCaseWeight != null ? " (avg)" : ""}
+                      </td>
+                      <td>{String(roundedDisplayKg)}</td>
                       <td>{displayKgPerM2 === null ? "—" : formatRounded(displayKgPerM2, 3)}</td>
                       <td>
                         <span className={`source-badge source-${source}`}>
@@ -823,14 +819,14 @@ export function CasesEntryTab() {
 
       <div className="coming-soon-card yield-entry-weekly-cases">
         <div className="recent-entries-header">
-          <h2>Weekly DockLink Case Totals</h2>
+          <h2>Weekly Case Totals</h2>
           <label className="weekly-docklink-year-filter">
             <span>Year</span>
             <select
               value={selectedSummaryYear}
               onChange={(event) => setSelectedSummaryYear(event.target.value)}
             >
-              {docklinkYearOptions.map((year) => (
+              {caseEntryYearOptions.map((year) => (
                 <option key={year} value={String(year)}>
                   {year}
                 </option>
@@ -839,11 +835,11 @@ export function CasesEntryTab() {
           </label>
         </div>
 
-        {weeklyDocklinkCaseCards.length === 0 ? (
-          <p>No imported DockLink case totals found for {selectedSummaryYear}.</p>
+        {weeklyCaseCards.length === 0 ? (
+          <p>No case totals found for {selectedSummaryYear}.</p>
         ) : (
           <div className="weekly-docklink-cards">
-            {weeklyDocklinkCaseCards.map((card) => {
+            {weeklyCaseCards.map((card) => {
               const visibleColorRows = getVisibleColorRows(card.totals);
               const weekTotal = visibleColorRows.reduce((sum, row) => sum + row.total, 0);
 

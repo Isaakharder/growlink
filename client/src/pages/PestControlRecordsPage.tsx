@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ const RATE_UNIT_LABELS: Record<string, string> = {
 };
 
 function isDryUnit(rateUnit: string | null | undefined): boolean {
-  return rateUnit?.startsWith("g_") || rateUnit?.startsWith("kg_") ? true : false;
+  return !!(rateUnit?.startsWith("g_") || rateUnit?.startsWith("kg_"));
 }
 
 function formatProductTotal(calc: CalcSnapshot): string {
@@ -184,8 +184,8 @@ export function PestControlRecordsPage() {
                   const isValveDrench = prog.type === "valve_drench" && Array.isArray(prog.valves);
 
                   return (
-                    <>
-                      <tr key={rec.id}>
+                    <Fragment key={rec.id}>
+                      <tr>
                         <td style={{ whiteSpace: "nowrap" }}>{formatDate(rec.completed_at)}</td>
                         <td>
                           <span className="pest-todo-type-badge" data-type={rec.type}>
@@ -272,7 +272,7 @@ export function PestControlRecordsPage() {
                           </td>
                         </tr>
                       ) : null}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

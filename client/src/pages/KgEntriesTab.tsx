@@ -54,6 +54,13 @@ const ENTRIES_URL = "/api/yield-entries";
 const PDF_PREVIEW_URL = "/api/pdf-import/preview";
 const PDF_IMPORT_URL = "/api/pdf-import/import";
 const PENDING_IMPORTS_URL = "/api/agent-pending-imports";
+const CSV_SETTINGS_URL = "/api/greenhouse-setup/csv-size-settings";
+
+type CsvSizeEntry = {
+  rawLabel: string;
+  mappedSizeName: string | null;
+  kg: number;
+};
 
 type PdfPreviewFileSuccess = {
   filename: string;
@@ -88,6 +95,7 @@ type PdfPreviewFileSuccess = {
   };
   unknownSizes: string[];
   warnings: string[];
+  csvSizes: CsvSizeEntry[];
 };
 
 type PdfPreviewFileFailure = {
@@ -128,6 +136,8 @@ type GroupedPdfPreviewCard = {
   mappedCount: number;
   unmappedCount: number;
   hasImportableReadings: boolean;
+  csvSizes: CsvSizeEntry[];
+  isCsvSource: boolean;
 };
 
 type PendingAgentWeek = {
@@ -224,6 +234,7 @@ export function KgEntriesTab() {
   const [pdfCardImportingKeys, setPdfCardImportingKeys] = useState<Set<string>>(new Set());
   const [pdfCardImportErrors, setPdfCardImportErrors] = useState<Record<string, string>>({});
   const [pendingWeeks, setPendingWeeks] = useState<PendingAgentWeek[]>([]);
+  const [csvIgnoredLabels, setCsvIgnoredLabels] = useState<string[]>([]);
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<YieldEntryFormState>({
@@ -248,7 +259,7 @@ export function KgEntriesTab() {
 
   const kgPerM2 = useMemo(() => {
     if (!selectedVariety || selectedVariety.area_m2 <= 0) {
-      return 0;
+      return null;
     }
     return totalKg / selectedVariety.area_m2;
   }, [selectedVariety, totalKg]);
@@ -340,6 +351,33 @@ export function KgEntriesTab() {
     }
   }
 
+  async function fetchCsvSettings() {
+    try {
+      const res = await apiFetch(CSV_SETTINGS_URL);
+      if (!res.ok) return;
+      const body = (await res.json()) as { ignoredSizeLabels?: string[] };
+      setCsvIgnoredLabels(body.ignoredSizeLabels ?? []);
+    } catch {
+      // Non-critical — checkboxes default to all included if this fails.
+    }
+  }
+
+  async function handleCsvSizeToggle(rawLabel: string, checked: boolean) {
+    const upper = rawLabel.toUpperCase();
+    const next = checked
+      ? csvIgnoredLabels.filter((l) => l !== upper)
+      : [...csvIgnoredLabels, upper];
+    setCsvIgnoredLabels(next);
+    try {
+      await apiFetch(CSV_SETTINGS_URL, {
+        method: "PATCH",
+        body: JSON.stringify({ ignoredSizeLabels: next }),
+      });
+    } catch {
+      // Best-effort save; local state already updated.
+    }
+  }
+
   async function handlePendingWeekClick(isoYear: number | null, isoWeek: number | null) {
     const params =
       isoYear !== null && isoWeek !== null
@@ -355,6 +393,7 @@ export function KgEntriesTab() {
       setPdfImportedCardKeys(new Set());
       setPdfCardImportingKeys(new Set());
       setPdfCardImportErrors({});
+      void fetchCsvSettings();
       setIsPdfPreviewOpen(true);
     } catch {
       // Silently ignore — user can retry by clicking the card again.
@@ -579,10 +618,6 @@ export function KgEntriesTab() {
     }
   }
 
-  async function handlePdfPreviewUpload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-  }
-
   function closePdfPreviewModal() {
     setIsPdfPreviewOpen(false);
     setPdfPreviewFiles([]);
@@ -748,6 +783,7 @@ export function KgEntriesTab() {
   );
 
   const groupedPdfPreviewCards = useMemo(() => {
+    const ignoredSet = new Set(csvIgnoredLabels.map((l) => l.toUpperCase()));
     const grouped = new Map<string, GroupedPdfPreviewCard>();
 
     for (const file of pdfPreviewFiles) {
@@ -789,6 +825,8 @@ export function KgEntriesTab() {
         skipReason
       };
 
+      const fileCsvSizes = file.csvSizes ?? [];
+
       if (!existing) {
         grouped.set(key, {
           key,
@@ -808,7 +846,9 @@ export function KgEntriesTab() {
           duplicateFound: file.duplicateStatus.found,
           mappedCount: file.skipped ? 0 : file.sizeMappingStatus.mappedCount,
           unmappedCount: file.skipped ? 0 : file.sizeMappingStatus.unmappedCount,
-          hasImportableReadings: !file.skipped
+          hasImportableReadings: !file.skipped,
+          csvSizes: file.skipped ? [] : [...fileCsvSizes],
+          isCsvSource: fileCsvSizes.length > 0,
         });
       } else {
         existing.sourceFiles.push(file.filename);
@@ -831,8 +871,17 @@ export function KgEntriesTab() {
           for (const [size, kg] of Object.entries(file.sizeBreakdown)) {
             existing.sizeBreakdown[size] = (existing.sizeBreakdown[size] ?? 0) + kg;
           }
-
           existing.unknownSizes.push(...file.unknownSizes);
+          // Merge csvSizes by rawLabel, summing kg.
+          if (fileCsvSizes.length > 0) {
+            const csvMap = new Map(existing.csvSizes.map((s) => [s.rawLabel, { ...s }]));
+            for (const entry of fileCsvSizes) {
+              const ex = csvMap.get(entry.rawLabel);
+              if (ex) { ex.kg += entry.kg; } else { csvMap.set(entry.rawLabel, { ...entry }); }
+            }
+            existing.csvSizes = Array.from(csvMap.values());
+            existing.isCsvSource = true;
+          }
         }
 
         existing.warnings.push(...normalizedWarnings);
@@ -874,13 +923,53 @@ export function KgEntriesTab() {
       const numerator = weightedNumeratorByKey.get(group.key) ?? 0;
       const denominator = weightedDenominatorByKey.get(group.key) ?? 0;
 
-      return {
+      let finalGroup = {
         ...group,
-        averageFruitWeightG:
-          denominator > 0 ? numerator / denominator : null,
+        averageFruitWeightG: denominator > 0 ? numerator / denominator : null,
         warnings: Array.from(new Set(group.warnings)),
-        unknownSizes: Array.from(new Set(group.unknownSizes))
+        unknownSizes: Array.from(new Set(group.unknownSizes)),
       };
+
+      // For CSV cards, recompute sizeBreakdown/unknownSizes/totalKg/counts
+      // from csvSizes + current ignoredSet so toggles take effect immediately.
+      if (group.isCsvSource && group.csvSizes.length > 0) {
+        const csvBreakdown: Record<string, number> = {};
+        const csvUnknown: string[] = [];
+        let csvMapped = 0;
+        let csvUnmapped = 0;
+
+        for (const entry of group.csvSizes) {
+          if (ignoredSet.has(entry.rawLabel.toUpperCase())) continue;
+          if (entry.mappedSizeName !== null) {
+            csvBreakdown[entry.mappedSizeName] = (csvBreakdown[entry.mappedSizeName] ?? 0) + entry.kg;
+            csvMapped += 1;
+          } else {
+            csvUnknown.push(entry.rawLabel);
+            csvUnmapped += 1;
+          }
+        }
+
+        const csvTotalKg = Object.values(csvBreakdown).reduce((s, k) => s + k, 0);
+
+        // Filter out "New size found: X." warnings for now-ignored labels.
+        const filteredWarnings = finalGroup.warnings.filter((w) => {
+          const m = w.match(/^New size found: (.+)\. Add this size/);
+          if (!m) return true;
+          return !ignoredSet.has(m[1].toUpperCase());
+        });
+
+        finalGroup = {
+          ...finalGroup,
+          sizeBreakdown: csvBreakdown,
+          unknownSizes: csvUnknown,
+          totalKg: csvTotalKg,
+          mappedCount: csvMapped,
+          unmappedCount: csvUnmapped,
+          warnings: filteredWarnings,
+        };
+      }
+
+      return finalGroup;
     });
 
     cards.sort((a, b) => {
@@ -894,7 +983,7 @@ export function KgEntriesTab() {
     });
 
     return cards;
-  }, [pdfPreviewFiles]);
+  }, [pdfPreviewFiles, csvIgnoredLabels]);
 
   const pdfCardValidationByKey = useMemo(() => {
     const result: Record<string, string | null> = {};
@@ -939,6 +1028,29 @@ export function KgEntriesTab() {
     [groupedPdfPreviewCards, pdfImportedCardKeys, pdfCardValidationByKey]
   );
 
+  // Aggregate all unique raw CSV size labels across every preview file (non-skipped).
+  // Used for the single global CSV Size Preferences panel in the modal.
+  const allDetectedCsvSizes = useMemo(() => {
+    const map = new Map<string, { mappedSizeName: string | null; kg: number }>();
+    for (const file of pdfPreviewFiles) {
+      if (!file.success || file.skipped) continue;
+      for (const entry of (file.csvSizes ?? [])) {
+        const ex = map.get(entry.rawLabel);
+        if (ex) { ex.kg += entry.kg; } else { map.set(entry.rawLabel, { mappedSizeName: entry.mappedSizeName, kg: entry.kg }); }
+      }
+    }
+    return Array.from(map.entries())
+      .map(([rawLabel, d]) => ({ rawLabel, mappedSizeName: d.mappedSizeName, kg: d.kg }))
+      .sort((a, b) => {
+        const ia = KNOWN_SIZE_ORDER.indexOf(a.mappedSizeName ?? "");
+        const ib = KNOWN_SIZE_ORDER.indexOf(b.mappedSizeName ?? "");
+        if (ia >= 0 && ib >= 0) return ia - ib;
+        if (ia >= 0) return -1;
+        if (ib >= 0) return 1;
+        return a.rawLabel.localeCompare(b.rawLabel);
+      });
+  }, [pdfPreviewFiles]);
+
   async function importGroupedCard(
     group: GroupedPdfPreviewCard,
     mode: "create" | "append"
@@ -969,9 +1081,9 @@ export function KgEntriesTab() {
 
     try {
       const importableSourceRuns = group.sourceReadings
-        .filter((reading) => !reading.skipped && reading.lotNumber)
+        .filter((reading) => !reading.skipped && reading.lotNumber != null)
         .map((reading) => ({
-          lotNumber: reading.lotNumber as string,
+          lotNumber: reading.lotNumber ?? "",
           startTime: reading.startTime,
           sourceFilename: reading.filename
         }));
@@ -1156,7 +1268,7 @@ export function KgEntriesTab() {
             <button
               type="button"
               className="cases-entry-open-button"
-              onClick={() => setIsPdfPreviewOpen(true)}
+              onClick={() => { setIsPdfPreviewOpen(true); void fetchCsvSettings(); }}
               disabled={loading}
             >
               PDF / CSV Upload
@@ -1197,7 +1309,7 @@ export function KgEntriesTab() {
                     <th>Year</th>
                     <th>Week</th>
                     <th>Total kg</th>
-                    <th>Kg/m²</th>
+                    <th>kg/m²</th>
                     <th>Total cases</th>
                     <th>Average fruit weight</th>
                     <th>Actions</th>
@@ -1274,7 +1386,7 @@ export function KgEntriesTab() {
               Review parsed PDF data before importing.
             </p>
 
-            <form className="pdf-preview-form" onSubmit={handlePdfPreviewUpload}>
+            <form className="pdf-preview-form" onSubmit={(e) => e.preventDefault()}>
               <input
                 ref={pdfFileInputRef}
                 type="file"
@@ -1291,6 +1403,44 @@ export function KgEntriesTab() {
 
             {!pdfPreviewUploading && groupedPdfPreviewCards.length === 0 && pdfPreviewFailures.length === 0 && (
               <p className="pdf-preview-subtitle">Upload one or more PDFs to see grouped preview cards.</p>
+            )}
+
+            {allDetectedCsvSizes.length > 0 && (
+              <div className="csv-size-preferences-panel">
+                <h3 className="csv-size-preferences-title">CSV Size Preferences</h3>
+                <p className="csv-size-preferences-hint">
+                  Uncheck any size to exclude it from all imports. Your choices are saved automatically.
+                </p>
+                <ul className="csv-size-checkbox-list">
+                  {allDetectedCsvSizes.map((entry) => {
+                    const isIgnored = csvIgnoredLabels
+                      .map((l) => l.toUpperCase())
+                      .includes(entry.rawLabel.toUpperCase());
+                    const displayName =
+                      entry.mappedSizeName && entry.mappedSizeName !== entry.rawLabel
+                        ? `${entry.rawLabel} → ${entry.mappedSizeName}`
+                        : (entry.mappedSizeName ?? entry.rawLabel);
+                    return (
+                      <li key={`global-csv-${entry.rawLabel}`} className="csv-size-checkbox-row">
+                        <label className={`csv-size-label${isIgnored ? " csv-size-ignored" : ""}`}>
+                          <input
+                            type="checkbox"
+                            checked={!isIgnored}
+                            onChange={(e) => void handleCsvSizeToggle(entry.rawLabel, e.target.checked)}
+                          />
+                          <span className="csv-size-name">{displayName}</span>
+                          <span className="csv-size-kg">
+                            {roundTo(entry.kg, 2)} kg
+                            {entry.mappedSizeName === null && (
+                              <span className="csv-size-unknown-tag"> unknown</span>
+                            )}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             )}
 
             {groupedPdfPreviewCards.length > 0 && (
@@ -1334,7 +1484,10 @@ export function KgEntriesTab() {
                       </div>
                       <div className="pdf-preview-metric-cell">
                         <dt>Total kg from sizes</dt>
-                        <dd>{roundTo(group.totalKg, 2)}</dd>
+                        <dd>
+                          {group.sourceReadings.some((r) => !r.skipped && r.printedTotalKg === null) ? "~" : ""}
+                          {roundTo(group.totalKg, 2)}
+                        </dd>
                       </div>
                       <div className="pdf-preview-metric-cell">
                         <dt>Average Fruit Weight (g)</dt>
@@ -1521,7 +1674,7 @@ export function KgEntriesTab() {
                   <select
                     value={form.year}
                     onChange={(event) =>
-                      setForm((current) => ({ ...current, year: event.target.value }))
+                      setForm((current) => ({ ...current, year: event.target.value, week: "1" }))
                     }
                   >
                     {[currentYear - 1, currentYear, currentYear + 1].map((year) => (
@@ -1593,8 +1746,8 @@ export function KgEntriesTab() {
                 </label>
 
                 <label>
-                  Kg/m²
-                  <input type="number" value={roundTo(kgPerM2, 3)} readOnly />
+                  kg/m²
+                  <input type="number" value={kgPerM2 === null ? "" : roundTo(kgPerM2, 3)} readOnly />
                 </label>
 
                 <label>
