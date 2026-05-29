@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type GroupType = "phase" | "zone" | "color";
 
@@ -188,7 +189,10 @@ function resolveTrackingMode(groups: IrrigationGroup[]): GroupType | null {
 
 const mobileIrrigationLogRouter = Router();
 
-mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
+const canView = requireAnyPermission(["irrigation:view", "irrigation:edit"]);
+const canEdit = requirePermission("irrigation:edit");
+
+mobileIrrigationLogRouter.get("/irrigation/logs", canView, async (req, res) => {
   const organizationId = req.organizationId;
   const days = parseDaysQuery(req.query.days);
   const fromDate = new Date();
@@ -279,7 +283,7 @@ mobileIrrigationLogRouter.get("/irrigation/logs", async (req, res) => {
   return res.json(enrichedLogs);
 });
 
-mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
+mobileIrrigationLogRouter.get("/mobile/irrigation-log", canView, async (req, res) => {
   const organizationId = req.organizationId;
   const requestedDate = req.query.log_date;
   const logDate =
@@ -386,7 +390,7 @@ mobileIrrigationLogRouter.get("/mobile/irrigation-log", async (req, res) => {
   });
 });
 
-mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", async (req, res) => {
+mobileIrrigationLogRouter.put("/mobile/irrigation-log/:groupId", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const groupId = typeof req.params.groupId === "string" ? req.params.groupId.trim() : "";
 

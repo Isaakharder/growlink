@@ -2,6 +2,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -352,7 +353,12 @@ async function upsertRowsFromSection(
 
 const greenhouseSetupRouter = Router();
 
-greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
+const canView = requireAnyPermission(["greenhouse_setup:view", "greenhouse_setup:edit"]);
+const canEdit = requirePermission("greenhouse_setup:edit");
+
+// ── Full setup read ───────────────────────────────────────────────────────────
+
+greenhouseSetupRouter.get("/greenhouse-setup", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const [groupsResult, sectionsResult, rowsResult, assignmentsResult, varietiesResult, rowValvesResult] =
@@ -424,7 +430,9 @@ greenhouseSetupRouter.get("/greenhouse-setup", async (req, res) => {
   });
 });
 
-greenhouseSetupRouter.post("/greenhouse-groups", async (req, res) => {
+// ── Greenhouse groups ─────────────────────────────────────────────────────────
+
+greenhouseSetupRouter.post("/greenhouse-groups", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: GreenhouseGroupPayload;
 
@@ -448,7 +456,7 @@ greenhouseSetupRouter.post("/greenhouse-groups", async (req, res) => {
   return res.status(201).json(data);
 });
 
-greenhouseSetupRouter.put("/greenhouse-groups/:id", async (req, res) => {
+greenhouseSetupRouter.put("/greenhouse-groups/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseGroupPayload;
@@ -475,7 +483,7 @@ greenhouseSetupRouter.put("/greenhouse-groups/:id", async (req, res) => {
   return res.json(data);
 });
 
-greenhouseSetupRouter.delete("/greenhouse-groups/:id", async (req, res) => {
+greenhouseSetupRouter.delete("/greenhouse-groups/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -492,7 +500,9 @@ greenhouseSetupRouter.delete("/greenhouse-groups/:id", async (req, res) => {
   return res.status(204).send();
 });
 
-greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
+// ── Row sections ──────────────────────────────────────────────────────────────
+
+greenhouseSetupRouter.post("/greenhouse-row-sections", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: GreenhouseRowSectionPayload;
 
@@ -537,9 +547,9 @@ greenhouseSetupRouter.post("/greenhouse-row-sections", async (req, res) => {
   });
 });
 
-greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
+greenhouseSetupRouter.put("/greenhouse-row-sections/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
-  const { id } = req.params;
+  const id = req.params.id as string;
   let payload: GreenhouseRowSectionPayload;
 
   try {
@@ -610,7 +620,7 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", async (req, res) => {
   });
 });
 
-greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) => {
+greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -637,7 +647,9 @@ greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", async (req, res) =>
   return res.status(204).send();
 });
 
-greenhouseSetupRouter.put("/greenhouse-rows/:id", async (req, res) => {
+// ── Individual row edit ───────────────────────────────────────────────────────
+
+greenhouseSetupRouter.put("/greenhouse-rows/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseRowPayload;
@@ -664,7 +676,9 @@ greenhouseSetupRouter.put("/greenhouse-rows/:id", async (req, res) => {
   return res.json(data);
 });
 
-greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) => {
+// ── Variety assignments ───────────────────────────────────────────────────────
+
+greenhouseSetupRouter.post("/greenhouse-variety-assignments", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: GreenhouseVarietyAssignmentPayload;
 
@@ -697,7 +711,7 @@ greenhouseSetupRouter.post("/greenhouse-variety-assignments", async (req, res) =
   return res.status(201).json(data);
 });
 
-greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res) => {
+greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: GreenhouseVarietyAssignmentPayload;
@@ -733,7 +747,7 @@ greenhouseSetupRouter.put("/greenhouse-variety-assignments/:id", async (req, res
   return res.json(data);
 });
 
-greenhouseSetupRouter.delete("/greenhouse-variety-assignments/:id", async (req, res) => {
+greenhouseSetupRouter.delete("/greenhouse-variety-assignments/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -752,7 +766,7 @@ greenhouseSetupRouter.delete("/greenhouse-variety-assignments/:id", async (req, 
 
 // ── Row-valve link routes ─────────────────────────────────────────────────────
 
-greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
+greenhouseSetupRouter.post("/greenhouse/row-valves", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const body = req.body as Record<string, unknown>;
 
@@ -838,7 +852,7 @@ greenhouseSetupRouter.post("/greenhouse/row-valves", async (req, res) => {
   return res.status(201).json({ assigned: targetRows.length });
 });
 
-greenhouseSetupRouter.delete("/greenhouse/row-valves/:id", async (req, res) => {
+greenhouseSetupRouter.delete("/greenhouse/row-valves/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -857,7 +871,7 @@ greenhouseSetupRouter.delete("/greenhouse/row-valves/:id", async (req, res) => {
 
 // ── Bin settings routes ───────────────────────────────────────────────────────
 
-greenhouseSetupRouter.get("/greenhouse-setup/bin-settings", async (req, res) => {
+greenhouseSetupRouter.get("/greenhouse-setup/bin-settings", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -878,7 +892,7 @@ greenhouseSetupRouter.get("/greenhouse-setup/bin-settings", async (req, res) => 
   });
 });
 
-greenhouseSetupRouter.put("/greenhouse-setup/bin-settings", async (req, res) => {
+greenhouseSetupRouter.put("/greenhouse-setup/bin-settings", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const body = req.body as Record<string, unknown>;
 
@@ -946,12 +960,12 @@ greenhouseSetupRouter.put("/greenhouse-setup/bin-settings", async (req, res) => 
 
 // ── CSV size settings routes ──────────────────────────────────────────────────
 
-greenhouseSetupRouter.get("/greenhouse-setup/csv-size-settings", async (req, res) => {
+greenhouseSetupRouter.get("/greenhouse-setup/csv-size-settings", canView, async (req, res) => {
   const settings = await fetchCsvSizeSettings(req.organizationId);
   return res.json(settings);
 });
 
-greenhouseSetupRouter.patch("/greenhouse-setup/csv-size-settings", async (req, res) => {
+greenhouseSetupRouter.patch("/greenhouse-setup/csv-size-settings", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const body = req.body as Record<string, unknown>;
 

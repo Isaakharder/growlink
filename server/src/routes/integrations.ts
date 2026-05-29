@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { supabase } from "../config/supabase";
 import { docklinkSupabase, isDocklinkConfigured } from "../config/docklink";
+import { requirePermission } from "../middleware/requirePermission";
 
 const integrationsRouter = Router();
 
@@ -425,7 +426,7 @@ async function syncDocklinkCases(req: Request): Promise<DocklinkSyncResult> {
   };
 }
 
-integrationsRouter.post("/integrations/docklink/sync-color-cases", async (req: Request, res: Response) => {
+integrationsRouter.post("/integrations/docklink/sync-color-cases", requirePermission("cases:edit"), async (req: Request, res: Response) => {
   try {
     const configError = getDocklinkConfigError();
     if (configError) {

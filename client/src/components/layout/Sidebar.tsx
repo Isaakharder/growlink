@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { usePermissions } from "../../hooks/usePermissions";
 
 type SidebarProps = {
   mobileOpen: boolean;
@@ -11,17 +12,26 @@ type NavLinkItem = {
   type: "link";
   label: string;
   to: string;
+  permission?: string;
+};
+
+type NavGroupChild = {
+  label: string;
+  to: string;
+  permission?: string;
 };
 
 type NavGroupItem = {
   type: "group";
   label: string;
   base: string;
-  children: Array<{ label: string; to: string }>;
+  children: NavGroupChild[];
 };
 
 type NavItem = NavLinkItem | NavGroupItem;
 
+// permission fields control sidebar visibility only — actual page access is
+// enforced by RequirePermission in routes.tsx.
 const navItems: NavItem[] = [
   { type: "link", label: "Dashboard", to: "/" },
   {
@@ -29,40 +39,43 @@ const navItems: NavItem[] = [
     label: "Yield",
     base: "/yield",
     children: [
-      { label: "Data Entry", to: "/yield/data-entry" },
-      { label: "Yield Analytics", to: "/yield/analytics" }
-    ]
+      { label: "Data Entry", to: "/yield/data-entry", permission: "yield:view" },
+      { label: "Yield Analytics", to: "/yield/analytics", permission: "yield:view" },
+    ],
   },
-  { type: "link", label: "Irrigation", to: "/irrigation" },
+  { type: "link", label: "Irrigation", to: "/irrigation", permission: "irrigation:view" },
   {
     type: "group",
     label: "Pest Control",
     base: "/pest-control",
     children: [
-      { label: "Planner", to: "/pest-control/planner" },
-      { label: "Inventory", to: "/pest-control/inventory" },
-      { label: "Records", to: "/pest-control/records" }
-    ]
+      { label: "Planner",   to: "/pest-control/planner",   permission: "pest:view" },
+      { label: "Inventory", to: "/pest-control/inventory", permission: "pest:view" },
+      { label: "Records",   to: "/pest-control/records",   permission: "pest:view" },
+    ],
   },
-  { type: "link", label: "Quality Check", to: "/quality-check" },
+  { type: "link", label: "Quality Check", to: "/quality-check", permission: "quality:view" },
   {
     type: "group",
     label: "Setup",
     base: "/setup",
     children: [
-      { label: "Pest Control Setup", to: "/setup/pest-control" },
-      { label: "Greenhouse Setup", to: "/setup/greenhouse" },
-      { label: "Irrigation Setup", to: "/setup/irrigation" },
-      { label: "Varieties Setup", to: "/setup/varieties" },
-      { label: "Settings", to: "/setup/settings" }
-    ]
-  }
+      { label: "Pest Control Setup", to: "/setup/pest-control",  permission: "pest:view" },
+      { label: "Greenhouse Setup",   to: "/setup/greenhouse",    permission: "greenhouse_setup:view" },
+      { label: "Irrigation Setup",   to: "/setup/irrigation",    permission: "irrigation:view" },
+      { label: "Varieties Setup",    to: "/setup/varieties",     permission: "greenhouse_setup:view" },
+      { label: "Settings",           to: "/setup/settings" }, // visible to everyone
+    ],
+  },
 ];
 
 export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
   const location = useLocation();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const { can } = usePermissions();
 
+  // All groups (used to initialise expandedGroups — runs over full navItems, not
+  // filtered, so expansion state is preserved even for temporarily-hidden groups).
   const groups = useMemo(
     () => navItems.filter((item): item is NavGroupItem => item.type === "group"),
     []
@@ -90,6 +103,25 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
     });
   }, [groups, location.pathname]);
 
+  // Recompute whenever can() changes (i.e. when membership finishes loading).
+  // During loading can() returns true for everything, so all items are visible
+  // briefly — no layout jump for owners/admins, and restricted items disappear
+  // smoothly once membership resolves.
+  const visibleNavItems = useMemo(() => {
+    return navItems.flatMap<NavItem>((item) => {
+      if (item.type === "link") {
+        if (item.permission && !can(item.permission)) return [];
+        return [item];
+      }
+      // Group: filter children; hide the whole group if none remain visible.
+      const visibleChildren = item.children.filter(
+        (child) => !child.permission || can(child.permission)
+      );
+      if (visibleChildren.length === 0) return [];
+      return [{ ...item, children: visibleChildren }];
+    });
+  }, [can]);
+
   async function handleLogout() {
     setIsLoggingOut(true);
     await supabase.auth.signOut();
@@ -111,7 +143,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
         </div>
 
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             if (item.type === "link") {
               return (
                 <NavLink
@@ -139,7 +171,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                   onClick={() =>
                     setExpandedGroups((prev) => ({
                       ...prev,
-                      [item.label]: !isExpanded
+                      [item.label]: !isExpanded,
                     }))
                   }
                   aria-expanded={isExpanded}

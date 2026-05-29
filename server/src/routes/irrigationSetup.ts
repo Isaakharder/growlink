@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -106,7 +107,10 @@ async function ensureGroupExists(groupId: string, organizationId: string) {
 
 const irrigationSetupRouter = Router();
 
-irrigationSetupRouter.get("/irrigation-setup", async (req, res) => {
+const canView = requireAnyPermission(["irrigation:view", "irrigation:edit"]);
+const canEdit = requirePermission("irrigation:edit");
+
+irrigationSetupRouter.get("/irrigation-setup", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const [groupsResult, feedValvesResult, drainBucketsResult] = await Promise.all([
@@ -146,7 +150,7 @@ irrigationSetupRouter.get("/irrigation-setup", async (req, res) => {
   });
 });
 
-irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
+irrigationSetupRouter.post("/irrigation-groups", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: IrrigationGroupPayload;
 
@@ -170,7 +174,7 @@ irrigationSetupRouter.post("/irrigation-groups", async (req, res) => {
   return res.status(201).json(data);
 });
 
-irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
+irrigationSetupRouter.put("/irrigation-groups/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: IrrigationGroupPayload;
@@ -197,7 +201,7 @@ irrigationSetupRouter.put("/irrigation-groups/:id", async (req, res) => {
   return res.json(data);
 });
 
-irrigationSetupRouter.delete("/irrigation-groups/:id", async (req, res) => {
+irrigationSetupRouter.delete("/irrigation-groups/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -214,7 +218,7 @@ irrigationSetupRouter.delete("/irrigation-groups/:id", async (req, res) => {
   return res.status(204).send();
 });
 
-irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
+irrigationSetupRouter.post("/irrigation-feed-valves", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: LinkedItemPayload;
 
@@ -239,7 +243,7 @@ irrigationSetupRouter.post("/irrigation-feed-valves", async (req, res) => {
   return res.status(201).json(data);
 });
 
-irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
+irrigationSetupRouter.put("/irrigation-feed-valves/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: LinkedItemPayload;
@@ -267,7 +271,7 @@ irrigationSetupRouter.put("/irrigation-feed-valves/:id", async (req, res) => {
   return res.json(data);
 });
 
-irrigationSetupRouter.delete("/irrigation-feed-valves/:id", async (req, res) => {
+irrigationSetupRouter.delete("/irrigation-feed-valves/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -284,7 +288,7 @@ irrigationSetupRouter.delete("/irrigation-feed-valves/:id", async (req, res) => 
   return res.status(204).send();
 });
 
-irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
+irrigationSetupRouter.post("/irrigation-drain-buckets", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: LinkedItemPayload;
 
@@ -309,7 +313,7 @@ irrigationSetupRouter.post("/irrigation-drain-buckets", async (req, res) => {
   return res.status(201).json(data);
 });
 
-irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
+irrigationSetupRouter.put("/irrigation-drain-buckets/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: LinkedItemPayload;
@@ -337,7 +341,7 @@ irrigationSetupRouter.put("/irrigation-drain-buckets/:id", async (req, res) => {
   return res.json(data);
 });
 
-irrigationSetupRouter.delete("/irrigation-drain-buckets/:id", async (req, res) => {
+irrigationSetupRouter.delete("/irrigation-drain-buckets/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 

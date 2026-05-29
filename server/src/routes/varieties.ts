@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type VarietyStatus = "active" | "inactive";
 type VarietyColor = "red" | "orange" | "yellow" | "green";
@@ -90,7 +91,10 @@ function validatePayload(input: unknown): VarietyPayload {
 
 const varietiesRouter = Router();
 
-varietiesRouter.get("/varieties", async (req, res) => {
+const canView = requireAnyPermission(["greenhouse_setup:view", "greenhouse_setup:edit"]);
+const canEdit = requirePermission("greenhouse_setup:edit");
+
+varietiesRouter.get("/varieties", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -106,7 +110,7 @@ varietiesRouter.get("/varieties", async (req, res) => {
   return res.json(data ?? []);
 });
 
-varietiesRouter.post("/varieties", async (req, res) => {
+varietiesRouter.post("/varieties", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: VarietyPayload;
 
@@ -130,7 +134,7 @@ varietiesRouter.post("/varieties", async (req, res) => {
   return res.status(201).json(data);
 });
 
-varietiesRouter.put("/varieties/:id", async (req, res) => {
+varietiesRouter.put("/varieties/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: VarietyPayload;
@@ -157,7 +161,7 @@ varietiesRouter.put("/varieties/:id", async (req, res) => {
   return res.json(data);
 });
 
-varietiesRouter.delete("/varieties/:id", async (req, res) => {
+varietiesRouter.delete("/varieties/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 

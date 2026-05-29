@@ -2,6 +2,7 @@ import multer from "multer";
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type SprayerPayload = {
   name: string;
@@ -178,7 +179,20 @@ function validateProgressSnapshot(raw: unknown): Record<string, unknown> {
 
 const pestControlRouter = Router();
 
-pestControlRouter.get("/pest/sprayers", async (req, res) => {
+// Reads needed by both desktop and mobile pest log.
+// mobile:pest lets field operators load their assigned jobs and chemical info.
+const canMobileView = requireAnyPermission(["mobile:pest", "pest:view", "pest:edit"]);
+
+// Progress saves and job completion — the core mobile pest log writes.
+const canMobileWrite = requireAnyPermission(["mobile:pest", "pest:edit"]);
+
+// Desktop-only setup and management: creating/updating/deleting sprayers,
+// chemicals, tanks, todos, calibrations, labels, and restocks.
+const canEdit = requirePermission("pest:edit");
+
+// ── Sprayers ──────────────────────────────────────────────────────────────────
+
+pestControlRouter.get("/pest/sprayers", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -194,7 +208,7 @@ pestControlRouter.get("/pest/sprayers", async (req, res) => {
   return res.json(data ?? []);
 });
 
-pestControlRouter.post("/pest/sprayers", async (req, res) => {
+pestControlRouter.post("/pest/sprayers", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: SprayerPayload;
 
@@ -230,7 +244,7 @@ pestControlRouter.post("/pest/sprayers", async (req, res) => {
   return res.status(201).json(data);
 });
 
-pestControlRouter.put("/pest/sprayers/:id", async (req, res) => {
+pestControlRouter.put("/pest/sprayers/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: SprayerPayload;
@@ -269,7 +283,7 @@ pestControlRouter.put("/pest/sprayers/:id", async (req, res) => {
   return res.json(data);
 });
 
-pestControlRouter.delete("/pest/sprayers/:id", async (req, res) => {
+pestControlRouter.delete("/pest/sprayers/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -302,7 +316,7 @@ interface CalibrationUpsertRow {
   updated_at: string;
 }
 
-pestControlRouter.get("/pest/calibrations", async (req, res) => {
+pestControlRouter.get("/pest/calibrations", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -319,9 +333,9 @@ pestControlRouter.get("/pest/calibrations", async (req, res) => {
   return res.json(data ?? []);
 });
 
-pestControlRouter.put("/pest/sprayers/:sprayerId/calibration", async (req, res) => {
+pestControlRouter.put("/pest/sprayers/:sprayerId/calibration", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
-  const { sprayerId } = req.params;
+  const sprayerId = req.params.sprayerId as string;
 
   const { data: sprayer, error: sprayerError } = await supabase
     .from("pest_sprayers")
@@ -505,7 +519,7 @@ function validateChemicalRestockPayload(input: unknown): ChemicalRestockPayload 
   };
 }
 
-pestControlRouter.get("/pest/chemicals", async (req, res) => {
+pestControlRouter.get("/pest/chemicals", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -527,7 +541,7 @@ pestControlRouter.get("/pest/chemicals", async (req, res) => {
   return res.json(data ?? []);
 });
 
-pestControlRouter.post("/pest/chemicals", async (req, res) => {
+pestControlRouter.post("/pest/chemicals", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: ChemicalPayload;
 
@@ -557,7 +571,7 @@ pestControlRouter.post("/pest/chemicals", async (req, res) => {
   return res.status(201).json(data);
 });
 
-pestControlRouter.put("/pest/chemicals/:id", async (req, res) => {
+pestControlRouter.put("/pest/chemicals/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: ChemicalPayload;
@@ -590,7 +604,7 @@ pestControlRouter.put("/pest/chemicals/:id", async (req, res) => {
   return res.json(data);
 });
 
-pestControlRouter.post("/pest/chemicals/:id/restock", async (req, res) => {
+pestControlRouter.post("/pest/chemicals/:id/restock", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: ChemicalRestockPayload;
@@ -651,7 +665,7 @@ pestControlRouter.post("/pest/chemicals/:id/restock", async (req, res) => {
   return res.json(data);
 });
 
-pestControlRouter.delete("/pest/chemicals/:id", async (req, res) => {
+pestControlRouter.delete("/pest/chemicals/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -722,8 +736,10 @@ const labelUpload = multer({
 });
 
 // POST /api/pest/chemicals/:id/label
+// canEdit checked before multer so we avoid parsing the upload for unauthorized users.
 pestControlRouter.post(
   "/pest/chemicals/:id/label",
+  canEdit,
   labelUpload.single("label"),
   async (req, res) => {
     const organizationId = req.organizationId;
@@ -793,7 +809,7 @@ pestControlRouter.post(
 );
 
 // GET /api/pest/chemicals/:id/label-url  — returns a 1-hour signed URL
-pestControlRouter.get("/pest/chemicals/:id/label-url", async (req, res) => {
+pestControlRouter.get("/pest/chemicals/:id/label-url", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -830,7 +846,7 @@ pestControlRouter.get("/pest/chemicals/:id/label-url", async (req, res) => {
 });
 
 // DELETE /api/pest/chemicals/:id/label
-pestControlRouter.delete("/pest/chemicals/:id/label", async (req, res) => {
+pestControlRouter.delete("/pest/chemicals/:id/label", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -907,7 +923,7 @@ function validateTankPayload(input: unknown): TankPayload {
   return { name, volume_liters, active };
 }
 
-pestControlRouter.get("/pest/tanks", async (req, res) => {
+pestControlRouter.get("/pest/tanks", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
   const { data, error } = await supabase
     .from("pest_tanks")
@@ -920,7 +936,7 @@ pestControlRouter.get("/pest/tanks", async (req, res) => {
   return res.json(data ?? []);
 });
 
-pestControlRouter.post("/pest/tanks", async (req, res) => {
+pestControlRouter.post("/pest/tanks", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: TankPayload;
   try {
@@ -940,7 +956,7 @@ pestControlRouter.post("/pest/tanks", async (req, res) => {
   return res.status(201).json(data);
 });
 
-pestControlRouter.put("/pest/tanks/:id", async (req, res) => {
+pestControlRouter.put("/pest/tanks/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: TankPayload;
@@ -963,7 +979,7 @@ pestControlRouter.put("/pest/tanks/:id", async (req, res) => {
   return res.json(data);
 });
 
-pestControlRouter.delete("/pest/tanks/:id", async (req, res) => {
+pestControlRouter.delete("/pest/tanks/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   const { error } = await supabase
@@ -979,7 +995,7 @@ pestControlRouter.delete("/pest/tanks/:id", async (req, res) => {
 
 // ── Pest Control Todos ────────────────────────────────────────────────────────
 
-pestControlRouter.get("/pest/todos", async (req, res) => {
+pestControlRouter.get("/pest/todos", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
   const { status } = req.query;
 
@@ -1002,7 +1018,7 @@ pestControlRouter.get("/pest/todos", async (req, res) => {
   return res.json(data ?? []);
 });
 
-pestControlRouter.post("/pest/todos", async (req, res) => {
+pestControlRouter.post("/pest/todos", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const userId = req.userId;
   const body = req.body as Record<string, unknown>;
@@ -1063,7 +1079,7 @@ pestControlRouter.post("/pest/todos", async (req, res) => {
   return res.status(201).json(data);
 });
 
-pestControlRouter.patch("/pest/todos/:id/status", async (req, res) => {
+pestControlRouter.patch("/pest/todos/:id/status", canMobileWrite, async (req, res) => {
   const organizationId = req.organizationId;
   const userId = req.userId;
   const { id } = req.params;
@@ -1097,7 +1113,7 @@ pestControlRouter.patch("/pest/todos/:id/status", async (req, res) => {
   return res.json(data);
 });
 
-pestControlRouter.patch("/pest/todos/:id/progress", async (req, res) => {
+pestControlRouter.patch("/pest/todos/:id/progress", canMobileWrite, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   const body = req.body as Record<string, unknown>;
@@ -1131,7 +1147,7 @@ pestControlRouter.patch("/pest/todos/:id/progress", async (req, res) => {
 });
 
 // POST /pest/todos/:id/complete — verifies completion, saves record, marks todo completed
-pestControlRouter.post("/pest/todos/:id/complete", async (req, res) => {
+pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, res) => {
   const organizationId = req.organizationId;
   const userId = req.userId;
   const { id } = req.params;
@@ -1312,7 +1328,7 @@ pestControlRouter.post("/pest/todos/:id/complete", async (req, res) => {
 });
 
 // GET /pest/records — org-scoped completed records, newest first
-pestControlRouter.get("/pest/records", async (req, res) => {
+pestControlRouter.get("/pest/records", canMobileView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -1329,7 +1345,7 @@ pestControlRouter.get("/pest/records", async (req, res) => {
 });
 
 // DELETE /pest/todos/:id — only allows deleting pending/in-progress todos
-pestControlRouter.delete("/pest/todos/:id", async (req, res) => {
+pestControlRouter.delete("/pest/todos/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 

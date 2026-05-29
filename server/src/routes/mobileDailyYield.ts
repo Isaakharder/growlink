@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type RowRecord = {
   id: string;
@@ -370,9 +371,21 @@ async function ensureRowLinkedToVariety(
   }
 }
 
+// Suppress unused constants warning — kept for clarity in case of future use.
+void DEFAULT_KG_PER_FULL_BIN;
+void DEFAULT_KG_PER_CASE;
+
 const mobileDailyYieldRouter = Router();
 
-mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (req, res) => {
+// Reads: mobile:daily_yield lets field pickers load their options and review samples.
+// yield:view / yield:edit also grant access so desktop supervisors can review.
+const canView = requireAnyPermission(["mobile:daily_yield", "yield:view", "yield:edit"]);
+
+// Writes: mobile:daily_yield lets pickers submit samples and adjust settings.
+// yield:edit also grants access for supervisors.
+const canWrite = requireAnyPermission(["mobile:daily_yield", "yield:edit"]);
+
+mobileDailyYieldRouter.get("/mobile/daily-yield/options", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   try {
@@ -392,7 +405,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/options", async (req, res) => {
   }
 });
 
-mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (req, res) => {
+mobileDailyYieldRouter.get("/mobile/daily-yield/settings", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   try {
@@ -408,7 +421,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/settings", async (req, res) => {
   }
 });
 
-mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
+mobileDailyYieldRouter.put("/mobile/daily-yield/settings", canWrite, async (req, res) => {
   const organizationId = req.organizationId;
   let casesPerBin: number;
 
@@ -463,7 +476,7 @@ mobileDailyYieldRouter.put("/mobile/daily-yield/settings", async (req, res) => {
   return res.status(201).json(data);
 });
 
-mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
+mobileDailyYieldRouter.post("/mobile/daily-yield/samples", canWrite, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: MobileYieldSamplePayload;
 
@@ -511,7 +524,7 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", async (req, res) => {
   return res.status(201).json(data);
 });
 
-mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
+mobileDailyYieldRouter.get("/mobile/daily-yield/samples", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   try {
@@ -539,7 +552,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/samples", async (req, res) => {
   }
 });
 
-mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", async (req, res) => {
+mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", canWrite, async (req, res) => {
   const organizationId = req.organizationId;
 
   try {

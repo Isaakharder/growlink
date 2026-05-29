@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type YieldSizeStatus = "active" | "inactive";
 
@@ -51,7 +52,10 @@ function validatePayload(input: unknown): YieldSizePayload {
 
 const yieldSizesRouter = Router();
 
-yieldSizesRouter.get("/yield-sizes", async (req, res) => {
+const canView = requireAnyPermission(["yield:view", "yield:edit"]);
+const canEdit = requirePermission("yield:edit");
+
+yieldSizesRouter.get("/yield-sizes", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -68,7 +72,7 @@ yieldSizesRouter.get("/yield-sizes", async (req, res) => {
   return res.json(data ?? []);
 });
 
-yieldSizesRouter.post("/yield-sizes", async (req, res) => {
+yieldSizesRouter.post("/yield-sizes", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: YieldSizePayload;
 
@@ -92,7 +96,7 @@ yieldSizesRouter.post("/yield-sizes", async (req, res) => {
   return res.status(201).json(data);
 });
 
-yieldSizesRouter.put("/yield-sizes/:id", async (req, res) => {
+yieldSizesRouter.put("/yield-sizes/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: YieldSizePayload;
@@ -119,7 +123,7 @@ yieldSizesRouter.put("/yield-sizes/:id", async (req, res) => {
   return res.json(data);
 });
 
-yieldSizesRouter.delete("/yield-sizes/:id", async (req, res) => {
+yieldSizesRouter.delete("/yield-sizes/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 

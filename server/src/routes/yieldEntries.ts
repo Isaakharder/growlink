@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -123,7 +124,15 @@ async function fetchVarietyForCalc(
 
 const yieldEntriesRouter = Router();
 
-yieldEntriesRouter.get("/yield-entry-options", async (req, res) => {
+const canYieldView = requireAnyPermission(["yield:view", "yield:edit"]);
+const canYieldEdit = requirePermission("yield:edit");
+const canCasesView = requireAnyPermission(["cases:view", "cases:edit"]);
+const canCasesEdit = requirePermission("cases:edit");
+
+// Suppress unused-variable warning — YieldEntryStatus is declared for documentation.
+void (undefined as unknown as YieldEntryStatus);
+
+yieldEntriesRouter.get("/yield-entry-options", canYieldView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const [varietiesResult, sizesResult] = await Promise.all([
@@ -155,7 +164,7 @@ yieldEntriesRouter.get("/yield-entry-options", async (req, res) => {
   });
 });
 
-yieldEntriesRouter.get("/yield-entries", async (req, res) => {
+yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -192,7 +201,7 @@ yieldEntriesRouter.get("/yield-entries", async (req, res) => {
   return res.json(entries);
 });
 
-yieldEntriesRouter.post("/yield-entries", async (req, res) => {
+yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: YieldEntryPayload;
 
@@ -224,7 +233,7 @@ yieldEntriesRouter.post("/yield-entries", async (req, res) => {
   }
 });
 
-yieldEntriesRouter.put("/yield-entries/:id", async (req, res) => {
+yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: YieldEntryPayload;
@@ -259,7 +268,7 @@ yieldEntriesRouter.put("/yield-entries/:id", async (req, res) => {
   }
 });
 
-yieldEntriesRouter.delete("/yield-entries/:id", async (req, res) => {
+yieldEntriesRouter.delete("/yield-entries/:id", canYieldEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -276,7 +285,7 @@ yieldEntriesRouter.delete("/yield-entries/:id", async (req, res) => {
   return res.status(204).send();
 });
 
-yieldEntriesRouter.get("/yield-analytics/summary", async (req, res) => {
+yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const [entriesResult, sizesResult, varietiesResult] = await Promise.all([
@@ -395,7 +404,8 @@ yieldEntriesRouter.get("/yield-analytics/summary", async (req, res) => {
   return res.json({ sizes, rows });
 });
 
-// Color case entries endpoints
+// ── Color Case Entries ────────────────────────────────────────────────────────
+
 type ColorCasePayload = {
   color: string;
   year: number;
@@ -478,7 +488,7 @@ async function fetchColorAreaM2(organizationId: string): Promise<ColorAreaMap> {
   return colorAreaMap;
 }
 
-yieldEntriesRouter.get("/color-case-entries", async (req, res) => {
+yieldEntriesRouter.get("/color-case-entries", canCasesView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase
@@ -494,7 +504,7 @@ yieldEntriesRouter.get("/color-case-entries", async (req, res) => {
   return res.json(data ?? []);
 });
 
-yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
+yieldEntriesRouter.post("/color-case-entries", canCasesEdit, async (req, res) => {
   const organizationId = req.organizationId;
   let payload: ColorCasePayload;
 
@@ -538,7 +548,7 @@ yieldEntriesRouter.post("/color-case-entries", async (req, res) => {
   }
 });
 
-yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
+yieldEntriesRouter.put("/color-case-entries/:id", canCasesEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
   let payload: ColorCasePayload;
@@ -585,7 +595,7 @@ yieldEntriesRouter.put("/color-case-entries/:id", async (req, res) => {
   }
 });
 
-yieldEntriesRouter.delete("/color-case-entries/:id", async (req, res) => {
+yieldEntriesRouter.delete("/color-case-entries/:id", canCasesEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 
@@ -602,7 +612,7 @@ yieldEntriesRouter.delete("/color-case-entries/:id", async (req, res) => {
   return res.status(204).send();
 });
 
-yieldEntriesRouter.get("/case-entry-options", async (req, res) => {
+yieldEntriesRouter.get("/case-entry-options", canCasesView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data, error } = await supabase

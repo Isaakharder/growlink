@@ -32,11 +32,31 @@ type QualityCheck = {
   checked_at: string;
 };
 
-function localDateStr(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+function getISOWeekYear(date: Date): { year: number; week: number } {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayOfWeek = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayOfWeek);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return {
+    year: d.getUTCFullYear(),
+    week: Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
+  };
+}
+
+function isSameISOWeek(a: Date, b: Date): boolean {
+  const wa = getISOWeekYear(a);
+  const wb = getISOWeekYear(b);
+  return wa.year === wb.year && wa.week === wb.week;
+}
+
+function formatCheckedAt(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 
 function safeNum(v: unknown): number {
@@ -63,7 +83,7 @@ export function MobileQualityCheckPage() {
   // Metric counts keyed by metric id
   const [counts, setCounts] = useState<Record<string, number>>({});
 
-  const [todayChecks, setTodayChecks] = useState<QualityCheck[]>([]);
+  const [weekChecks, setWeekChecks] = useState<QualityCheck[]>([]);
   const [duplicateWarning, setDuplicateWarning] = useState<{ pendingEmployeeId: string } | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -90,11 +110,11 @@ export function MobileQualityCheckPage() {
 
         setGroups(setupData.groups ?? []);
         setAllRows(setupData.rows ?? []);
-        setEmployees(empData.filter((e) => e.active));
+        setEmployees(empData);
         setMetrics(metData.filter((m) => m.active));
 
-        const today = localDateStr(new Date());
-        setTodayChecks(chkData.filter((c) => localDateStr(new Date(c.checked_at)) === today));
+        const now = new Date();
+        setWeekChecks(chkData.filter((c) => isSameISOWeek(new Date(c.checked_at), now)));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load data");
       } finally {
@@ -128,6 +148,23 @@ export function MobileQualityCheckPage() {
     () => Object.values(counts).reduce((sum, n) => sum + safeNum(n), 0),
     [counts]
   );
+
+  const empMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const e of employees) m[e.id] = e.name;
+    return m;
+  }, [employees]);
+
+  const weekCheckedList = useMemo(() => {
+    const byEmp = new Map<string, string>();
+    for (const c of weekChecks) {
+      const existing = byEmp.get(c.employee_id);
+      if (!existing || c.checked_at > existing) byEmp.set(c.employee_id, c.checked_at);
+    }
+    return Array.from(byEmp.entries())
+      .map(([empId, checkedAt]) => ({ empId, name: empMap[empId] ?? "Unknown employee", checkedAt }))
+      .sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
+  }, [weekChecks, empMap]);
 
   function increment(metricId: string) {
     setCounts((prev) => ({ ...prev, [metricId]: safeNum(prev[metricId]) + 1 }));
@@ -192,12 +229,12 @@ export function MobileQualityCheckPage() {
       setStemsPerSlab("1");
       setNotes("");
       setCounts({});
-      // Refresh today's checks so the duplicate warning stays accurate
+      // Refresh week checks so the duplicate warning stays accurate
       apiFetch("/api/quality/checks").then(async (r) => {
         if (r.ok) {
           const all = (await r.json()) as QualityCheck[];
-          const today = localDateStr(new Date());
-          setTodayChecks(all.filter((c) => localDateStr(new Date(c.checked_at)) === today));
+          const now = new Date();
+          setWeekChecks(all.filter((c) => isSameISOWeek(new Date(c.checked_at), now)));
         }
       }).catch(() => undefined);
     } catch (err) {
@@ -273,7 +310,7 @@ export function MobileQualityCheckPage() {
         <p style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", margin: "0 0 0.5rem" }}>
           3. Employee
         </p>
-        {employees.length === 0 ? (
+        {employees.filter((e) => e.active).length === 0 ? (
           <p style={{ fontSize: "0.88em", color: "var(--text-muted)" }}>
             No active employees. Add employees in Quality Check Setup.
           </p>
@@ -284,7 +321,7 @@ export function MobileQualityCheckPage() {
             onChange={(e) => {
               const id = e.target.value;
               setSavedMessage("");
-              if (id && todayChecks.some((c) => c.employee_id === id)) {
+              if (id && weekChecks.some((c) => c.employee_id === id)) {
                 setDuplicateWarning({ pendingEmployeeId: id });
               } else {
                 setEmployeeId(id);
@@ -292,7 +329,7 @@ export function MobileQualityCheckPage() {
             }}
           >
             <option value="">Select employee…</option>
-            {employees.map((emp) => (
+            {employees.filter((e) => e.active).map((emp) => (
               <option key={emp.id} value={emp.id}>{emp.name}</option>
             ))}
           </select>
@@ -499,6 +536,34 @@ export function MobileQualityCheckPage() {
         </p>
       ) : null}
 
+      {/* Already checked this week */}
+      {weekCheckedList.length > 0 ? (
+        <div className="pest-section-form" style={{ marginTop: "1.5rem" }}>
+          <p style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", margin: "0 0 0.5rem" }}>
+            Already Checked This Week
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {weekCheckedList.map((entry) => (
+              <div
+                key={entry.empId}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "0.5rem 0.6rem",
+                  borderRadius: "8px",
+                  background: "var(--surface-soft)",
+                  border: "1px solid var(--border)"
+                }}
+              >
+                <span style={{ fontSize: "0.9rem", fontWeight: 500 }}>{entry.name}</span>
+                <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{formatCheckedAt(entry.checkedAt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Duplicate employee warning modal */}
       {duplicateWarning ? (
         <div
@@ -526,7 +591,7 @@ export function MobileQualityCheckPage() {
           >
             <p style={{ fontSize: "1.6rem", margin: "0 0 0.5rem" }}>⚠️</p>
             <p style={{ margin: "0 0 1.25rem", fontSize: "0.95rem" }}>
-              This employee has already been quality checked today.
+              This person's quality has already been checked this week. Do you want to check again?
             </p>
             <div style={{ display: "flex", gap: "0.75rem" }}>
               <button
@@ -548,7 +613,7 @@ export function MobileQualityCheckPage() {
                   setDuplicateWarning(null);
                 }}
               >
-                Check Again
+                Yes, check again
               </button>
             </div>
           </div>

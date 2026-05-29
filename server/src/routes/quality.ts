@@ -1,12 +1,16 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 const router = Router();
 
+const canView = requireAnyPermission(["mobile:quality", "quality:view", "quality:edit"]);
+const canEdit = requireAnyPermission(["mobile:quality", "quality:edit"]);
+
 // ── Employees ──────────────────────────────────────────────────────────────
 
-router.get("/quality/employees", async (req, res) => {
+router.get("/quality/employees", canView, async (req, res) => {
   const orgId = req.organizationId;
   const { data, error } = await supabase
     .from("quality_employees")
@@ -17,7 +21,7 @@ router.get("/quality/employees", async (req, res) => {
   return res.json(data);
 });
 
-router.post("/quality/employees", async (req, res) => {
+router.post("/quality/employees", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const body = req.body as Record<string, unknown>;
   const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -31,7 +35,7 @@ router.post("/quality/employees", async (req, res) => {
   return res.status(201).json(data);
 });
 
-router.patch("/quality/employees/:id", async (req, res) => {
+router.patch("/quality/employees/:id", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const { id } = req.params;
   const body = req.body as Record<string, unknown>;
@@ -50,7 +54,7 @@ router.patch("/quality/employees/:id", async (req, res) => {
   return res.json(data);
 });
 
-router.delete("/quality/employees/:id", async (req, res) => {
+router.delete("/quality/employees/:id", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const { id } = req.params;
 
@@ -89,7 +93,7 @@ router.delete("/quality/employees/:id", async (req, res) => {
   return res.json({ deleted: true });
 });
 
-router.delete("/quality/employees/:id/permanent", async (req, res) => {
+router.delete("/quality/employees/:id/permanent", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const { id } = req.params;
 
@@ -121,7 +125,7 @@ router.delete("/quality/employees/:id/permanent", async (req, res) => {
 
 // ── Metrics ────────────────────────────────────────────────────────────────
 
-router.get("/quality/metrics", async (req, res) => {
+router.get("/quality/metrics", canView, async (req, res) => {
   const orgId = req.organizationId;
   const { data, error } = await supabase
     .from("quality_metrics")
@@ -132,7 +136,7 @@ router.get("/quality/metrics", async (req, res) => {
   return res.json(data);
 });
 
-router.post("/quality/metrics", async (req, res) => {
+router.post("/quality/metrics", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const body = req.body as Record<string, unknown>;
   const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -146,7 +150,7 @@ router.post("/quality/metrics", async (req, res) => {
   return res.status(201).json(data);
 });
 
-router.patch("/quality/metrics/:id", async (req, res) => {
+router.patch("/quality/metrics/:id", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const { id } = req.params;
   const body = req.body as Record<string, unknown>;
@@ -167,7 +171,7 @@ router.patch("/quality/metrics/:id", async (req, res) => {
 
 // ── Threshold ──────────────────────────────────────────────────────────────
 
-router.get("/quality/threshold", async (req, res) => {
+router.get("/quality/threshold", canView, async (req, res) => {
   const orgId = req.organizationId;
   const { data, error } = await supabase
     .from("quality_thresholds")
@@ -178,7 +182,7 @@ router.get("/quality/threshold", async (req, res) => {
   return res.json(data ?? { allowed_issues: 10, stems_checked: 100 });
 });
 
-router.put("/quality/threshold", async (req, res) => {
+router.put("/quality/threshold", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const body = req.body as Record<string, unknown>;
   const allowed_issues = Number(body.allowed_issues);
@@ -219,7 +223,7 @@ router.put("/quality/threshold", async (req, res) => {
 
 // ── Checks ─────────────────────────────────────────────────────────────────
 
-router.get("/quality/checks", async (req, res) => {
+router.get("/quality/checks", canView, async (req, res) => {
   const orgId = req.organizationId;
   const { data, error } = await supabase
     .from("quality_checks")
@@ -231,7 +235,7 @@ router.get("/quality/checks", async (req, res) => {
   return res.json(data);
 });
 
-router.post("/quality/checks", async (req, res) => {
+router.post("/quality/checks", canEdit, async (req, res) => {
   const orgId = req.organizationId;
   const userId = req.userId;
   const body = req.body as Record<string, unknown>;

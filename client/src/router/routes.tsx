@@ -3,6 +3,7 @@ import { AppLayout } from "../components/layout/AppLayout";
 import { MobileLayout } from "../components/layout/MobileLayout";
 import { PagePlaceholder } from "../components/layout/PagePlaceholder";
 import { RequireAuth } from "../components/auth/RequireAuth";
+import { RequirePermission } from "../components/auth/RequirePermission";
 import { DashboardPage } from "../pages/DashboardPage";
 import { GreenhouseSetupPage } from "../pages/GreenhouseSetupPage";
 import { IrrigationPage } from "../pages/IrrigationPage";
@@ -21,6 +22,8 @@ import { QualityCheckPage } from "../pages/QualityCheckPage";
 import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
+import { AcceptInvitePage } from "../pages/AcceptInvitePage";
+import { SettingsPage } from "../pages/SettingsPage";
 import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
 
@@ -34,35 +37,62 @@ export const appRouter = createBrowserRouter([
     element: <SetPasswordPage />
   },
   {
+    path: "/invite/accept",
+    element: <AcceptInvitePage />
+  },
+  {
     path: "/",
     element: <RequireAuth />,
     children: [
       {
         element: <AppLayout />,
         children: [
+          // Dashboard — accessible to all authenticated org members
           {
             index: true,
             element: <DashboardPage />
           },
+
+          // Yield — requires yield:view
           {
             path: "yield/data-entry",
-            element: <YieldDataEntryPage />
+            element: (
+              <RequirePermission permission="yield:view">
+                <YieldDataEntryPage />
+              </RequirePermission>
+            )
           },
           {
             path: "yield/analytics",
-            element: <YieldAnalyticsPage />
+            element: (
+              <RequirePermission permission="yield:view">
+                <YieldAnalyticsPage />
+              </RequirePermission>
+            )
           },
           {
             path: "yield",
             element: <Navigate to="/yield/data-entry" replace />
           },
+
+          // Irrigation — requires irrigation:view
           {
             path: "irrigation",
-            element: <IrrigationPage />
+            element: (
+              <RequirePermission permission="irrigation:view">
+                <IrrigationPage />
+              </RequirePermission>
+            )
           },
+
+          // Pest Control — requires pest:view
           {
             path: "pest-control/planner",
-            element: <PestPlannerPage />
+            element: (
+              <RequirePermission permission="pest:view">
+                <PestPlannerPage />
+              </RequirePermission>
+            )
           },
           {
             path: "pest-control/operate",
@@ -70,16 +100,26 @@ export const appRouter = createBrowserRouter([
           },
           {
             path: "pest-control/inventory",
-            element: <PestInventoryPage />
+            element: (
+              <RequirePermission permission="pest:view">
+                <PestInventoryPage />
+              </RequirePermission>
+            )
           },
           {
             path: "pest-control/records",
-            element: <PestControlRecordsPage />
+            element: (
+              <RequirePermission permission="pest:view">
+                <PestControlRecordsPage />
+              </RequirePermission>
+            )
           },
           {
             path: "pest-control",
             element: <Navigate to="/pest-control/planner" replace />
           },
+
+          // Daily Yield placeholder — no permission guard (internal placeholder)
           {
             path: "daily-yield",
             element: (
@@ -89,39 +129,61 @@ export const appRouter = createBrowserRouter([
               />
             )
           },
+
+          // Quality Check — requires quality:view
           {
             path: "quality-check",
-            element: <QualityCheckPage />
+            element: (
+              <RequirePermission permission="quality:view">
+                <QualityCheckPage />
+              </RequirePermission>
+            )
           },
+
+          // Setup — each sub-route has its own permission requirement
           {
             path: "setup/pest-control",
-            element: <PestControlSetupPage />
+            element: (
+              <RequirePermission permission="pest:view">
+                <PestControlSetupPage />
+              </RequirePermission>
+            )
           },
           {
             path: "setup/greenhouse",
-            element: <GreenhouseSetupPage />
+            element: (
+              <RequirePermission permission="greenhouse_setup:view">
+                <GreenhouseSetupPage />
+              </RequirePermission>
+            )
           },
           {
             path: "setup/irrigation",
-            element: <IrrigationSetupPage />
+            element: (
+              <RequirePermission permission="irrigation:view">
+                <IrrigationSetupPage />
+              </RequirePermission>
+            )
           },
           {
             path: "setup/varieties",
-            element: <VarietiesSetupPage />
+            element: (
+              <RequirePermission permission="greenhouse_setup:view">
+                <VarietiesSetupPage />
+              </RequirePermission>
+            )
           },
+          // Settings — visible to all org members; invite section self-guards via API
           {
             path: "setup/settings",
-            element: (
-              <PagePlaceholder
-                title="Settings"
-                description="Platform-level settings and global application preferences will be organized here."
-              />
-            )
+            element: <SettingsPage />
           },
           {
             path: "setup",
             element: <Navigate to="/setup/pest-control" replace />
           },
+
+          // Admin — backend enforces admin-only; route stays accessible for the link to work
           {
             path: "admin/organizations",
             element: <AdminOrganizationsPage />
@@ -135,6 +197,8 @@ export const appRouter = createBrowserRouter([
     element: <RequireAuth />,
     children: [
       {
+        // MobileLayout provides MembershipProvider and guards mobile:access
+        // for every child route. Individual pages add finer-grained guards.
         element: <MobileLayout />,
         children: [
           {
@@ -143,19 +207,35 @@ export const appRouter = createBrowserRouter([
           },
           {
             path: "daily-yield",
-            element: <MobileDailyYieldPage />
+            element: (
+              <RequirePermission permission="mobile:daily_yield">
+                <MobileDailyYieldPage />
+              </RequirePermission>
+            )
           },
           {
             path: "irrigation-log",
-            element: <MobileIrrigationLogPage />
+            element: (
+              <RequirePermission permission="mobile:irrigation">
+                <MobileIrrigationLogPage />
+              </RequirePermission>
+            )
           },
           {
             path: "pest-log",
-            element: <MobilePestLogPage />
+            element: (
+              <RequirePermission permission="mobile:pest">
+                <MobilePestLogPage />
+              </RequirePermission>
+            )
           },
           {
             path: "quality-check",
-            element: <MobileQualityCheckPage />
+            element: (
+              <RequirePermission permission="mobile:quality">
+                <MobileQualityCheckPage />
+              </RequirePermission>
+            )
           }
         ]
       }

@@ -2,8 +2,12 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { canonicalizeSizeName } from "./pdfImport";
 import { type CsvSizeEntry } from "../utils/flowMasterCsvParser";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 const agentPendingImportsRouter = Router();
+
+const canView = requireAnyPermission(["yield:view", "yield:edit"]);
+const canEdit = requirePermission("yield:edit");
 
 type PendingImportRow = {
   id: string;
@@ -64,7 +68,7 @@ type PdfPreviewSuccess = {
 // Each item includes `id` (the pending row UUID) so the client can DELETE by id.
 // `weeks` is always the full unfiltered list so the header cards stay current.
 // When isoYear + isoWeek query params are present, `files` is filtered to that week only.
-agentPendingImportsRouter.get("/agent-pending-imports", async (req, res) => {
+agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
   const { data: pendingRows, error: pendingError } = await supabase
@@ -300,7 +304,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", async (req, res) => {
 
 // DELETE /api/agent-pending-imports/:id
 // Hard-deletes a pending import row. The org_id check prevents cross-org deletion.
-agentPendingImportsRouter.delete("/agent-pending-imports/:id", async (req, res) => {
+agentPendingImportsRouter.delete("/agent-pending-imports/:id", canEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 

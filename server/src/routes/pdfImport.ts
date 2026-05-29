@@ -4,8 +4,12 @@ import { supabase } from "../config/supabase";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
 import { parseFlowMasterCsvBuffer, type CsvSizeEntry } from "../utils/flowMasterCsvParser";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
+import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 const pdfImportRouter = Router();
+
+const canView = requireAnyPermission(["yield:view", "yield:edit"]);
+const canEdit = requirePermission("yield:edit");
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
 const MAX_FILES_PER_REQUEST = 20;
@@ -337,7 +341,7 @@ function parseUploadedFiles(req: Request): Express.Multer.File[] {
   return maybeFiles as Express.Multer.File[];
 }
 
-pdfImportRouter.post("/pdf-import/preview", (req, res) => {
+pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
   upload.array("files", MAX_FILES_PER_REQUEST)(req, res, async (uploadError) => {
     if (uploadError) {
       if (uploadError instanceof multer.MulterError) {
@@ -645,7 +649,7 @@ pdfImportRouter.post("/pdf-import/preview", (req, res) => {
 
 export { pdfImportRouter };
 
-pdfImportRouter.post("/pdf-import/import", async (req, res) => {
+pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
   let payload: PdfImportPayload;
 
   try {
