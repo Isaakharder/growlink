@@ -1360,6 +1360,245 @@ body {
   min-width: 100%;
 }
 
+/* ── Projected Tab ──────────────────────────────────────────────────────────── */
+
+.projection-controls {
+  margin-bottom: 1rem;
+}
+
+.projection-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.projection-control-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.projection-control-input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  min-width: 7rem;
+}
+
+.projection-note {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0.4rem 0 0.8rem;
+}
+
+.projection-success {
+  color: #0f7660;
+  font-size: 0.9rem;
+  margin: 0.4rem 0;
+}
+
+.projection-diff-negative {
+  color: #c0392b;
+  font-variant-numeric: tabular-nums;
+}
+
+.projection-diff-positive {
+  color: #0f7660;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Shared key label used in log stats ──────────────────────────────────── */
+
+.projection-history-key {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* ── Projection log (replaces 53-week empty grid) ───────────────────────── */
+
+.projection-add-btn {
+  align-self: flex-end;
+  white-space: nowrap;
+}
+
+.projection-log-empty {
+  margin-top: 1.5rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.projection-log {
+  margin-top: 1.25rem;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.projection-log-group-header {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.4rem;
+}
+
+.projection-log-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.875rem;
+}
+
+.projection-log-item + .projection-log-item {
+  border-top: 1px solid var(--surface-soft);
+}
+
+.projection-log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  min-width: 14rem;
+}
+
+.projection-log-forecast-tag {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  white-space: nowrap;
+}
+
+.projection-log-series {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.projection-log-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.25rem;
+  align-items: baseline;
+  flex: 1;
+}
+
+.projection-log-stat {
+  display: flex;
+  gap: 0.3rem;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.projection-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.projection-log-edit-btn {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+/* ── Add/Edit modal ─────────────────────────────────────────────────────── */
+
+.projection-modal {
+  max-width: 26rem;
+}
+
+.projection-modal-title {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+.projection-modal-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.projection-modal-fieldset legend {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 0 0.25rem;
+}
+
+.projection-modal-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.projection-modal-lead-preview {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Forecast Accuracy Card ─────────────────────────────────────────────────── */
+
+.forecast-accuracy-card {
+  margin-top: 2rem;
+}
+
+.forecast-accuracy-heading {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.forecast-accuracy-rows {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.forecast-accuracy-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+.forecast-accuracy-label {
+  min-width: 7rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.forecast-accuracy-pct {
+  font-weight: 700;
+  font-size: 1rem;
+  min-width: 3.5rem;
+}
+
+.forecast-accuracy-good { color: #0f7660; }
+.forecast-accuracy-ok   { color: #b07d00; }
+.forecast-accuracy-low  { color: #c0392b; }
+
+.forecast-accuracy-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .recent-entries-header {
   display: flex;
   justify-content: space-between;
@@ -2658,6 +2897,27 @@ body {
 .mobile-sample-list button {
   padding: 0.45rem 0.65rem;
   background: var(--surface);
+}
+
+.sample-delete-btn {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem !important;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text-muted) !important;
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.sample-delete-btn:not(:disabled):hover {
+  color: #c0392b !important;
+  border-color: #c0392b !important;
+  background: #fdf0ee !important;
+}
+
+.sample-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .mobile-projection-meta {
