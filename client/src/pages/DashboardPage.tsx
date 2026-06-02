@@ -153,6 +153,7 @@ const IRRIGATION_LOGS_URL = "/api/irrigation/logs?days=365";
 const YIELD_ENTRIES_URL = "/api/yield-entries";
 const VARIETIES_URL = "/api/varieties";
 const COLOR_CASE_ENTRIES_URL = "/api/color-case-entries";
+const YIELD_PROJECTION_URL = "/api/mobile/daily-yield/today-projection";
 
 /**
  * Generate an organization-scoped storage key for dashboard preferences.
@@ -518,6 +519,26 @@ function buildBalancedRows<T>(items: T[]): T[][] {
 }
 
 
+type YieldProjectionEntry = {
+  varietyId: string;
+  varietyName: string;
+  color: string;
+  projectedCases: number;
+  sampledRowCount: number;
+};
+
+type YieldProjectionSummary =
+  | { hasProjection: false }
+  | {
+      hasProjection: true;
+      sessionYear: number;
+      sessionWeek: number;
+      sampledRowCount: number;
+      byVariety: YieldProjectionEntry[];
+      byColor: Array<{ color: string; totalCases: number }>;
+      grandTotal: number;
+    };
+
 export function DashboardPage() {
   const [organizationId, setOrganizationId] = useState<string>("unknown");
   const [backend, setBackend] = useState<ServiceState>(INITIAL_SERVICE_STATE);
@@ -543,6 +564,7 @@ export function DashboardPage() {
   const [draftPreferences, setDraftPreferences] = useState<DashboardPreferences>(() =>
     readDashboardPreferences(organizationId)
   );
+  const [yieldProjection, setYieldProjection] = useState<YieldProjectionSummary | null>(null);
 
   // Fetch organization ID on mount to scope all dashboard settings
   useEffect(() => {
@@ -596,6 +618,24 @@ export function DashboardPage() {
       JSON.stringify(preferences)
     );
   }, [preferences, organizationId]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function fetchYieldProjection() {
+      try {
+        const res = await apiFetch(YIELD_PROJECTION_URL);
+        if (!res.ok || !active) return;
+        const data = (await res.json()) as YieldProjectionSummary;
+        if (active) setYieldProjection(data);
+      } catch {
+        // Non-critical — silently skip if projection is unavailable
+      }
+    }
+
+    void fetchYieldProjection();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -838,6 +878,42 @@ export function DashboardPage() {
     [colorYieldSummary, preferences.yieldColorCards]
   );
 
+  const projectionRows = useMemo(() => {
+    if (!yieldProjection?.hasProjection) return null;
+    const { byColor, byVariety } = yieldProjection;
+
+    const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+    const fmt = (n: number) => Math.round(n).toLocaleString();
+
+    const colorAccents: Record<string, string> = {
+      red: "#dc2626",
+      orange: "#d97706",
+      yellow: "#ca8a04",
+      green: "#0f7660"
+    };
+
+    const varietiesByColor = new Map<string, YieldProjectionEntry[]>();
+    for (const v of byVariety) {
+      const list = varietiesByColor.get(v.color) ?? [];
+      list.push(v);
+      varietiesByColor.set(v.color, list);
+    }
+
+    return byColor.map(({ color, totalCases }) => {
+      const entries = varietiesByColor.get(color) ?? [];
+      const rowCount = entries.reduce((sum, v) => sum + v.sampledRowCount, 0);
+      const varietyText = entries.map((v) => v.varietyName).join(", ");
+      return {
+        color,
+        label: cap(color),
+        rowCount,
+        totalCases,
+        varietyText,
+        accentColor: colorAccents[color] ?? "#5c6b66"
+      };
+    });
+  }, [yieldProjection]);
+
   const greenhouseSnapshotRows = useMemo(
     () => buildBalancedRows(visibleGreenhouseSnapshots),
     [visibleGreenhouseSnapshots]
@@ -1044,6 +1120,26 @@ export function DashboardPage() {
           <h1>Dashboard</h1>
           <p>Greenhouse operations overview — irrigation, crop yield, and analytics.</p>
         </div>
+
+        {projectionRows ? (
+          <div className="dashboard-yield-projection-inline">
+            {projectionRows.map((row) => (
+              <div
+                key={row.color}
+                className="dashboard-yield-projection-row"
+                style={{ borderLeftColor: row.accentColor }}
+              >
+                <span className="dyp-label">{row.label}</span>
+                <span className="dyp-sep">·</span>
+                <span>{row.rowCount} rows</span>
+                <span className="dyp-sep">·</span>
+                <span>{Math.round(row.totalCases).toLocaleString()} cases</span>
+                <span className="dyp-sep">·</span>
+                <span className="dyp-varieties">{row.varietyText}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         <button
           type="button"

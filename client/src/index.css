@@ -284,6 +284,49 @@ body {
   font-size: 0.92rem;
 }
 
+.dashboard-yield-projection-inline {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-self: center;
+}
+
+.dashboard-yield-projection-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border-left: 3px solid transparent;
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-soft);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.dyp-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dyp-sep {
+  opacity: 0.4;
+  user-select: none;
+}
+
+.dyp-varieties {
+  opacity: 0.85;
+}
+
+@media (max-width: 720px) {
+  .dashboard-yield-projection-inline {
+    align-self: stretch;
+  }
+}
+
 .dashboard-card-grid {
   --dashboard-card-columns: 1;
   margin-top: 0.9rem;

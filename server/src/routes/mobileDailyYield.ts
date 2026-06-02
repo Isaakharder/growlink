@@ -579,4 +579,131 @@ mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", canWrite, async (re
   }
 });
 
+mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, res) => {
+  const organizationId = req.organizationId;
+
+  // ISO week/year matching the client-side getIsoWeekAndYear formula
+  const now = new Date();
+  const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const sessionWeek = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  const sessionYear = utcDate.getUTCFullYear();
+
+  const MINIMUM_SAMPLE_COUNT = 4;
+
+  try {
+    const [samplesResult, optionsResult, binSettings] = await Promise.all([
+      supabase
+        .from("daily_yield_samples")
+        .select("variety_id, calculated_kg_per_stem")
+        .eq("organization_id", organizationId)
+        .eq("session_year", sessionYear)
+        .eq("session_week", sessionWeek),
+      fetchRowsLinkedToActiveVarieties(organizationId),
+      getCurrentBinSettings(organizationId)
+    ]);
+
+    if (samplesResult.error) {
+      return sendSafeError(res, 500, "Failed to load yield projection.", "Projection samples fetch error:", samplesResult.error);
+    }
+
+    const samples = samplesResult.data ?? [];
+    const varieties = optionsResult.varieties;
+    const linkedRows = optionsResult.rows;
+
+    const kgPerCase = binSettings.caseKg;
+    const kgPerFullBin = binSettings.pickingBinKg;
+    const casesPerBin = binSettings.casesPerBin;
+
+    const canUseKgPerCase = typeof kgPerCase === "number" && kgPerCase > 0;
+    const canUseKgPerBin =
+      typeof kgPerFullBin === "number" && kgPerFullBin > 0 && casesPerBin > 0;
+
+    if (!canUseKgPerCase && !canUseKgPerBin) {
+      return res.json({ hasProjection: false });
+    }
+
+    const samplesByVariety = new Map<string, number[]>();
+    for (const sample of samples) {
+      const kg = Number(sample.calculated_kg_per_stem);
+      if (!Number.isFinite(kg) || kg <= 0) continue;
+      const list = samplesByVariety.get(sample.variety_id) ?? [];
+      list.push(kg);
+      samplesByVariety.set(sample.variety_id, list);
+    }
+
+    const stemsByVariety = new Map<string, number>();
+    for (const row of linkedRows) {
+      stemsByVariety.set(row.variety_id, (stemsByVariety.get(row.variety_id) ?? 0) + row.total_stems);
+    }
+
+    const varietyColorById = new Map<string, string>();
+    const varietyNameById = new Map<string, string>();
+    for (const variety of varieties) {
+      if (variety.color) varietyColorById.set(variety.id, variety.color);
+      varietyNameById.set(variety.id, variety.name);
+    }
+
+    let totalSampledRows = 0;
+    const byVariety: Array<{
+      varietyId: string;
+      varietyName: string;
+      color: string;
+      projectedCases: number;
+      sampledRowCount: number;
+    }> = [];
+    const colorTotals = new Map<string, number>();
+
+    for (const [varietyId, kgValues] of samplesByVariety.entries()) {
+      if (kgValues.length < MINIMUM_SAMPLE_COUNT) continue;
+      const totalLinkedStems = stemsByVariety.get(varietyId) ?? 0;
+      if (totalLinkedStems <= 0) continue;
+      const avgKgPerStem = kgValues.reduce((s, k) => s + k, 0) / kgValues.length;
+      if (!Number.isFinite(avgKgPerStem) || avgKgPerStem <= 0) continue;
+      const projectedKg = avgKgPerStem * totalLinkedStems;
+      const projectedCases = canUseKgPerCase
+        ? projectedKg / kgPerCase!
+        : (projectedKg / kgPerFullBin!) * casesPerBin;
+      if (!Number.isFinite(projectedCases) || projectedCases <= 0) continue;
+      totalSampledRows += kgValues.length;
+      const color = varietyColorById.get(varietyId) ?? "unknown";
+      byVariety.push({
+        varietyId,
+        varietyName: varietyNameById.get(varietyId) ?? "Unknown",
+        color,
+        projectedCases,
+        sampledRowCount: kgValues.length
+      });
+      colorTotals.set(color, (colorTotals.get(color) ?? 0) + projectedCases);
+    }
+
+    if (byVariety.length === 0) {
+      return res.json({ hasProjection: false });
+    }
+
+    const byColor = Array.from(colorTotals.entries())
+      .map(([color, totalCases]) => ({ color, totalCases }))
+      .sort((a, b) => a.color.localeCompare(b.color));
+
+    const grandTotal = byColor.reduce((sum, e) => sum + e.totalCases, 0);
+
+    return res.json({
+      hasProjection: true,
+      sessionYear,
+      sessionWeek,
+      sampledRowCount: totalSampledRows,
+      byVariety: byVariety.sort(
+        (a, b) => a.color.localeCompare(b.color) || a.varietyName.localeCompare(b.varietyName)
+      ),
+      byColor,
+      grandTotal
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load yield projection";
+    return res.status(500).json({ message });
+  }
+});
+
 export { mobileDailyYieldRouter };
