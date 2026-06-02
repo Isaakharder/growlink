@@ -22,6 +22,7 @@ import { QualityCheckPage } from "../pages/QualityCheckPage";
 import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
+import { PlatformCustomersPage } from "../pages/PlatformCustomersPage";
 import { AcceptInvitePage } from "../pages/AcceptInvitePage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { LoginPage } from "../pages/LoginPage";
@@ -183,10 +184,14 @@ export const appRouter = createBrowserRouter([
             element: <Navigate to="/setup/pest-control" replace />
           },
 
-          // Admin — backend enforces admin-only; route stays accessible for the link to work
+          // Admin — backend enforces admin-only; routes stay accessible for the links to work
           {
             path: "admin/organizations",
             element: <AdminOrganizationsPage />
+          },
+          {
+            path: "admin/customers",
+            element: <PlatformCustomersPage />
           }
         ]
       }

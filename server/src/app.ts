@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import { requireOrganizationContext } from "./middleware/requireOrganizationContext";
+import { adminCustomersRouter } from "./routes/adminCustomers";
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
 import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportRuns";
 import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
@@ -98,6 +99,7 @@ app.use("/api/integrations/docklink/sync-color-cases", strictLimiter);
 app.use("/api/pdf-import", strictLimiter);
 
 app.use("/api", healthRouter);
+app.use("/api", adminCustomersRouter);
 app.use("/api", adminOrganizationsRouter);
 app.use("/api", adminFlowMasterImportRunsRouter);
 app.use("/api", adminUploadKeysRouter);

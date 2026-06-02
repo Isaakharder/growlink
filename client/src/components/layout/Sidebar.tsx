@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { usePermissions } from "../../hooks/usePermissions";
+import { usePlatformAdmin } from "../../hooks/usePlatformAdmin";
 
 type SidebarProps = {
   mobileOpen: boolean;
@@ -73,6 +74,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
   const location = useLocation();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const { can } = usePermissions();
+  const { isPlatformAdmin } = usePlatformAdmin();
 
   // All groups (used to initialise expandedGroups — runs over full navItems, not
   // filtered, so expansion state is preserved even for temporarily-hidden groups).
@@ -202,6 +204,26 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             );
           })}
         </nav>
+
+        {isPlatformAdmin && (
+          <div className="sidebar-admin-section">
+            <p className="sidebar-admin-label">Admin</p>
+            <NavLink
+              to="/admin/customers"
+              onClick={onCloseMobile}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              Customers
+            </NavLink>
+            <NavLink
+              to="/admin/organizations"
+              onClick={onCloseMobile}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              Organizations
+            </NavLink>
+          </div>
+        )}
 
         <div className="sidebar-footer">
           <button

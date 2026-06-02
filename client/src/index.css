@@ -93,6 +93,24 @@ body {
   gap: 0.35rem;
 }
 
+.sidebar-admin-section {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.sidebar-admin-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 0.2rem 0.5rem;
+}
+
 .sidebar-footer {
   margin-top: 1rem;
   padding-top: 0.9rem;
