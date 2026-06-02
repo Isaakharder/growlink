@@ -1512,8 +1512,46 @@ body {
 }
 
 .projection-log-edit-btn {
-  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
   font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.3rem 0.62rem;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+
+.projection-log-edit-btn:hover:not(:disabled) {
+  background: var(--active);
+  border-color: #bfd2c9;
+}
+
+.projection-log-delete-btn {
+  border: 1px solid #efc5bf;
+  border-radius: 8px;
+  background: #fff7f5;
+  color: #b42318;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.3rem 0.52rem;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+
+.projection-log-delete-btn:hover:not(:disabled) {
+  background: #fdf0ee;
+  border-color: #e3a29b;
+}
+
+.projection-log-delete-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ── Add/Edit modal ─────────────────────────────────────────────────────── */

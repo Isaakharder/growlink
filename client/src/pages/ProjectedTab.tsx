@@ -686,7 +686,7 @@ export function ProjectedTab() {
 
           <button
             type="button"
-            className="projection-add-btn"
+            className="projection-add-btn primary-action-button"
             onClick={openAdd}
           >
             + Add projection
@@ -702,7 +702,6 @@ export function ProjectedTab() {
       ) : groupedByTargetWeek.length === 0 ? (
         <div className="projection-log-empty">
           <p>No projections saved for {targetYear} yet.</p>
-          <button type="button" onClick={openAdd}>+ Add projection</button>
         </div>
       ) : (
         <div className="projection-log">
@@ -747,14 +746,14 @@ export function ProjectedTab() {
                   <div className="projection-log-actions">
                     <button
                       type="button"
-                      className="secondary projection-log-edit-btn"
+                      className="projection-log-edit-btn"
                       onClick={() => openEdit(p)}
                     >
                       Edit
                     </button>
                     <button
                       type="button"
-                      className="sample-delete-btn"
+                      className="projection-log-delete-btn"
                       onClick={() => handleDelete(p)}
                       disabled={deletingId === p.id}
                       aria-label="Delete projection"

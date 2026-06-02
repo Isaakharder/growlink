@@ -239,6 +239,7 @@ export function MobileDailyYieldPage() {
   const [samplesLoading, setSamplesLoading] = useState(false);
   const [savingSample, setSavingSample] = useState(false);
   const [resettingSamples, setResettingSamples] = useState(false);
+  const [deletingSampleId, setDeletingSampleId] = useState<string | null>(null);
 
   const [casesSectionExpanded, setCasesSectionExpanded] = useState(false);
   const [casesPerBinDraft, setCasesPerBinDraft] = useState("38");
@@ -792,6 +793,35 @@ export function MobileDailyYieldPage() {
     }
   }
 
+  async function deleteSample(sampleId: string) {
+    const confirmed = window.confirm("Remove this sample row from today's projection?");
+    if (!confirmed) return;
+
+    setDeletingSampleId(sampleId);
+    setError(null);
+
+    try {
+      const response = await apiFetch(`${SAMPLES_URL}/${sampleId}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to delete sample");
+      }
+
+      setSamples((current) => current.filter((s) => s.id !== sampleId));
+      if (selectedVarietyId) {
+        setAllWeekSamples((prev) => ({
+          ...prev,
+          [selectedVarietyId]: (prev[selectedVarietyId] ?? []).filter((s) => s.id !== sampleId)
+        }));
+      }
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete sample");
+    } finally {
+      setDeletingSampleId(null);
+    }
+  }
+
   return (
     <section className="mobile-page mobile-yield-page">
       <h2>Daily Yield</h2>
@@ -926,6 +956,15 @@ export function MobileDailyYieldPage() {
                     {roundTo(sample.bin_fill_percent, 2)}% | {roundTo(sample.sample_kg, 3)} kg | {roundTo(sample.sample_kg_per_stem, 6)} kg/stem
                   </span>
                 </div>
+                <button
+                  type="button"
+                  className="sample-delete-btn"
+                  onClick={() => deleteSample(sample.id)}
+                  disabled={deletingSampleId === sample.id}
+                  aria-label="Remove sample"
+                >
+                  {deletingSampleId === sample.id ? "…" : "✕"}
+                </button>
               </li>
             ))}
           </ul>

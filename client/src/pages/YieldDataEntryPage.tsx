@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { KgEntriesTab } from "./KgEntriesTab";
 import { CasesEntryTab } from "./CasesEntryTab";
+import { ProjectedTab } from "./ProjectedTab";
 
-type TabType = "kg" | "cases";
+type TabType = "kg" | "cases" | "projected";
 
 export function YieldDataEntryPage() {
   const [activeTab, setActiveTab] = useState<TabType>("kg");
@@ -27,6 +28,12 @@ export function YieldDataEntryPage() {
         >
           Cases Entry
         </button>
+        <button
+          className={`tab-button ${activeTab === "projected" ? "active" : ""}`}
+          onClick={() => setActiveTab("projected")}
+        >
+          Projected
+        </button>
       </div>
 
       {activeTab === "kg" ? (
@@ -38,6 +45,12 @@ export function YieldDataEntryPage() {
       {activeTab === "cases" ? (
         <div className="tab-content">
           <CasesEntryTab />
+        </div>
+      ) : null}
+
+      {activeTab === "projected" ? (
+        <div className="tab-content">
+          <ProjectedTab />
         </div>
       ) : null}
     </section>

@@ -552,6 +552,29 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/samples", canView, async (req, r
   }
 });
 
+mobileDailyYieldRouter.delete("/mobile/daily-yield/samples/:id", canWrite, async (req, res) => {
+  const organizationId = req.organizationId;
+
+  try {
+    const sampleId = parseId(req.params.id, "id");
+
+    const { error } = await supabase
+      .from("daily_yield_samples")
+      .delete()
+      .eq("id", sampleId)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      return sendSafeError(res, 500, "Failed to delete yield sample.", "Daily yield sample delete error:", error);
+    }
+
+    return res.status(204).send();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete sample";
+    return res.status(400).json({ message });
+  }
+});
+
 mobileDailyYieldRouter.delete("/mobile/daily-yield/samples", canWrite, async (req, res) => {
   const organizationId = req.organizationId;
 
@@ -628,7 +651,7 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
     const samplesByVariety = new Map<string, number[]>();
     for (const sample of samples) {
       const kg = Number(sample.calculated_kg_per_stem);
-      if (!Number.isFinite(kg) || kg <= 0) continue;
+      if (!Number.isFinite(kg) || kg < 0) continue;
       const list = samplesByVariety.get(sample.variety_id) ?? [];
       list.push(kg);
       samplesByVariety.set(sample.variety_id, list);
