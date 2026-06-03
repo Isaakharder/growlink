@@ -94,6 +94,12 @@ function seriesLabel(p: ApiProjection): string {
     : `${capitalize(p.color ?? "")} · ${p.unit}`;
 }
 
+// Advance one ISO week. Week 53 rolls over to week 1 of the next year.
+function advanceTargetWeek(year: number, week: number): { year: number; week: number } {
+  if (week < 53) return { year, week: week + 1 };
+  return { year: year + 1, week: 1 };
+}
+
 // ── Forecast Accuracy by Lead Time card ──────────────────────────────────────
 
 function ForecastAccuracyCard({ projections }: { projections: ApiProjection[] }) {
@@ -140,7 +146,7 @@ function ForecastAccuracyCard({ projections }: { projections: ApiProjection[] })
   );
 }
 
-// ── Add / Edit Modal ──────────────────────────────────────────────────────────
+// ── Edit Modal (used only for editing existing rows) ──────────────────────────
 
 type ModalProps = {
   editing: ApiProjection | null;
@@ -224,9 +230,7 @@ function ProjectionModal({ editing, varieties, onSave, onClose }: ModalProps) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="variety-modal projection-modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="projection-modal-title">
-          {editing ? "Edit Projection" : "Add Projection"}
-        </h2>
+        <h2 className="projection-modal-title">Edit Projection</h2>
 
         <form onSubmit={handleSubmit}>
           {/* ── Forecast coordinates ── */}
@@ -415,12 +419,26 @@ export function ProjectedTab() {
   const [filterColor, setFilterColor] = useState("");
   const [filterUnit, setFilterUnit] = useState("");
 
-  // Modal state
+  // Edit modal state (add uses the inline form instead)
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProjection, setEditingProjection] = useState<ApiProjection | null>(null);
 
-  // In-flight delete tracking (to disable delete button while pending)
+  // In-flight delete tracking
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // ── Inline add form state ──────────────────────────────────────────────────
+  const [inlineForecastYear, setInlineForecastYear] = useState(String(currentIso.year));
+  const [inlineForecastWeek, setInlineForecastWeek] = useState(String(currentIso.week));
+  const [inlineTargetYear, setInlineTargetYear] = useState(String(defaultNextYear));
+  const [inlineTargetWeek, setInlineTargetWeek] = useState(String(defaultNextWeek));
+  const [inlineLevel, setInlineLevel] = useState<ProjectionLevel>("variety");
+  const [inlineVarietyId, setInlineVarietyId] = useState("");
+  const [inlineColor, setInlineColor] = useState<VarietyColor>("red");
+  const [inlineUnit, setInlineUnit] = useState<ProjectionUnit>("kg");
+  const [inlineAmount, setInlineAmount] = useState("");
+  const [inlineSaving, setInlineSaving] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [inlineSavedWeek, setInlineSavedWeek] = useState<number | null>(null);
 
   // ── Load variety options once ──────────────────────────────────────────────
 
@@ -429,7 +447,10 @@ export function ProjectedTab() {
       .then(async (res) => {
         if (!res.ok) throw new Error(`Failed to load varieties (${res.status})`);
         const data = (await res.json()) as { varieties: Variety[] };
-        setVarieties(data.varieties ?? []);
+        const vs = data.varieties ?? [];
+        setVarieties(vs);
+        // Seed the inline form's variety picker with the first active variety
+        setInlineVarietyId((prev) => prev || (vs[0]?.id ?? ""));
       })
       .catch((e: unknown) =>
         setOptionsError(e instanceof Error ? e.message : "Failed to load varieties")
@@ -532,12 +553,19 @@ export function ProjectedTab() {
       }));
   }, [filtered]);
 
-  // ── Modal handlers ─────────────────────────────────────────────────────────
+  // ── Inline form: weeks-out preview ────────────────────────────────────────
 
-  function openAdd() {
-    setEditingProjection(null);
-    setModalOpen(true);
-  }
+  const inlineWeeksOut = useMemo(() => {
+    const fY = parseInt(inlineForecastYear, 10);
+    const fW = parseInt(inlineForecastWeek, 10);
+    const tY = parseInt(inlineTargetYear, 10);
+    const tW = parseInt(inlineTargetWeek, 10);
+    if (!Number.isInteger(fY) || !Number.isInteger(fW) || !Number.isInteger(tY) || !Number.isInteger(tW)) return null;
+    return computeWeeksOut(fY, fW, tY, tW);
+  }, [inlineForecastYear, inlineForecastWeek, inlineTargetYear, inlineTargetWeek]);
+
+  // ── Edit modal handlers ────────────────────────────────────────────────────
+
   function openEdit(p: ApiProjection) {
     setEditingProjection(p);
     setModalOpen(true);
@@ -569,6 +597,69 @@ export function ProjectedTab() {
     }
   }
 
+  // ── Inline add form handler ────────────────────────────────────────────────
+
+  async function handleInlineSave(e: FormEvent) {
+    e.preventDefault();
+    setInlineError(null);
+    setInlineSavedWeek(null);
+
+    const fY = parseInt(inlineForecastYear, 10);
+    const fW = parseInt(inlineForecastWeek, 10);
+    const tY = parseInt(inlineTargetYear, 10);
+    const tW = parseInt(inlineTargetWeek, 10);
+
+    if (!Number.isInteger(fY) || fY < 2000 || fY > 2100) { setInlineError("Invalid forecast year."); return; }
+    if (!Number.isInteger(fW) || fW < 1 || fW > 53)      { setInlineError("Forecast week must be 1–53."); return; }
+    if (!Number.isInteger(tY) || tY < 2000 || tY > 2100) { setInlineError("Invalid target year."); return; }
+    if (!Number.isInteger(tW) || tW < 1 || tW > 53)      { setInlineError("Target week must be 1–53."); return; }
+    if (inlineLevel === "variety" && !inlineVarietyId)    { setInlineError("Select a variety."); return; }
+
+    const parsed = Number(inlineAmount.trim());
+    if (!Number.isFinite(parsed) || parsed < 0) { setInlineError("Projected amount must be a number ≥ 0."); return; }
+
+    const payload: Record<string, unknown> = {
+      target_year: tY,
+      target_week: tW,
+      forecast_year: fY,
+      forecast_week: fW,
+      projection_level: inlineLevel,
+      unit: inlineUnit,
+      projected_amount: parsed,
+    };
+    if (inlineLevel === "variety") payload.variety_id = inlineVarietyId;
+    else payload.color = inlineColor;
+
+    setInlineSaving(true);
+    try {
+      const saveRes = await apiFetch(`${PROJECTION_URL}/bulk`, {
+        method: "POST",
+        body: JSON.stringify({ projections: [payload] }),
+      });
+      if (!saveRes.ok) {
+        const body = (await saveRes.json().catch(() => null)) as { message?: string } | null;
+        const msg = body?.message ?? "Failed to save projection";
+        setInlineError(
+          msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")
+            ? "Already exists for this combination. Use Edit on the row below to update it."
+            : msg
+        );
+        return;
+      }
+      // Clear amount, show saved confirmation, advance target week by one
+      setInlineAmount("");
+      setInlineSavedWeek(tW);
+      const { year: nextYear, week: nextWeek } = advanceTargetWeek(tY, tW);
+      setInlineTargetYear(String(nextYear));
+      setInlineTargetWeek(String(nextWeek));
+      await loadProjections();
+    } catch (e: unknown) {
+      setInlineError(e instanceof Error ? e.message : "Failed to save projection");
+    } finally {
+      setInlineSaving(false);
+    }
+  }
+
   async function handleDelete(p: ApiProjection) {
     if (!window.confirm(`Delete this projection?\n\nTarget W${p.target_week} · Forecast W${p.forecast_week} · ${seriesLabel(p)} · ${fmtNumber(p.projected_amount)}`)) return;
     setDeletingId(p.id);
@@ -593,7 +684,7 @@ export function ProjectedTab() {
 
   return (
     <div>
-      {/* ── Top controls: year + filters + Add button ── */}
+      {/* ── Top controls: target year + list filters ── */}
       <div className="projection-controls">
         <div className="projection-controls-row">
           <label className="projection-control-label">
@@ -683,15 +774,179 @@ export function ProjectedTab() {
               <option value="cases">cases</option>
             </select>
           </label>
-
-          <button
-            type="button"
-            className="projection-add-btn primary-action-button"
-            onClick={openAdd}
-          >
-            + Add projection
-          </button>
         </div>
+      </div>
+
+      {/* ── Inline Add Projection form ────────────────────────────────────────── */}
+      <div className="coming-soon-card" style={{ marginBottom: "1rem" }}>
+        <h3 style={{ margin: "0 0 0.75rem", fontSize: "1rem", fontWeight: 600, color: "var(--text)" }}>
+          Add Projection
+        </h3>
+        <form onSubmit={(e) => void handleInlineSave(e)}>
+          {/* Row 1: forecast → target coordinates + weeks-out preview */}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "0.5rem", marginBottom: "0.5rem" }}>
+            <div>
+              <p style={{ margin: "0 0 0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 500 }}>
+                Forecast week
+              </p>
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <label className="projection-control-label">
+                  Year
+                  <input
+                    type="number"
+                    className="projection-control-input"
+                    value={inlineForecastYear}
+                    min={2000}
+                    max={2100}
+                    onChange={(e) => setInlineForecastYear(e.target.value)}
+                  />
+                </label>
+                <label className="projection-control-label">
+                  Week
+                  <input
+                    type="number"
+                    className="projection-control-input"
+                    value={inlineForecastWeek}
+                    min={1}
+                    max={53}
+                    onChange={(e) => setInlineForecastWeek(e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <span style={{ paddingBottom: "0.35rem", color: "var(--text-muted)", fontSize: "0.9rem" }}>→</span>
+
+            <div>
+              <p style={{ margin: "0 0 0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 500 }}>
+                Target week
+              </p>
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <label className="projection-control-label">
+                  Year
+                  <input
+                    type="number"
+                    className="projection-control-input"
+                    value={inlineTargetYear}
+                    min={2000}
+                    max={2100}
+                    onChange={(e) => setInlineTargetYear(e.target.value)}
+                  />
+                </label>
+                <label className="projection-control-label">
+                  Week
+                  <input
+                    type="number"
+                    className="projection-control-input"
+                    value={inlineTargetWeek}
+                    min={1}
+                    max={53}
+                    onChange={(e) => setInlineTargetWeek(e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {inlineWeeksOut !== null ? (
+              <span style={{ paddingBottom: "0.35rem", fontSize: "0.76rem", color: "var(--text-muted)" }}>
+                {weeksOutLabel(inlineWeeksOut)}
+              </span>
+            ) : null}
+          </div>
+
+          {/* Row 2: level / variety or color / unit / amount / save */}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "0.5rem" }}>
+            <label className="projection-control-label">
+              Level
+              <select
+                className="projection-control-input"
+                value={inlineLevel}
+                onChange={(e) => setInlineLevel(e.target.value as ProjectionLevel)}
+              >
+                <option value="variety">Variety</option>
+                <option value="color">Color</option>
+              </select>
+            </label>
+
+            {inlineLevel === "variety" ? (
+              <label className="projection-control-label">
+                Variety
+                <select
+                  className="projection-control-input"
+                  value={inlineVarietyId}
+                  onChange={(e) => setInlineVarietyId(e.target.value)}
+                >
+                  {varieties.length === 0 ? (
+                    <option value="">No active varieties</option>
+                  ) : (
+                    varieties.map((v) => (
+                      <option key={v.id} value={v.id}>{v.name}</option>
+                    ))
+                  )}
+                </select>
+              </label>
+            ) : (
+              <label className="projection-control-label">
+                Color
+                <select
+                  className="projection-control-input"
+                  value={inlineColor}
+                  onChange={(e) => setInlineColor(e.target.value as VarietyColor)}
+                >
+                  {COLORS.map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <label className="projection-control-label">
+              Unit
+              <select
+                className="projection-control-input"
+                value={inlineUnit}
+                onChange={(e) => setInlineUnit(e.target.value as ProjectionUnit)}
+              >
+                <option value="kg">kg</option>
+                <option value="cases">cases</option>
+              </select>
+            </label>
+
+            <label className="projection-control-label">
+              Amount ({inlineUnit})
+              <input
+                type="number"
+                className="projection-control-input"
+                value={inlineAmount}
+                min={0}
+                step="any"
+                placeholder="e.g. 10000"
+                onChange={(e) => {
+                  setInlineAmount(e.target.value);
+                  if (inlineSavedWeek !== null) setInlineSavedWeek(null);
+                }}
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={inlineSaving}
+              style={{ alignSelf: "flex-end", marginBottom: "0" }}
+            >
+              {inlineSaving ? "Saving…" : "Save"}
+            </button>
+
+            {inlineSavedWeek !== null ? (
+              <span style={{ alignSelf: "flex-end", paddingBottom: "0.35rem", fontSize: "0.78rem", color: "var(--brand)", fontWeight: 600 }}>
+                ✓ Saved W{inlineSavedWeek}
+              </span>
+            ) : null}
+          </div>
+
+          {inlineError ? (
+            <p className="form-error" style={{ marginTop: "0.4rem", marginBottom: 0 }}>{inlineError}</p>
+          ) : null}
+        </form>
       </div>
 
       {pageError ? <p className="form-error">{pageError}</p> : null}
@@ -771,10 +1026,10 @@ export function ProjectedTab() {
       {/* ── Forecast Accuracy by Lead Time ── */}
       {!projLoading ? <ForecastAccuracyCard projections={allProjections} /> : null}
 
-      {/* ── Add / Edit modal ── */}
-      {modalOpen ? (
+      {/* ── Edit modal (existing rows only) ── */}
+      {modalOpen && editingProjection ? (
         <ProjectionModal
-          key={editingProjection?.id ?? "new"}
+          key={editingProjection.id}
           editing={editingProjection}
           varieties={varieties}
           onSave={handleModalSave}
