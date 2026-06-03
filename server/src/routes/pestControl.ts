@@ -1044,7 +1044,8 @@ pestControlRouter.post("/pest/todos", canEdit, async (req, res) => {
   const instructions = typeof body.instructions === "string" ? body.instructions.trim() || null : null;
 
   // Accept a pre-built progress_snapshot (e.g. valve_drench) sent from the planner.
-  let initial_progress_snapshot: Record<string, unknown> | null = null;
+  // Default to {} so an explicit null from the frontend never hits the NOT NULL constraint.
+  let initial_progress_snapshot: Record<string, unknown> = {};
   if (body.progress_snapshot != null) {
     try {
       initial_progress_snapshot = validateProgressSnapshot(body.progress_snapshot);
