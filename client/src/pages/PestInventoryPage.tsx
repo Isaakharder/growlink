@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 
 type ChemicalType = "fungicide" | "insecticide" | "herbicide" | "pesticide";
@@ -78,6 +78,24 @@ function toFormState(c: Chemical): ChemicalFormState {
   };
 }
 
+// Alphabetical base sort, then split into startsWith / contains when query is present.
+// Within each group items stay alphabetical.
+function filterAndSortChemicals(list: Chemical[], query: string): Chemical[] {
+  const sorted = [...list].sort((a, b) =>
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  );
+  const q = query.trim().toLowerCase();
+  if (!q) return sorted;
+  const startsWith: Chemical[] = [];
+  const contains: Chemical[] = [];
+  for (const c of sorted) {
+    const name = c.name.toLowerCase();
+    if (name.startsWith(q)) startsWith.push(c);
+    else if (name.includes(q)) contains.push(c);
+  }
+  return [...startsWith, ...contains];
+}
+
 export function PestInventoryPage() {
   const [chemicals, setChemicals] = useState<Chemical[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,6 +116,11 @@ export function PestInventoryPage() {
   const [removingLabel, setRemovingLabel] = useState(false);
   const [labelLoading, setLabelLoading] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   async function fetchChemicals() {
     setLoading(true);
@@ -134,6 +157,28 @@ export function PestInventoryPage() {
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
   }, [isModalOpen, isRestockModalOpen]);
+
+  // Close suggestion dropdown on outside click
+  useEffect(() => {
+    function onOutside(e: MouseEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, []);
+
+  const filteredChemicals = useMemo(
+    () => filterAndSortChemicals(chemicals, searchQuery),
+    [chemicals, searchQuery]
+  );
+
+  // Suggestions: top 8 matches when query is non-empty
+  const suggestions = useMemo(
+    () => (searchQuery.trim() ? filteredChemicals.slice(0, 8) : []),
+    [filteredChemicals, searchQuery]
+  );
 
   function openAddModal() {
     setEditingId(null);
@@ -394,6 +439,89 @@ export function PestInventoryPage() {
           </button>
         </div>
 
+        {/* ── Search / autocomplete ── */}
+        <div ref={searchContainerRef} style={{ position: "relative", margin: "0.75rem 0 0.5rem" }}>
+          <input
+            type="search"
+            placeholder="Search chemicals..."
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+            onFocus={() => { if (searchQuery.trim()) setSearchOpen(true); }}
+            style={{
+              width: "100%",
+              border: "1px solid var(--border)",
+              borderRadius: "10px",
+              background: "var(--surface)",
+              color: "var(--text)",
+              font: "inherit",
+              padding: "0.5rem 0.75rem",
+            }}
+          />
+
+          {searchOpen && searchQuery.trim() ? (
+            <div
+              style={{
+                position: "absolute",
+                top: "calc(100% + 4px)",
+                left: 0,
+                right: 0,
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: "10px",
+                boxShadow: "var(--shadow)",
+                zIndex: 20,
+                overflow: "hidden",
+              }}
+            >
+              {suggestions.length === 0 ? (
+                <p style={{ margin: 0, padding: "0.6rem 0.85rem", fontSize: "0.9em", color: "var(--text-muted)" }}>
+                  No chemicals found.
+                </p>
+              ) : (
+                suggestions.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      beginEdit(c);
+                      setSearchQuery("");
+                      setSearchOpen(false);
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "baseline",
+                      gap: "0.5rem",
+                      width: "100%",
+                      padding: "0.55rem 0.85rem",
+                      background: "none",
+                      border: "none",
+                      borderTop: "1px solid var(--border)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      font: "inherit",
+                      color: "var(--text)",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--active, #e6f5ef)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                  >
+                    <span style={{ fontWeight: 600, fontSize: "0.92em" }}>{c.name}</span>
+                    {c.chemical_type ? (
+                      <span style={{ fontSize: "0.78em", color: "var(--text-muted)" }}>
+                        {c.chemical_type.charAt(0).toUpperCase() + c.chemical_type.slice(1)}
+                      </span>
+                    ) : null}
+                    {!c.active ? (
+                      <span style={{ fontSize: "0.75em", color: "var(--text-muted)", marginLeft: "auto" }}>
+                        Inactive
+                      </span>
+                    ) : null}
+                  </button>
+                ))
+              )}
+            </div>
+          ) : null}
+        </div>
+
         {loading ? <p>Loading...</p> : null}
 
         {!loading && chemicals.length === 0 ? <p>No chemicals added yet.</p> : null}
@@ -415,7 +543,14 @@ export function PestInventoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {chemicals.map((c) => (
+                {filteredChemicals.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ color: "var(--text-muted)", textAlign: "center", padding: "1rem" }}>
+                      No chemicals found.
+                    </td>
+                  </tr>
+                ) : null}
+                {filteredChemicals.map((c) => (
                   <tr key={c.id}>
                     <td>{c.name}</td>
                     <td>

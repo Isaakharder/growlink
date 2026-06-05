@@ -1002,13 +1002,19 @@ pestControlRouter.get("/pest/todos", canMobileView, async (req, res) => {
   let query = supabase
     .from("pest_control_todos")
     .select("*")
-    .eq("organization_id", organizationId)
-    .order("created_at", { ascending: false });
+    .eq("organization_id", organizationId);
 
   if (status === "active") {
-    query = query.in("status", ["pending", "in_progress"]);
-  } else if (status === "pending" || status === "in_progress" || status === "completed" || status === "cancelled") {
-    query = query.eq("status", status as string);
+    // Open jobs: sort by planned application_date first (nulls last), then created_at
+    query = query
+      .in("status", ["pending", "in_progress"])
+      .order("application_date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true });
+  } else {
+    if (status === "pending" || status === "in_progress" || status === "completed" || status === "cancelled") {
+      query = query.eq("status", status as string);
+    }
+    query = query.order("created_at", { ascending: false });
   }
 
   const { data, error } = await query;
@@ -1043,6 +1049,13 @@ pestControlRouter.post("/pest/todos", canEdit, async (req, res) => {
 
   const instructions = typeof body.instructions === "string" ? body.instructions.trim() || null : null;
 
+  // Optional planned application date — must be YYYY-MM-DD if provided
+  const application_date: string | null = (() => {
+    if (typeof body.application_date !== "string") return null;
+    const d = body.application_date.trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  })();
+
   // Accept a pre-built progress_snapshot (e.g. valve_drench) sent from the planner.
   // Default to {} so an explicit null from the frontend never hits the NOT NULL constraint.
   let initial_progress_snapshot: Record<string, unknown> = {};
@@ -1069,6 +1082,7 @@ pestControlRouter.post("/pest/todos", canEdit, async (req, res) => {
       calculation_snapshot: pickSnapshotKeys(body.calculation_snapshot, CALC_SNAP_KEYS),
       progress_snapshot: initial_progress_snapshot,
       instructions,
+      application_date,
       created_by: userId ?? null
     })
     .select("*")
@@ -1323,6 +1337,213 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
         }
       }
     }
+  }
+
+  // ── H1 Food Safety Log ──────────────────────────────────────────────────────
+  // Non-blocking: a failure here must never prevent job completion from returning.
+  try {
+    const h1ChemSnap   = todo.chemical_snapshot    as Record<string, unknown> | null;
+    const h1TargetSnap = todo.target_snapshot      as Record<string, unknown> | null;
+    const h1CalcSnap   = todo.calculation_snapshot as Record<string, unknown> | null;
+    const h1ProgSnap   = todo.progress_snapshot    as Record<string, unknown> | null;
+
+    const productName = typeof h1ChemSnap?.name === "string" ? h1ChemSnap.name : null;
+
+    if (productName) {
+      // PCP number — lives on the chemical record, not the snapshot
+      let pcpNumber: string | null = null;
+      if (chemId) {
+        const { data: chemRow } = await supabase
+          .from("pest_chemicals")
+          .select("registration_number")
+          .eq("id", chemId)
+          .eq("organization_id", organizationId)
+          .maybeSingle();
+        pcpNumber = typeof chemRow?.registration_number === "string" ? chemRow.registration_number : null;
+      }
+
+      // PHI (stored as text, e.g. "3" or "3 days")
+      const phiRaw = h1ChemSnap?.phi;
+      let phiDaa: number | null = null;
+      if (typeof phiRaw === "number" && Number.isFinite(phiRaw)) {
+        phiDaa = Math.round(phiRaw);
+      } else if (typeof phiRaw === "string") {
+        const m = phiRaw.match(/^(\d+)/);
+        phiDaa = m ? parseInt(m[1], 10) : null;
+      }
+
+      // Application date: prefer the planned date on the todo; fall back to completed_at date
+      const todoPlannedDate = typeof (todo as Record<string, unknown>).application_date === "string"
+        ? ((todo as Record<string, unknown>).application_date as string)
+        : null;
+      const applicationDate = todoPlannedDate ?? now.substring(0, 10);
+
+      // Earliest allowable harvest date = application date + PHI days
+      let earliestHarvestDate: string | null = null;
+      if (phiDaa != null) {
+        const d = new Date(applicationDate);
+        d.setDate(d.getDate() + phiDaa);
+        earliestHarvestDate = d.toISOString().substring(0, 10);
+      }
+
+      // Actual quantity used — mirrors inventory deduction rounding exactly
+      const h1RateUnit = typeof h1ChemSnap?.rate_unit === "string" ? h1ChemSnap.rate_unit : null;
+      const h1IsDry = h1RateUnit ? (h1RateUnit.startsWith("g_") || h1RateUnit.startsWith("kg_")) : false;
+      type H1Valve = { productAmount: unknown; productUnit: unknown };
+      const h1Snap = todo.progress_snapshot as { type?: string; valves?: H1Valve[] };
+      let h1TotalBase: number | null = null;
+
+      if (h1Snap.type === "valve_drench" && Array.isArray(h1Snap.valves) && h1Snap.valves.length > 0) {
+        let sum = 0;
+        for (const v of h1Snap.valves) {
+          const amt  = typeof v.productAmount === "number" ? v.productAmount : 0;
+          const unit = typeof v.productUnit  === "string"  ? v.productUnit  : "";
+          const rounded = unit === "g" ? Math.round(amt / 5) * 5 : Math.round(amt * 10) / 10;
+          sum += rounded;
+        }
+        h1TotalBase = sum;
+      } else if (h1CalcSnap) {
+        const raw = h1CalcSnap.total_chemical_ml;
+        h1TotalBase = typeof raw === "number" ? raw : null;
+      }
+
+      let actualQtyUsed: number | null = null;
+      let actualQtyUnit: string | null = null;
+      if (h1TotalBase != null) {
+        if (h1IsDry) {
+          actualQtyUsed = h1TotalBase >= 1000
+            ? Math.round((h1TotalBase / 1000) * 100) / 100
+            : Math.round(h1TotalBase);
+          actualQtyUnit = h1TotalBase >= 1000 ? "kg" : "g";
+        } else {
+          actualQtyUsed = h1TotalBase >= 1000
+            ? Math.round((h1TotalBase / 1000) * 100) / 100
+            : Math.round(h1TotalBase * 10) / 10;
+          actualQtyUnit = h1TotalBase >= 1000 ? "L" : "ml";
+        }
+      }
+
+      // Rate applied per unit
+      const h1RateValue = typeof h1ChemSnap?.rate_value === "number" ? h1ChemSnap.rate_value : null;
+      const RATE_LABELS: Record<string, string> = {
+        ml_per_acre: "ml/acre", L_per_acre: "L/acre",
+        ml_per_hectare: "ml/hectare", L_per_hectare: "L/hectare",
+        g_per_acre: "g/acre", kg_per_acre: "kg/acre",
+        g_per_hectare: "g/hectare", kg_per_hectare: "kg/hectare",
+      };
+      let rateAppliedPerUnit: string | null = null;
+      if (h1RateValue != null && h1RateUnit) {
+        rateAppliedPerUnit = `${h1RateValue} ${RATE_LABELS[h1RateUnit] ?? h1RateUnit}`;
+      }
+
+      // Area treated (m²)
+      const areaM2 = typeof h1TargetSnap?.total_m2 === "number" ? h1TargetSnap.total_m2 : null;
+
+      // Method of application
+      const methodOfApplication = (todo.type as string) === "spray" ? "Spray" : "Drench";
+
+      // Row/House/Zones summary
+      let rowHouseZones: string | null = null;
+      type SnapValveName = { valveName?: unknown };
+      type SnapPhaseName = { phaseName?: unknown };
+      if (h1Snap.type === "valve_drench" && Array.isArray(h1Snap.valves)) {
+        rowHouseZones = (h1Snap.valves as SnapValveName[])
+          .map((v) => (typeof v.valveName === "string" ? v.valveName : ""))
+          .filter(Boolean)
+          .join(", ");
+      } else if (Array.isArray((h1ProgSnap as Record<string, unknown> | null)?.phases)) {
+        const phases = (h1ProgSnap as { phases: SnapPhaseName[] }).phases;
+        rowHouseZones = phases
+          .map((p) => (typeof p.phaseName === "string" ? p.phaseName : ""))
+          .filter(Boolean)
+          .join(", ");
+      } else if (h1TargetSnap) {
+        if (h1TargetSnap.target_mode === "valve" && Array.isArray(h1TargetSnap.valve_names)) {
+          rowHouseZones = (h1TargetSnap.valve_names as string[]).join(", ");
+        } else if (Array.isArray(h1TargetSnap.group_names)) {
+          rowHouseZones = (h1TargetSnap.group_names as string[]).join(", ");
+        }
+      }
+
+      // Operation name — org's display name
+      let operationName: string | null = null;
+      {
+        const { data: orgRow } = await supabase
+          .from("organizations")
+          .select("name")
+          .eq("id", organizationId)
+          .maybeSingle();
+        operationName = typeof orgRow?.name === "string" ? orgRow.name : null;
+      }
+
+      // Variety + planting date — look up the first variety assigned to target groups.
+      // Uses group_ids from target_snapshot; silently skips if unavailable.
+      let varietyName: string | null = null;
+      let datePlanted: string | null = null;
+      {
+        const groupIds = Array.isArray(h1TargetSnap?.group_ids)
+          ? (h1TargetSnap.group_ids as unknown[]).filter((g): g is string => typeof g === "string")
+          : [];
+        if (groupIds.length > 0) {
+          const { data: assignments } = await supabase
+            .from("greenhouse_variety_assignments")
+            .select("variety_id")
+            .eq("organization_id", organizationId)
+            .in("group_id", groupIds)
+            .limit(1);
+          if (assignments && assignments.length > 0) {
+            const { data: varietyRow } = await supabase
+              .from("varieties")
+              .select("name, planting_date")
+              .eq("id", assignments[0].variety_id as string)
+              .maybeSingle();
+            if (varietyRow) {
+              varietyName = typeof varietyRow.name === "string" ? varietyRow.name : null;
+              datePlanted = typeof varietyRow.planting_date === "string" ? varietyRow.planting_date : null;
+            }
+          }
+        }
+      }
+
+      // Production site area as formatted string
+      const productionSiteArea = areaM2 != null ? `${areaM2.toFixed(1)} m²` : null;
+
+      const { error: h1Error } = await supabase.from("food_safety_h1_logs").insert({
+        organization_id:                 organizationId,
+        pest_job_id:                     id,
+        application_date:                applicationDate,
+        product_name:                    productName,
+        pcp_number:                      pcpNumber,
+        actual_quantity_used:            actualQtyUsed,
+        actual_quantity_unit:            actualQtyUnit,
+        rate_applied_per_unit:           rateAppliedPerUnit,
+        label_instructions_followed:     true,
+        area_quantity_treated_m2:        areaM2,
+        method_of_application:           methodOfApplication,
+        row_house_zones:                 rowHouseZones,
+        earliest_allowable_harvest_date: earliestHarvestDate,
+        phi_daa:                         phiDaa,
+        applicator_name:                 null,
+        // top-form prefills
+        operation_name:                  operationName,
+        current_crop:                    "Peppers",
+        previous_year_crops:             null,
+        variety:                         varietyName,
+        production_site_information:     rowHouseZones,
+        production_site_area:            productionSiteArea,
+        date_planted:                    datePlanted,
+        // bottom fields
+        confirmation_signature:          null,
+        confirmation_date:               null,
+        version_label:                   "Version 11.0",
+      });
+
+      if (h1Error) {
+        console.error("[pest-complete] H1 log insert failed (non-blocking):", h1Error);
+      }
+    }
+  } catch (h1Err) {
+    console.error("[pest-complete] H1 log creation threw (non-blocking):", h1Err);
   }
 
   return res.json({ ok: true, todo: updatedTodo });

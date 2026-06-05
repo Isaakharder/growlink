@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 
 type SetupGroup = {
@@ -148,6 +148,76 @@ function computeChemicalMl(m2: number, rate: number, rateUnit: RateUnit): number
   }
 }
 
+// ── Planned Jobs types ────────────────────────────────────────────────────────
+
+type TodoChemSnap  = { name?: string; rate_value?: number | null; rate_unit?: string | null };
+type TodoTargetSnap = { target_mode?: string; valve_names?: string[]; group_names?: string[]; total_m2?: number | null };
+type TodoCalcSnap  = { total_chemical_ml?: number | null; rate_unit?: string | null };
+type TodoProgSnap  = {
+  type?: string;
+  phases?: Array<{ completed: boolean }>;
+  valves?: Array<{ completed: boolean }>;
+};
+
+type PestTodo = {
+  id: string;
+  type: "spray" | "drench";
+  status: "pending" | "in_progress";
+  application_date: string | null;
+  chemical_snapshot: TodoChemSnap;
+  target_snapshot: TodoTargetSnap;
+  calculation_snapshot: TodoCalcSnap;
+  progress_snapshot: TodoProgSnap;
+  created_at: string;
+};
+
+// ── Planned Jobs helpers ───────────────────────────────────────────────────────
+
+function todoProgressSummary(prog: TodoProgSnap | null): string {
+  if (!prog) return "—";
+  if (prog.type === "valve_drench" && Array.isArray(prog.valves) && prog.valves.length > 0) {
+    const done = prog.valves.filter((v) => v.completed).length;
+    return `${done}/${prog.valves.length} valves`;
+  }
+  if (Array.isArray(prog.phases) && prog.phases.length > 0) {
+    const done = prog.phases.filter((p) => p.completed).length;
+    return `${done}/${prog.phases.length} phases`;
+  }
+  return "—";
+}
+
+function todoTargetSummary(target: TodoTargetSnap | null): string {
+  if (!target) return "—";
+  if (target.target_mode === "valve" && Array.isArray(target.valve_names) && target.valve_names.length > 0) {
+    const names = target.valve_names;
+    return names.length <= 3 ? names.join(", ") : `${names.length} valves`;
+  }
+  if (Array.isArray(target.group_names) && target.group_names.length > 0) {
+    const names = target.group_names;
+    return names.length <= 3 ? names.join(", ") : `${names.length} groups`;
+  }
+  if (target.total_m2 != null) return `${target.total_m2.toFixed(1)} m²`;
+  return "—";
+}
+
+function todoChemQuantity(calc: TodoCalcSnap | null): string {
+  if (!calc) return "—";
+  const raw = calc.total_chemical_ml;
+  if (raw == null || !Number.isFinite(raw)) return "—";
+  const ru = calc.rate_unit ?? "";
+  const dry = ru.startsWith("g_") || ru.startsWith("kg_");
+  if (dry) return raw >= 1000 ? `${(raw / 1000).toFixed(2)} kg` : `${Math.round(raw)} g`;
+  return raw >= 1000 ? `${(raw / 1000).toFixed(2)} L` : `${raw.toFixed(1)} ml`;
+}
+
+function formatTodoDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
 export function PestPlannerPage() {
   const [groups, setGroups] = useState<SetupGroup[]>([]);
   const [rows, setRows] = useState<SetupRow[]>([]);
@@ -156,6 +226,43 @@ export function PestPlannerPage() {
   const [chemicals, setChemicals] = useState<Chemical[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // ── Tab state
+  type PlannerTab = "create" | "planned";
+  const [activeTab, setActiveTab] = useState<PlannerTab>("create");
+
+  // ── Planned application date (defaults to today in local time)
+  const [applicationDate, setApplicationDate] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+
+  // ── Planned Jobs state
+  const [todos, setTodos]           = useState<PestTodo[]>([]);
+  const [todosLoading, setTLdg]     = useState(false);
+  const [todosError, setTErr]       = useState<string | null>(null);
+  const todosFetchedRef             = useRef(false);
+
+  const loadTodos = useCallback(async () => {
+    setTLdg(true);
+    setTErr(null);
+    try {
+      const res = await apiFetch("/api/pest/todos?status=active");
+      if (!res.ok) throw new Error(`Failed to load jobs (${res.status})`);
+      setTodos((await res.json()) as PestTodo[]);
+    } catch (err) {
+      setTErr(err instanceof Error ? err.message : "Failed to load jobs");
+    } finally {
+      setTLdg(false);
+    }
+  }, []);
+
+  // Fetch once when the Planned Jobs tab is first opened
+  useEffect(() => {
+    if (activeTab !== "planned" || todosFetchedRef.current) return;
+    todosFetchedRef.current = true;
+    void loadTodos();
+  }, [activeTab, loadTodos]);
 
   // ── Target area selection
   const [targetMode, setTargetMode] = useState<"phase" | "valve">("phase");
@@ -619,7 +726,10 @@ export function PestPlannerPage() {
   // ── Chemical derivations ───────────────────────────────────────────────────
 
   const availableChemicals = useMemo(
-    () => chemicals.filter((c) => c.active && c.inventory_qty > 0),
+    () =>
+      chemicals
+        .filter((c) => c.active && c.inventory_qty > 0)
+        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
     [chemicals]
   );
 
@@ -654,6 +764,7 @@ export function PestPlannerPage() {
   const canCreateJob =
     showCreateJobCard &&
     chemicalId !== "" &&
+    applicationDate !== "" &&
     (applicationType === "drench" || selectedSprayer !== null);
 
   const createJobLabel =
@@ -782,6 +893,7 @@ export function PestPlannerPage() {
         method: "POST",
         body: JSON.stringify({
           type: applicationType,
+          application_date: applicationDate || null,
           chemical_id: chemicalId || null,
           chemical_snapshot,
           target_snapshot,
@@ -841,6 +953,128 @@ export function PestPlannerPage() {
 
       {error ? <p className="form-error">{error}</p> : null}
 
+      {/* ── Tab bar */}
+      {(() => {
+        const tabBtn = (tab: "create" | "planned", label: string) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: "0.5rem 1rem",
+              border: "none",
+              borderBottom: activeTab === tab ? "2px solid var(--accent, #2a7f2a)" : "2px solid transparent",
+              background: "transparent",
+              cursor: "pointer",
+              fontWeight: activeTab === tab ? 600 : 400,
+              color: activeTab === tab ? "var(--accent, #2a7f2a)" : "var(--text-muted)",
+              fontSize: "0.9rem",
+            }}
+          >
+            {label}
+          </button>
+        );
+        return (
+          <div style={{ display: "flex", gap: "0.25rem", marginBottom: "1.25rem", borderBottom: "1px solid var(--border)" }}>
+            {tabBtn("create",  "Create Job")}
+            {tabBtn("planned", "Planned Jobs")}
+          </div>
+        );
+      })()}
+
+      {/* ── Planned Jobs tab */}
+      {activeTab === "planned" ? (
+        <div className="coming-soon-card">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem" }}>
+            <h2 style={{ margin: 0, fontSize: "1rem" }}>Planned Jobs</h2>
+            <button
+              type="button"
+              className="secondary"
+              style={{ fontSize: "0.8em", padding: "0.25rem 0.65rem" }}
+              disabled={todosLoading}
+              onClick={() => void loadTodos()}
+            >
+              {todosLoading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+
+          {todosError ? <p className="form-error">{todosError}</p> : null}
+
+          {todosLoading && todos.length === 0 ? (
+            <p style={{ color: "var(--text-muted)" }}>Loading jobs…</p>
+          ) : todos.length === 0 ? (
+            <p style={{ color: "var(--text-muted)" }}>
+              No pending or in-progress jobs. Create a job on the Create Job tab.
+            </p>
+          ) : (
+            <div className="varieties-table-wrapper">
+              <table className="varieties-table">
+                <thead>
+                  <tr>
+                    <th>Chemical</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Apply Date</th>
+                    <th>Progress</th>
+                    <th>Target</th>
+                    <th>Chemical required</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todos.map((todo) => {
+                    const chemName = todo.chemical_snapshot?.name ?? "—";
+                    const progress = todoProgressSummary(todo.progress_snapshot);
+                    const target   = todoTargetSummary(todo.target_snapshot);
+                    const qty      = todoChemQuantity(todo.calculation_snapshot);
+                    const isInProgress = todo.status === "in_progress";
+                    return (
+                      <tr key={todo.id}>
+                        <td><strong>{chemName}</strong></td>
+                        <td>
+                          <span className="pest-todo-type-badge" data-type={todo.type}>
+                            {todo.type === "spray" ? "Spray" : "Drench"}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            style={{
+                              display: "inline-block",
+                              padding: "0.15rem 0.55rem",
+                              borderRadius: "999px",
+                              fontSize: "0.75em",
+                              fontWeight: 600,
+                              background: isInProgress ? "var(--brand-soft, #d8f3eb)" : "var(--surface-soft, #f2f6f4)",
+                              color: isInProgress ? "var(--brand, #0f7660)" : "var(--text-muted)",
+                              border: `1px solid ${isInProgress ? "var(--brand, #0f7660)" : "var(--border)"}`,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {isInProgress ? "In Progress" : "Not Started"}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: "0.85em", whiteSpace: "nowrap" }}>
+                          {todo.application_date ? formatTodoDate(todo.application_date) : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                        </td>
+                        <td style={{ fontSize: "0.88em", whiteSpace: "nowrap" }}>{progress}</td>
+                        <td style={{ fontSize: "0.85em", maxWidth: "160px" }}>{target}</td>
+                        <td style={{ fontSize: "0.88em", whiteSpace: "nowrap" }}>{qty}</td>
+                        <td style={{ fontSize: "0.85em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                          {formatTodoDate(todo.created_at)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* ── Create Job tab — existing planner content (unchanged) ────────────── */}
+      {activeTab === "create" ? <>
+
       {/* ── 3-card top row ───────────────────────────────── */}
       <div className="pest-planner-card-grid">
         {/* ── 1. Application Details ──────────────────── */}
@@ -848,6 +1082,16 @@ export function PestPlannerPage() {
           <h2>1. Application Details</h2>
 
           <div className="varieties-form" style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}>
+            <label>
+              Application Date
+              <input
+                type="date"
+                required
+                value={applicationDate}
+                onChange={(e) => setApplicationDate(e.target.value)}
+              />
+            </label>
+
             <label>
               Application type
               <select
@@ -1162,7 +1406,7 @@ export function PestPlannerPage() {
         </div>
 
         {/* ── 3. Target Area ──────────────────────────── */}
-        <div className="coming-soon-card">
+        <div className="coming-soon-card" style={{ display: "flex", flexDirection: "column" }}>
           <h2>3. Target Area</h2>
 
           {/* Mode toggle */}
@@ -1192,7 +1436,7 @@ export function PestPlannerPage() {
             groups.length === 0 ? (
               <p style={{ marginTop: "0.65rem" }}>No greenhouse groups configured. Add groups in Greenhouse Setup.</p>
             ) : (
-              <>
+              <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
                 <label
                   style={{
                     display: "flex",
@@ -1220,7 +1464,8 @@ export function PestPlannerPage() {
                     gap: "0.25rem",
                     paddingLeft: "0.25rem",
                     marginTop: "0.35rem",
-                    maxHeight: "160px",
+                    flex: 1,
+                    minHeight: 0,
                     overflowY: "auto"
                   }}
                 >
@@ -1317,14 +1562,14 @@ export function PestPlannerPage() {
                     )}
                   </>
                 )}
-              </>
+              </div>
             )
           ) : feedValves.length === 0 ? (
             <p style={{ marginTop: "0.75rem", fontSize: "0.85em" }}>
               No irrigation valves configured. Add valves in Irrigation Setup first.
             </p>
           ) : (
-            <>
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
               <div
                 style={{
                   display: "flex",
@@ -1371,7 +1616,8 @@ export function PestPlannerPage() {
                   gap: "0.25rem",
                   paddingLeft: "0.25rem",
                   marginTop: "0.35rem",
-                  maxHeight: "160px",
+                  flex: 1,
+                  minHeight: 0,
                   overflowY: "auto"
                 }}
               >
@@ -1463,7 +1709,7 @@ export function PestPlannerPage() {
                   )}
                 </>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -1830,6 +2076,8 @@ export function PestPlannerPage() {
       <div className="coming-soon-card">
         <p>Always confirm label rates and legal requirements before spraying.</p>
       </div>
+
+      </> : null}
     </section>
   );
 }

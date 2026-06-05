@@ -118,6 +118,7 @@ type PestTodo = {
   id: string;
   type: "spray" | "drench";
   status: TodoStatus;
+  application_date: string | null;
   chemical_snapshot: ChemicalSnapshot;
   target_snapshot: TargetSnapshot;
   sprayer_snapshot: SprayerSnapshot;
@@ -1322,6 +1323,11 @@ export function MobilePestLogPage() {
               )}
             </div>
             <p className="pest-todo-card-chemical">{chem.name ?? "—"}</p>
+            {todo.application_date ? (
+              <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.1rem 0 0" }}>
+                Apply {formatDate(todo.application_date)}
+              </p>
+            ) : null}
             {isValveDrench && target.valve_names && target.valve_names.length > 0 ? (
               <p className="pest-todo-card-target">{target.valve_names.join(", ")}</p>
             ) : !isValveDrench && target.group_names && target.group_names.length > 0 ? (

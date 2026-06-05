@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
+import { usePermissions } from "../hooks/usePermissions";
 import {
   CartesianGrid,
   Cell,
@@ -539,6 +540,55 @@ type YieldProjectionSummary =
       grandTotal: number;
     };
 
+// ── Pest reminder types & helpers ────────────────────────────────────────────
+
+type PestReminder = {
+  id: string;
+  type: "spray" | "drench";
+  status: "pending" | "in_progress";
+  application_date: string | null;
+  chemical_snapshot: { name?: string } | null;
+  target_snapshot: {
+    target_mode?: string;
+    valve_names?: string[];
+    group_names?: string[];
+  } | null;
+};
+
+// Returns the number of calendar days between today (local midnight) and the
+// application date. Negative = overdue. Uses local date construction to avoid
+// UTC-offset bugs (e.g. a YYYY-MM-DD stored as midnight UTC appearing as the
+// previous day for North American timezones).
+function daysUntilApplication(dateStr: string): number {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const appDate = new Date(y, m - 1, d); // local midnight
+  return Math.round((appDate.getTime() - today.getTime()) / 86_400_000);
+}
+
+function pestReminderLabel(days: number): string {
+  if (days < 0) return `Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"}`;
+  if (days === 0) return "Due today";
+  if (days === 1) return "Due tomorrow";
+  return `Due in ${days} days`;
+}
+
+function pestTargetSummary(
+  target: { target_mode?: string; valve_names?: string[]; group_names?: string[] } | null
+): string {
+  if (!target) return "—";
+  if (target.target_mode === "valve" && target.valve_names?.length) {
+    const n = target.valve_names;
+    return n.length <= 3 ? n.join(", ") : `${n.length} valves`;
+  }
+  if (target.group_names?.length) {
+    const n = target.group_names;
+    return n.length <= 3 ? n.join(", ") : `${n.length} groups`;
+  }
+  return "—";
+}
+
 export function DashboardPage() {
   const [organizationId, setOrganizationId] = useState<string>("unknown");
   const [backend, setBackend] = useState<ServiceState>(INITIAL_SERVICE_STATE);
@@ -565,6 +615,11 @@ export function DashboardPage() {
     readDashboardPreferences(organizationId)
   );
   const [yieldProjection, setYieldProjection] = useState<YieldProjectionSummary | null>(null);
+
+  // Pest reminders
+  const { canAny } = usePermissions();
+  const [pestTodos, setPestTodos] = useState<PestReminder[]>([]);
+  const [pestLoading, setPestLoading] = useState(false);
 
   // Fetch organization ID on mount to scope all dashboard settings
   useEffect(() => {
@@ -635,6 +690,29 @@ export function DashboardPage() {
 
     void fetchYieldProjection();
     return () => { active = false; };
+  }, []);
+
+  // Fetch active pest todos for the reminder card.
+  // canAny returns true while membership is loading (optimistic), so the fetch
+  // fires on mount. The server enforces permission; a 403 is silently ignored.
+  useEffect(() => {
+    let active = true;
+    async function fetchPestReminders() {
+      setPestLoading(true);
+      try {
+        const res = await apiFetch("/api/pest/todos?status=active");
+        if (!res.ok || !active) return;
+        const data = (await res.json()) as PestReminder[];
+        if (active) setPestTodos(data);
+      } catch {
+        // Non-critical — silently skip
+      } finally {
+        if (active) setPestLoading(false);
+      }
+    }
+    void fetchPestReminders();
+    return () => { active = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1009,6 +1087,20 @@ export function DashboardPage() {
     [preferences.yieldTrends.pieColors, yieldPieSlices]
   );
 
+  // Jobs with an application_date that is overdue or within the next 7 days,
+  // sorted: most-overdue first, then due today, then soonest upcoming.
+  const upcomingReminders = useMemo(() => {
+    const WINDOW = 7;
+    return pestTodos
+      .filter((t) => {
+        if (!t.application_date) return false;
+        const days = daysUntilApplication(t.application_date);
+        return days <= WINDOW;
+      })
+      .map((t) => ({ ...t, daysUntil: daysUntilApplication(t.application_date!) }))
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+  }, [pestTodos]);
+
   const hasYieldTrendData = yieldTrendPoints.length > 0;
   const hasYieldPieData = visibleTrendPieSlices.some((slice) => slice.kg > 0);
   const showYieldTrendsSection =
@@ -1149,6 +1241,110 @@ export function DashboardPage() {
           Edit
         </button>
       </header>
+
+      {/* ── Upcoming Pest Applications ──────────────────────────────────────── */}
+      {canAny(["pest:view", "pest:edit"]) ? (
+        <div className="coming-soon-card">
+          <h2>Upcoming Pest Applications</h2>
+
+          {pestLoading ? (
+            <p style={{ color: "var(--text-muted)", fontSize: "0.9em", marginTop: "0.5rem" }}>
+              Loading…
+            </p>
+          ) : upcomingReminders.length === 0 ? (
+            <p style={{ color: "var(--text-muted)", fontSize: "0.9em", marginTop: "0.5rem" }}>
+              No pest applications due in the next 7 days.
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginTop: "0.75rem" }}>
+              {upcomingReminders.map((todo) => {
+                const chemName = todo.chemical_snapshot?.name ?? "Unknown chemical";
+                const target   = pestTargetSummary(todo.target_snapshot);
+                const label    = pestReminderLabel(todo.daysUntil);
+                const isOverdue = todo.daysUntil < 0;
+                const isToday   = todo.daysUntil === 0;
+                const accentColor = isOverdue
+                  ? "#b42318"
+                  : isToday
+                    ? "var(--brand, #0f7660)"
+                    : "var(--text-muted)";
+
+                return (
+                  <div
+                    key={todo.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "0.75rem",
+                      padding: "0.65rem 0.85rem",
+                      borderRadius: "10px",
+                      background: isOverdue
+                        ? "#fff5f5"
+                        : isToday
+                          ? "var(--brand-soft, #d8f3eb)"
+                          : "var(--surface-soft, #f2f6f4)",
+                      border: `1px solid ${isOverdue ? "#fecdca" : isToday ? "var(--brand, #0f7660)" : "var(--border)"}`,
+                    }}
+                  >
+                    {/* Time indicator */}
+                    <div style={{ flexShrink: 0, minWidth: "120px" }}>
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "0.78em",
+                          fontWeight: 700,
+                          color: accentColor,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        {label}
+                      </span>
+                      <span style={{ display: "block", fontSize: "0.78em", color: "var(--text-muted)", marginTop: "0.1rem" }}>
+                        {todo.application_date}
+                      </span>
+                    </div>
+
+                    {/* Details */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ margin: 0, fontSize: "0.9em" }}>
+                        <strong>{chemName}</strong>
+                        {" "}
+                        <span className="pest-todo-type-badge" data-type={todo.type} style={{ fontSize: "0.75em", verticalAlign: "middle" }}>
+                          {todo.type === "spray" ? "Spray" : "Drench"}
+                        </span>
+                        {" "}
+                        <span style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                          for {target}
+                        </span>
+                      </p>
+                    </div>
+
+                    {/* Status badge */}
+                    <div style={{ flexShrink: 0 }}>
+                      <span
+                        style={{
+                          display: "inline-block",
+                          padding: "0.15rem 0.5rem",
+                          borderRadius: "999px",
+                          fontSize: "0.72em",
+                          fontWeight: 600,
+                          background: todo.status === "in_progress" ? "var(--brand-soft, #d8f3eb)" : "var(--surface, #fff)",
+                          color: todo.status === "in_progress" ? "var(--brand, #0f7660)" : "var(--text-muted)",
+                          border: "1px solid var(--border)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {todo.status === "in_progress" ? "In Progress" : "Not Started"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {visibleGreenhouseSnapshots.length > 0 ? (
         <div className="coming-soon-card">
