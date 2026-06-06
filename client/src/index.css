@@ -2746,6 +2746,59 @@ body {
   pointer-events: auto;
 }
 
+/* ── Offline / sync status UI ──────────────────────────────────────────────── */
+
+.offline-banner {
+  background: #7c3200;
+  color: #fff;
+  padding: 0.6rem 1rem;
+  font-size: 0.83rem;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.sync-status-bar {
+  padding: 0.4rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.sync-status-bar--pending {
+  background: #fff7e6;
+  color: #7c4500;
+  border-bottom: 1px solid #f5deb0;
+}
+
+.sync-status-bar--syncing {
+  background: #e8f3ff;
+  color: #00529b;
+  border-bottom: 1px solid #b8d9f8;
+}
+
+.sync-status-bar--failed {
+  background: #fce8e8;
+  color: #b91c1c;
+  border-bottom: 1px solid #f5bcbc;
+}
+
+.offline-pending-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.38rem;
+  border-radius: 4px;
+  background: #fff7e6;
+  color: #7c4500;
+  border: 1px solid #f5deb0;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
+/* ── Mobile layout ─────────────────────────────────────────────────────────── */
+
 .mobile-layout {
   min-height: 100vh;
   background: #f7f9f8;
@@ -3950,4 +4003,24 @@ body {
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(15, 118, 96, 0.15);
+}
+
+/* ── H1 preview print styles ───────────────────────────────────────────────── */
+
+@media print {
+  @page { size: landscape; margin: 8mm; }
+
+  /* Hide everything except the H1 preview document */
+  body * { visibility: hidden; }
+  .h1-sheet-preview,
+  .h1-sheet-preview * { visibility: visible; }
+
+  /* Remove modal chrome so only the document body prints */
+  .h1-sheet-preview {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: #fff;
+  }
 }
