@@ -271,6 +271,16 @@ function generateH1Pdf(logs: H1Log[]): void {
   const mR = 10;
   const cW = pageW - mL - mR;                  // 277 mm content width
 
+  // ── Colors (defined early so outer border can use them) ───────────────────
+  const BLK: [number, number, number] = [0, 0, 0];
+  const GRY: [number, number, number] = [80, 80, 80];
+  const WHT: [number, number, number] = [255, 255, 255];
+
+  // ── Thick outer border (matches CanadaGAP original) ───────────────────────
+  doc.setDrawColor(...BLK);
+  doc.setLineWidth(1.5);
+  doc.rect(8, 8, pageW - 16, pageH - 16);
+
   // ── Local helpers ──────────────────────────────────────────────────────────
 
   function fmtD(iso: string | null | undefined): string {
@@ -301,30 +311,22 @@ function generateH1Pdf(logs: H1Log[]): void {
   const lastY = () =>
     (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable?.finalY ?? 0;
 
-  // ── Colors ─────────────────────────────────────────────────────────────────
-
-  const BLK: [number, number, number] = [0, 0, 0];
-  const GRY: [number, number, number] = [80, 80, 80];
-  const WHT: [number, number, number] = [255, 255, 255];
-  const GRN: [number, number, number] = [26, 92, 58];
-  const RED: [number, number, number] = [128, 0, 0];
-
-  // ── ONGOING box (top right) ────────────────────────────────────────────────
+  // ── ONGOING box — top-right corner, shares edges with outer border ─────────
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.5);
+  doc.setFontSize(9);
   doc.setDrawColor(...BLK);
-  doc.setLineWidth(0.3);
+  doc.setLineWidth(0.4);
   const ongoingTxt = "ONGOING";
-  const ongoingW = doc.getTextWidth(ongoingTxt) + 5;
-  const ongoingX = pageW - mR - ongoingW;
-  doc.rect(ongoingX, 4.5, ongoingW, 5.5);
+  const ongoingW = doc.getTextWidth(ongoingTxt) + 6;
+  const ongoingX = pageW - 8 - ongoingW;   // flush with outer border right edge
+  doc.rect(ongoingX, 8, ongoingW, 10);      // top aligned with outer border
   doc.setTextColor(...BLK);
-  doc.text(ongoingTxt, ongoingX + 2.5, 8.8);
+  doc.text(ongoingTxt, ongoingX + ongoingW / 2, 14.5, { align: "center" });
 
   // ── Title ──────────────────────────────────────────────────────────────────
 
-  let y = 9;
+  let y = 16;
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BLK);
@@ -335,18 +337,12 @@ function generateH1Pdf(logs: H1Log[]): void {
   doc.setFont("helvetica", "normal");
   doc.text(" (Agricultural Chemicals)", afterBold, y);
 
-  // Green bar under title
-  y += 2.2;
-  doc.setDrawColor(...GRN);
-  doc.setLineWidth(0.7);
-  doc.line(mL, y, pageW - mR, y);
+  // ── Instructions (italic, black — no green bar, matches original) ──────────
 
-  // ── Instructions (italic, dark red) ───────────────────────────────────────
-
-  y += 3.5;
+  y += 4;
   doc.setFontSize(5.5);
   doc.setFont("helvetica", "italic");
-  doc.setTextColor(...RED);
+  doc.setTextColor(...BLK);
   const instrText =
     "Instructions: Includes all applications from pre-planting, through harvest, and including " +
     "post-harvest applications (e.g., during packing, before, during or after storage, before " +
@@ -409,7 +405,7 @@ function generateH1Pdf(logs: H1Log[]): void {
   // Give rounding remainder to the signature column (last)
   colW[11] = cW - colW.slice(0, 11).reduce((a, b) => a + b, 0);
 
-  const SHEET_CAPACITY = 8;
+  const SHEET_CAPACITY = 10;
   const blankCount = Math.max(0, SHEET_CAPACITY - logs.length);
 
   const dataRows = logs.map(log => [
@@ -466,7 +462,7 @@ function generateH1Pdf(logs: H1Log[]): void {
       cellPadding: { top: 2, bottom: 2, left: 1.5, right: 1 },
       lineWidth: 0.3,
       lineColor: BLK,
-      minCellHeight: 9,
+      minCellHeight: 12,
       overflow: "linebreak",
     },
     columnStyles: {
@@ -490,7 +486,7 @@ function generateH1Pdf(logs: H1Log[]): void {
   // ── Confirmation section ───────────────────────────────────────────────────
 
   const confY = lastY() + 5;
-  doc.setFont("helvetica", "italic");
+  doc.setFont("helvetica", "bolditalic");
   doc.setFontSize(8);
   doc.setTextColor(...BLK);
   doc.setDrawColor(...BLK);
@@ -506,7 +502,7 @@ function generateH1Pdf(logs: H1Log[]): void {
 
   // Date
   const dateX = mL + cW * 0.60;
-  doc.setFont("helvetica", "italic");
+  doc.setFont("helvetica", "bolditalic");
   doc.text("Date:", dateX, confY);
   const dateLW = doc.getTextWidth("Date:");
   doc.setFont("helvetica", "normal");
@@ -515,18 +511,21 @@ function generateH1Pdf(logs: H1Log[]): void {
 
   // ── Footer ─────────────────────────────────────────────────────────────────
 
-  const footY = pageH - 4;
+  // Footer — pinned inside outer border (bottom at y=202), three right-hand lines
+  const footY = pageH - 11;   // = 199, inside outer border bottom (202)
   doc.setFont("helvetica", "bold");
   doc.setFontSize(6.5);
   doc.setTextColor(...BLK);
   doc.text(header.version_label ?? "Version 11.0", mL, footY);
 
   doc.setFont("helvetica", "italic");
-  const canadaGapLine1 = "CanadaGAP Food Safety Manual for";
-  const canadaGapLine2 = "Greenhouse Product 2026";
-  const cgW = Math.max(doc.getTextWidth(canadaGapLine1), doc.getTextWidth(canadaGapLine2));
-  doc.text(canadaGapLine1, pageW - mR - cgW, footY - 3);
-  doc.text(canadaGapLine2, pageW - mR - cgW, footY);
+  const cgL1 = "CanadaGAP Food Safety Manual for";
+  const cgL2 = "Greenhouse Product";
+  const cgL3 = "2026";
+  const cgW = Math.max(doc.getTextWidth(cgL1), doc.getTextWidth(cgL2), doc.getTextWidth(cgL3));
+  doc.text(cgL1, pageW - mR - cgW, footY - 5);
+  doc.text(cgL2, pageW - mR - cgW, footY - 2.5);
+  doc.text(cgL3, pageW - mR - cgW, footY);
 
   // ── Save ───────────────────────────────────────────────────────────────────
 
