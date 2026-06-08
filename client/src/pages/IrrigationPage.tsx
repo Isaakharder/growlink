@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import { apiFetch } from "../lib/api";
 
 type GroupType = "phase" | "zone" | "color";
@@ -30,8 +39,48 @@ type SummaryMetric = {
 };
 
 type SummaryTab = "summary" | "raw";
+type TrendMetricKey = "drainEc" | "drainPh" | "feedEc" | "feedPh" | "drain" | "feedVolume";
+
+type MetricLimit = {
+  lower: number;
+  upper: number;
+};
+
+type TrendPoint = {
+  dateKey: string;
+  dateLabel: string;
+  drainEcScaled: number | null;
+  drainPhScaled: number | null;
+  feedEcScaled: number | null;
+  feedPhScaled: number | null;
+  drainScaled: number | null;
+  feedVolumeScaled: number | null;
+  drainEcRaw: number | null;
+  drainPhRaw: number | null;
+  feedEcRaw: number | null;
+  feedPhRaw: number | null;
+  drainRaw: number | null;
+  feedVolumeRaw: number | null;
+};
+
+type DailyLightLog = {
+  id: string;
+  log_date: string;
+  joules_per_cm2: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 const IRRIGATION_LOGS_URL = "/api/irrigation/logs?days=30";
+const DAILY_LIGHT_URL = "/api/daily-light?days=1095";
+const LIGHT_YEAR_COLOR_PALETTE = ["#2f6fed", "#0f766e", "#d97706", "#7c3aed", "#c026d3", "#b45309"];
+const TREND_LIMITS: Record<"ec" | "ph" | "drain" | "feedVolume", MetricLimit> = {
+  ec: { lower: 2, upper: 5 },
+  ph: { lower: 5, upper: 7 },
+  drain: { lower: 0, upper: 50 },
+  feedVolume: { lower: 0, upper: 7000 }
+};
 
 function roundTo(value: number, decimals: number) {
   const factor = 10 ** decimals;
@@ -150,11 +199,93 @@ function formatLogDate(value: string | null): string {
   return new Date(time).toLocaleDateString();
 }
 
+function scaleToDisplayRange(value: number | null, limit: MetricLimit): number | null {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+
+  const span = limit.upper - limit.lower;
+  if (!Number.isFinite(span) || span <= 0) {
+    return null;
+  }
+
+  const scaled = ((value - limit.lower) / span) * 100;
+  return roundTo(Math.max(0, Math.min(100, scaled)), 2);
+}
+
+function getDateKey(value: string): string | null {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateLabel(dateKey: string): string {
+  const timestamp = Date.parse(`${dateKey}T00:00:00`);
+  if (!Number.isFinite(timestamp)) {
+    return dateKey;
+  }
+
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric"
+  });
+}
+
+function formatDateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getDefaultTrendDateRange() {
+  const endDate = new Date();
+  endDate.setHours(0, 0, 0, 0);
+
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - 28);
+
+  return {
+    startDate: formatDateInputValue(startDate),
+    endDate: formatDateInputValue(endDate)
+  };
+}
+
 export function IrrigationPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<IrrigationLogRecord[]>([]);
+  const [pageTab, setPageTab] = useState<"irrigation" | "climate">("irrigation");
   const [activeTab, setActiveTab] = useState<SummaryTab>("summary");
+  const [selectedTrendMetrics, setSelectedTrendMetrics] = useState<Record<TrendMetricKey, boolean>>({
+    drainEc: true,
+    drainPh: true,
+    feedEc: true,
+    feedPh: true,
+    drain: true,
+    feedVolume: false
+  });
+  const [selectedPhaseColor, setSelectedPhaseColor] = useState("all");
+  const [trendDateRange, setTrendDateRange] = useState(() => getDefaultTrendDateRange());
+  const [lightLogs, setLightLogs] = useState<DailyLightLog[]>([]);
+  const [lightLoading, setLightLoading] = useState(false);
+  const [lightError, setLightError] = useState<string | null>(null);
+  const [lightSaving, setLightSaving] = useState(false);
+  const [lightSaveError, setLightSaveError] = useState<string | null>(null);
+  const [lightDeleteError, setLightDeleteError] = useState<string | null>(null);
+  const [lightFetchKey, setLightFetchKey] = useState(0);
+  const [lightForm, setLightForm] = useState({
+    log_date: formatDateInputValue(new Date()),
+    joules_per_cm2: ""
+  });
+  const [checkedLightYears, setCheckedLightYears] = useState<Set<number>>(
+    () => new Set([new Date().getFullYear()])
+  );
 
   useEffect(() => {
     let active = true;
@@ -193,6 +324,45 @@ export function IrrigationPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (pageTab !== "climate") return;
+
+    let active = true;
+    setLightLoading(true);
+    setLightError(null);
+
+    async function fetchLightLogs() {
+      try {
+        const response = await apiFetch(DAILY_LIGHT_URL);
+
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { message?: string } | null;
+          throw new Error(body?.message ?? `Failed to load daily light logs (${response.status})`);
+        }
+
+        const data = (await response.json()) as DailyLightLog[];
+
+        if (active) {
+          setLightLogs(data ?? []);
+        }
+      } catch (fetchError) {
+        if (active) {
+          setLightError(fetchError instanceof Error ? fetchError.message : "Failed to load daily light logs");
+        }
+      } finally {
+        if (active) {
+          setLightLoading(false);
+        }
+      }
+    }
+
+    void fetchLightLogs();
+
+    return () => {
+      active = false;
+    };
+  }, [pageTab, lightFetchKey]);
 
   const rowsWithMetrics = useMemo(
     () => logs.map((log) => ({ log, metrics: computeRowMetrics(log) })),
@@ -241,13 +411,917 @@ export function IrrigationPage() {
     return metrics;
   }, [logs, rowsWithMetrics]);
 
+  const phaseColorOptions = useMemo(() => {
+    const options = new Map<string, string>();
+
+    for (const { log } of rowsWithMetrics) {
+      if ((log.tracking_mode !== "phase" && log.tracking_mode !== "color") || !log.group_name?.trim()) {
+        continue;
+      }
+
+      const key = `${log.tracking_mode}::${log.group_name}`;
+      options.set(key, `${capitalize(log.tracking_mode)}: ${log.group_name}`);
+    }
+
+    return Array.from(options.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [rowsWithMetrics]);
+
+  useEffect(() => {
+    if (selectedPhaseColor === "all") {
+      return;
+    }
+
+    const isValid = phaseColorOptions.some((option) => option.value === selectedPhaseColor);
+    if (!isValid) {
+      setSelectedPhaseColor("all");
+    }
+  }, [phaseColorOptions, selectedPhaseColor]);
+
+  const filteredRowsForTrend = useMemo(() => {
+    if (selectedPhaseColor === "all") {
+      return rowsWithMetrics;
+    }
+
+    return rowsWithMetrics.filter(
+      ({ log }) => `${log.tracking_mode}::${log.group_name}` === selectedPhaseColor
+    );
+  }, [rowsWithMetrics, selectedPhaseColor]);
+
+  const dailyTrendData = useMemo(() => {
+    const buckets = new Map<
+      string,
+      {
+        drainEc: number[];
+        drainPh: number[];
+        feedEc: number[];
+        feedPh: number[];
+        drain: number[];
+        feedVolume: number[];
+      }
+    >();
+
+    for (const { log, metrics } of filteredRowsForTrend) {
+      const dateKey = getDateKey(log.log_date);
+      if (!dateKey) {
+        continue;
+      }
+
+      const bucket = buckets.get(dateKey) ?? {
+        drainEc: [],
+        drainPh: [],
+        feedEc: [],
+        feedPh: [],
+        drain: [],
+        feedVolume: []
+      };
+
+      if (typeof log.drain_ec === "number" && Number.isFinite(log.drain_ec)) {
+        bucket.drainEc.push(log.drain_ec);
+      }
+
+      if (typeof log.drain_ph === "number" && Number.isFinite(log.drain_ph)) {
+        bucket.drainPh.push(log.drain_ph);
+      }
+
+      if (typeof log.feed_ec === "number" && Number.isFinite(log.feed_ec)) {
+        bucket.feedEc.push(log.feed_ec);
+      }
+
+      if (typeof log.feed_ph === "number" && Number.isFinite(log.feed_ph)) {
+        bucket.feedPh.push(log.feed_ph);
+      }
+
+      if (metrics.drainPercent !== null && Number.isFinite(metrics.drainPercent)) {
+        bucket.drain.push(metrics.drainPercent);
+      }
+
+      if (metrics.avgFeedMl !== null && Number.isFinite(metrics.avgFeedMl)) {
+        bucket.feedVolume.push(metrics.avgFeedMl);
+      }
+
+      buckets.set(dateKey, bucket);
+    }
+
+    return Array.from(buckets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([dateKey, metricValues]): TrendPoint => {
+        const drainEcRaw = averageOf(metricValues.drainEc);
+        const drainPhRaw = averageOf(metricValues.drainPh);
+        const feedEcRaw = averageOf(metricValues.feedEc);
+        const feedPhRaw = averageOf(metricValues.feedPh);
+        const drainRaw = averageOf(metricValues.drain);
+        const feedVolumeRaw = averageOf(metricValues.feedVolume);
+
+        return {
+          dateKey,
+          dateLabel: formatDateLabel(dateKey),
+          drainEcRaw,
+          drainPhRaw,
+          feedEcRaw,
+          feedPhRaw,
+          drainRaw,
+          feedVolumeRaw,
+          drainEcScaled: scaleToDisplayRange(drainEcRaw, TREND_LIMITS.ec),
+          drainPhScaled: scaleToDisplayRange(drainPhRaw, TREND_LIMITS.ph),
+          feedEcScaled: scaleToDisplayRange(feedEcRaw, TREND_LIMITS.ec),
+          feedPhScaled: scaleToDisplayRange(feedPhRaw, TREND_LIMITS.ph),
+          drainScaled: scaleToDisplayRange(drainRaw, TREND_LIMITS.drain),
+          feedVolumeScaled: scaleToDisplayRange(feedVolumeRaw, TREND_LIMITS.feedVolume)
+        };
+      });
+  }, [filteredRowsForTrend]);
+
+  const dailyTrendDataInRange = useMemo(() => {
+    const startTime = Date.parse(`${trendDateRange.startDate}T00:00:00`);
+    const endTime = Date.parse(`${trendDateRange.endDate}T00:00:00`);
+
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime > endTime) {
+      return [];
+    }
+
+    return dailyTrendData.filter((point) => {
+      const pointTime = Date.parse(`${point.dateKey}T00:00:00`);
+      return Number.isFinite(pointTime) && pointTime >= startTime && pointTime <= endTime;
+    });
+  }, [dailyTrendData, trendDateRange.endDate, trendDateRange.startDate]);
+
+  const hasTrendData = dailyTrendDataInRange.length > 0;
+  const hasAnyTrendMetricSelected = Object.values(selectedTrendMetrics).some(Boolean);
+
+  const selectedPhaseColorLabel =
+    selectedPhaseColor === "all"
+      ? null
+      : phaseColorOptions.find((option) => option.value === selectedPhaseColor)?.label ?? null;
+
+  const trendLegendItems = useMemo(() => {
+    const suffix = selectedPhaseColorLabel ? ` (${selectedPhaseColorLabel})` : "";
+    const items = [
+      { key: "drainEc" as TrendMetricKey, label: `Drain EC${suffix}`, color: "#2f6fed" },
+      { key: "drainPh" as TrendMetricKey, label: `Drain pH${suffix}`, color: "#d97706" },
+      { key: "feedEc" as TrendMetricKey, label: `Feed EC${suffix}`, color: "#7c3aed" },
+      { key: "feedPh" as TrendMetricKey, label: `Feed pH${suffix}`, color: "#c026d3" },
+      { key: "drain" as TrendMetricKey, label: `Drain %${suffix}`, color: "#0f766e" },
+      { key: "feedVolume" as TrendMetricKey, label: `Feed Volume${suffix}`, color: "#b45309" }
+    ];
+
+    return items.filter((item) => selectedTrendMetrics[item.key]);
+  }, [selectedPhaseColorLabel, selectedTrendMetrics]);
+
+  const joulesInputRef = useRef<HTMLInputElement>(null);
+
+  const lightLogYears = useMemo(() => {
+    const years = new Set<number>();
+    years.add(new Date().getFullYear());
+    for (const log of lightLogs) {
+      years.add(new Date(`${log.log_date}T00:00:00`).getFullYear());
+    }
+    return Array.from(years).sort((a, b) => b - a);
+  }, [lightLogs]);
+
+  const lightYearColors = useMemo(() => {
+    const result: Record<number, string> = {};
+    lightLogYears.forEach((year, index) => {
+      result[year] = LIGHT_YEAR_COLOR_PALETTE[index % LIGHT_YEAR_COLOR_PALETTE.length];
+    });
+    return result;
+  }, [lightLogYears]);
+
+  const lightChartData = useMemo(() => {
+    type MonthDayEntry = { xLabel: string; values: Map<number, number> };
+    const byMonthDay = new Map<string, MonthDayEntry>();
+
+    for (const log of lightLogs) {
+      const date = new Date(`${log.log_date}T00:00:00`);
+      const year = date.getFullYear();
+      if (!checkedLightYears.has(year)) continue;
+
+      const mmdd = `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      const xLabel = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+      if (!byMonthDay.has(mmdd)) {
+        byMonthDay.set(mmdd, { xLabel, values: new Map() });
+      }
+
+      byMonthDay.get(mmdd)!.values.set(year, log.joules_per_cm2);
+    }
+
+    return Array.from(byMonthDay.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, entry]) => {
+        const point: Record<string, unknown> = { xLabel: entry.xLabel };
+        for (const year of checkedLightYears) {
+          point[String(year)] = entry.values.get(year) ?? null;
+        }
+        return point;
+      });
+  }, [lightLogs, checkedLightYears]);
+
+  function shiftLightDate(days: number) {
+    setLightForm((current) => {
+      const timestamp = Date.parse(`${current.log_date}T00:00:00`);
+      if (!Number.isFinite(timestamp)) return current;
+      const next = new Date(timestamp);
+      next.setDate(next.getDate() + days);
+      return { ...current, log_date: formatDateInputValue(next) };
+    });
+  }
+
+  async function handleSaveLight() {
+    const joules = Number(lightForm.joules_per_cm2);
+    if (!lightForm.log_date || !Number.isFinite(joules) || joules < 0) {
+      setLightSaveError("Date and a valid Joules/cm\u00b2 value (0 or greater) are required.");
+      return;
+    }
+
+    setLightSaving(true);
+    setLightSaveError(null);
+
+    try {
+      const response = await apiFetch("/api/daily-light", {
+        method: "POST",
+        body: JSON.stringify({
+          log_date: lightForm.log_date,
+          joules_per_cm2: joules
+        })
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Save failed (${response.status})`);
+      }
+
+      // Shift date back one day, clear joules, focus joules for fast historical entry
+      setLightForm((current) => {
+        const timestamp = Date.parse(`${current.log_date}T00:00:00`);
+        const prev = Number.isFinite(timestamp) ? new Date(timestamp) : new Date();
+        prev.setDate(prev.getDate() - 1);
+        return { log_date: formatDateInputValue(prev), joules_per_cm2: "" };
+      });
+      setLightFetchKey((k) => k + 1);
+      setTimeout(() => joulesInputRef.current?.focus(), 0);
+    } catch (saveError) {
+      setLightSaveError(saveError instanceof Error ? saveError.message : "Failed to save.");
+    } finally {
+      setLightSaving(false);
+    }
+  }
+
+  async function handleDeleteLight(id: string) {
+    setLightDeleteError(null);
+
+    try {
+      const response = await apiFetch(`/api/daily-light/${id}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Delete failed (${response.status})`);
+      }
+
+      setLightFetchKey((k) => k + 1);
+    } catch (deleteError) {
+      setLightDeleteError(deleteError instanceof Error ? deleteError.message : "Failed to delete.");
+    }
+  }
+
   return (
     <section className="page-shell">
       <header>
-        <h1>Irrigation</h1>
-        <p>Last 30 days of mobile irrigation logs with summary metrics.</p>
-        <p>Drain % is normalized by configured dripper counts.</p>
+        <h1>Environment</h1>
       </header>
+
+      <div className="tab-navigation" style={{ marginBottom: "0.5rem" }}>
+        <button
+          type="button"
+          className={`tab-button${pageTab === "irrigation" ? " active" : ""}`}
+          onClick={() => setPageTab("irrigation")}
+        >
+          Irrigation
+        </button>
+        <button
+          type="button"
+          className={`tab-button${pageTab === "climate" ? " active" : ""}`}
+          onClick={() => setPageTab("climate")}
+        >
+          Climate
+        </button>
+      </div>
+
+      {pageTab === "climate" ? (
+        <>
+          <div className="coming-soon-card">
+            <h2>Log Daily Light</h2>
+
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.6rem",
+                alignItems: "flex-end",
+                marginTop: "0.75rem"
+              }}
+            >
+              {/* Date with prev/next arrows */}
+              <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexShrink: 0 }}>
+                <button
+                  type="button"
+                  aria-label="Previous day"
+                  onClick={() => shiftLightDate(-1)}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    font: "inherit",
+                    fontWeight: 700,
+                    fontSize: "1rem",
+                    lineHeight: 1,
+                    padding: "0.38rem 0.6rem",
+                    cursor: "pointer"
+                  }}
+                >
+                  &#9664;
+                </button>
+                <input
+                  type="date"
+                  value={lightForm.log_date}
+                  onChange={(event) =>
+                    setLightForm((current) => ({ ...current, log_date: event.target.value }))
+                  }
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "10px",
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    font: "inherit",
+                    fontSize: "0.92rem",
+                    padding: "0.52rem 0.6rem"
+                  }}
+                />
+                <button
+                  type="button"
+                  aria-label="Next day"
+                  onClick={() => shiftLightDate(1)}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    font: "inherit",
+                    fontWeight: 700,
+                    fontSize: "1rem",
+                    lineHeight: 1,
+                    padding: "0.38rem 0.6rem",
+                    cursor: "pointer"
+                  }}
+                >
+                  &#9654;
+                </button>
+              </div>
+
+              {/* Joules field */}
+              <label
+                style={{
+                  display: "grid",
+                  gap: "0.35rem",
+                  fontSize: "0.92rem",
+                  color: "var(--text-muted)",
+                  flexShrink: 0
+                }}
+              >
+                Joules/cm²
+                <input
+                  ref={joulesInputRef}
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder="e.g. 1200"
+                  value={lightForm.joules_per_cm2}
+                  onChange={(event) =>
+                    setLightForm((current) => ({ ...current, joules_per_cm2: event.target.value }))
+                  }
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "10px",
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    font: "inherit",
+                    fontSize: "0.92rem",
+                    padding: "0.52rem 0.6rem",
+                    width: "130px"
+                  }}
+                />
+              </label>
+            </div>
+
+            {lightSaveError ? <p className="form-error">{lightSaveError}</p> : null}
+
+            <button
+              type="button"
+              onClick={() => void handleSaveLight()}
+              disabled={lightSaving}
+              style={{
+                marginTop: "0.75rem",
+                border: "1px solid var(--border)",
+                borderRadius: "10px",
+                background: "var(--surface)",
+                color: "var(--text)",
+                font: "inherit",
+                fontWeight: 600,
+                padding: "0.55rem 1.1rem",
+                cursor: lightSaving ? "not-allowed" : "pointer"
+              }}
+            >
+              {lightSaving ? "Saving..." : "Save"}
+            </button>
+          </div>
+
+          <div className="coming-soon-card">
+            <h2>Daily Sunlight</h2>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem 0.75rem", marginBottom: "0.65rem" }}>
+              {lightLogYears.map((year) => (
+                <label
+                  key={year}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.9rem" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checkedLightYears.has(year)}
+                    onChange={() => {
+                      setCheckedLightYears((current) => {
+                        const next = new Set(current);
+                        if (next.has(year)) {
+                          next.delete(year);
+                        } else {
+                          next.add(year);
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                  {year}
+                </label>
+              ))}
+            </div>
+
+            {lightLoading ? <p>Loading...</p> : null}
+            {lightError ? <p className="form-error">{lightError}</p> : null}
+
+            {!lightLoading && !lightError && checkedLightYears.size === 0 ? (
+              <p>Select at least one year to display the chart.</p>
+            ) : null}
+
+            {!lightLoading && !lightError && checkedLightYears.size > 0 && lightChartData.length === 0 ? (
+              <p>No daily light data for the selected year(s).</p>
+            ) : null}
+
+            {!lightLoading && !lightError && checkedLightYears.size > 0 && lightChartData.length > 0 ? (
+              <div className="dashboard-chart-wrapper">
+                <ResponsiveContainer width="100%" height={290}>
+                  <LineChart data={lightChartData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                    <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
+                    <XAxis
+                      dataKey="xLabel"
+                      tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: "var(--border)" }}
+                    />
+                    <YAxis
+                      tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={60}
+                      label={{
+                        value: "J/cm²",
+                        angle: -90,
+                        position: "insideLeft",
+                        offset: 14,
+                        style: { fill: "var(--text-muted)", fontSize: 12 }
+                      }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 10,
+                        fontSize: 13
+                      }}
+                      formatter={(value: unknown, name: unknown) => [
+                        typeof value === "number" ? `${roundTo(value, 1)} J/cm²` : "--",
+                        String(name)
+                      ]}
+                      labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
+                    />
+                    {Array.from(checkedLightYears)
+                      .sort((a, b) => a - b)
+                      .map((year) => (
+                        <Line
+                          key={year}
+                          type="monotone"
+                          dataKey={String(year)}
+                          name={String(year)}
+                          stroke={lightYearColors[year] ?? "#2f6fed"}
+                          strokeWidth={2.2}
+                          dot={{ r: 3 }}
+                          activeDot={{ r: 5 }}
+                          connectNulls={false}
+                        />
+                      ))}
+                  </LineChart>
+                </ResponsiveContainer>
+
+                <div
+                  aria-label="Daily sunlight chart legend"
+                  style={{
+                    marginTop: "0.55rem",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "0.45rem 0.7rem",
+                    alignItems: "center"
+                  }}
+                >
+                  {Array.from(checkedLightYears)
+                    .sort((a, b) => b - a)
+                    .map((year) => (
+                      <span
+                        key={year}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.83rem",
+                          color: "var(--text-muted)",
+                          whiteSpace: "nowrap"
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            display: "inline-block",
+                            width: "18px",
+                            height: "3px",
+                            borderRadius: "999px",
+                            background: lightYearColors[year] ?? "#2f6fed"
+                          }}
+                        />
+                        {year}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="coming-soon-card">
+            <h2>Recent Daily Light Entries</h2>
+
+            {lightDeleteError ? <p className="form-error">{lightDeleteError}</p> : null}
+            {lightLoading ? <p>Loading...</p> : null}
+
+            {!lightLoading && lightLogs.length === 0 ? (
+              <p>No daily light entries yet. Use the form above to add the first entry.</p>
+            ) : null}
+
+            {!lightLoading && lightLogs.length > 0 ? (
+              <div className="varieties-table-wrapper irrigation-raw-table-wrapper">
+                <table className="varieties-table irrigation-raw-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Joules/cm²</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lightLogs.slice(0, 60).map((log) => (
+                      <tr key={log.id}>
+                        <td>{formatLogDate(log.log_date)}</td>
+                        <td>{roundTo(log.joules_per_cm2, 1)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteLight(log.id)}
+                            title="Delete entry"
+                            style={{
+                              border: "1px solid var(--border)",
+                              borderRadius: "8px",
+                              background: "var(--surface)",
+                              color: "var(--text-muted)",
+                              font: "inherit",
+                              fontSize: "0.8rem",
+                              padding: "0.2rem 0.55rem",
+                              cursor: "pointer"
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+
+      {pageTab === "irrigation" ? <>
+      <div className="coming-soon-card">
+        <h2>Daily Irrigation Trends</h2>
+
+        <div className="varieties-toolbar irrigation-toolbar">
+          <label className="irrigation-filter-label">
+            Start Date
+            <input
+              type="date"
+              value={trendDateRange.startDate}
+              max={trendDateRange.endDate}
+              onChange={(event) =>
+                setTrendDateRange((current) => ({ ...current, startDate: event.target.value }))
+              }
+            />
+          </label>
+
+          <label className="irrigation-filter-label">
+            End Date
+            <input
+              type="date"
+              value={trendDateRange.endDate}
+              min={trendDateRange.startDate}
+              onChange={(event) =>
+                setTrendDateRange((current) => ({ ...current, endDate: event.target.value }))
+              }
+            />
+          </label>
+
+          <div className="irrigation-filter-label">
+            Metric
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.35rem 0.75rem"
+              }}
+            >
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTrendMetrics.drainEc}
+                  onChange={(event) =>
+                    setSelectedTrendMetrics((current) => ({ ...current, drainEc: event.target.checked }))
+                  }
+                />
+                Drain EC
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTrendMetrics.drainPh}
+                  onChange={(event) =>
+                    setSelectedTrendMetrics((current) => ({ ...current, drainPh: event.target.checked }))
+                  }
+                />
+                Drain pH
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTrendMetrics.feedEc}
+                  onChange={(event) =>
+                    setSelectedTrendMetrics((current) => ({ ...current, feedEc: event.target.checked }))
+                  }
+                />
+                Feed EC
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTrendMetrics.feedPh}
+                  onChange={(event) =>
+                    setSelectedTrendMetrics((current) => ({ ...current, feedPh: event.target.checked }))
+                  }
+                />
+                Feed pH
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTrendMetrics.drain}
+                  onChange={(event) =>
+                    setSelectedTrendMetrics((current) => ({ ...current, drain: event.target.checked }))
+                  }
+                />
+                Drain %
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTrendMetrics.feedVolume}
+                  onChange={(event) =>
+                    setSelectedTrendMetrics((current) => ({ ...current, feedVolume: event.target.checked }))
+                  }
+                />
+                Feed Volume
+              </label>
+            </div>
+          </div>
+
+          <label className="irrigation-filter-label">
+            Phase / Color
+            <select
+              value={selectedPhaseColor}
+              onChange={(event) => setSelectedPhaseColor(event.target.value)}
+              disabled={phaseColorOptions.length === 0}
+            >
+              <option value="all">All</option>
+              {phaseColorOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {loading ? <p>Loading...</p> : null}
+        {error ? <p className="form-error">{error}</p> : null}
+
+        {!loading && !error && !hasAnyTrendMetricSelected ? (
+          <p>Select at least one metric to display the chart.</p>
+        ) : null}
+
+        {!loading && !error && hasAnyTrendMetricSelected && !hasTrendData ? (
+          <p>No trend data available for the selected filters.</p>
+        ) : null}
+
+        {!loading && !error && hasAnyTrendMetricSelected && hasTrendData ? (
+          <div className="dashboard-chart-wrapper">
+            <ResponsiveContainer width="100%" height={290}>
+              <LineChart data={dailyTrendDataInRange} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
+                <XAxis
+                  dataKey="dateLabel"
+                  tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                  tickLine={false}
+                  axisLine={{ stroke: "var(--border)" }}
+                />
+                <YAxis
+                  domain={[0, 100]}
+                  tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={48}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 10,
+                    fontSize: 13
+                  }}
+                  formatter={(_, name, item) => {
+                    const point = item.payload as TrendPoint;
+                    if (name === "Drain EC") {
+                      return [formatNumber(point.drainEcRaw, 3), "Drain EC"];
+                    }
+
+                    if (name === "Drain pH") {
+                      return [formatNumber(point.drainPhRaw, 3), "Drain pH"];
+                    }
+
+                    if (name === "Feed EC") {
+                      return [formatNumber(point.feedEcRaw, 3), "Feed EC"];
+                    }
+
+                    if (name === "Feed pH") {
+                      return [formatNumber(point.feedPhRaw, 3), "Feed pH"];
+                    }
+
+                    if (name === "Feed Volume") {
+                      return [`${formatNumber(point.feedVolumeRaw, 2)} ml`, "Feed Volume"];
+                    }
+
+                    return [formatPercent(point.drainRaw, 2), "Drain %"];
+                  }}
+                  labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
+                />
+                {selectedTrendMetrics.drainEc ? (
+                  <Line
+                    type="monotone"
+                    dataKey="drainEcScaled"
+                    name="Drain EC"
+                    stroke="#2f6fed"
+                    strokeWidth={2.2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+                {selectedTrendMetrics.drainPh ? (
+                  <Line
+                    type="monotone"
+                    dataKey="drainPhScaled"
+                    name="Drain pH"
+                    stroke="#d97706"
+                    strokeWidth={2.2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+                {selectedTrendMetrics.feedEc ? (
+                  <Line
+                    type="monotone"
+                    dataKey="feedEcScaled"
+                    name="Feed EC"
+                    stroke="#7c3aed"
+                    strokeWidth={2.2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+                {selectedTrendMetrics.feedPh ? (
+                  <Line
+                    type="monotone"
+                    dataKey="feedPhScaled"
+                    name="Feed pH"
+                    stroke="#c026d3"
+                    strokeWidth={2.2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+                {selectedTrendMetrics.drain ? (
+                  <Line
+                    type="monotone"
+                    dataKey="drainScaled"
+                    name="Drain %"
+                    stroke="#0f766e"
+                    strokeWidth={2.2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+                {selectedTrendMetrics.feedVolume ? (
+                  <Line
+                    type="monotone"
+                    dataKey="feedVolumeScaled"
+                    name="Feed Volume"
+                    stroke="#b45309"
+                    strokeWidth={2.2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+              </LineChart>
+            </ResponsiveContainer>
+            <div
+              aria-label="Daily irrigation trends legend"
+              style={{
+                marginTop: "0.55rem",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.45rem 0.7rem",
+                alignItems: "center"
+              }}
+            >
+              {trendLegendItems.map((item) => (
+                <span
+                  key={item.key}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    fontSize: "0.83rem",
+                    color: "var(--text-muted)",
+                    whiteSpace: "nowrap"
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: "inline-block",
+                      width: "18px",
+                      height: "3px",
+                      borderRadius: "999px",
+                      background: item.color
+                    }}
+                  />
+                  {item.label}
+                </span>
+              ))}
+            </div>
+            <p>Values are scaled to a 0-100 display range. Tooltip values show raw daily averages.</p>
+          </div>
+        ) : null}
+      </div>
 
       <div className="coming-soon-card">
         <h2>Latest 30 Day Logs</h2>
@@ -393,6 +1467,7 @@ export function IrrigationPage() {
           </div>
         ) : null}
       </div>
+    </> : null}
     </section>
   );
 }

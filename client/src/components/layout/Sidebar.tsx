@@ -44,7 +44,7 @@ const navItems: NavItem[] = [
       { label: "Yield Analytics", to: "/yield/analytics", permission: "yield:view" },
     ],
   },
-  { type: "link", label: "Irrigation", to: "/irrigation", permission: "irrigation:view" },
+  { type: "link", label: "Environment", to: "/irrigation", permission: "irrigation:view" },
   {
     type: "group",
     label: "Pest Control",
