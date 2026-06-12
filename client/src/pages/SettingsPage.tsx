@@ -126,6 +126,12 @@ export function SettingsPage() {
   const [removeInProgress, setRemoveInProgress] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
 
+  // ── pending invite actions ─────────────────────────────────────────────────
+  const [cancelConfirmId, setCancelConfirmId] = useState<string | null>(null);
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [pendingActionError, setPendingActionError] = useState<string | null>(null);
+  const [resendSuccessId, setResendSuccessId] = useState<string | null>(null);
+
   useEffect(() => {
     void loadInvites();
     void loadUsers();
@@ -317,6 +323,46 @@ export function SettingsPage() {
       setRemoveError("Network error. Please try again.");
     } finally {
       setRemoveInProgress(false);
+    }
+  }
+
+  async function handleCancelInvite(inviteId: string) {
+    setPendingActionId(inviteId);
+    setPendingActionError(null);
+    try {
+      const res = await apiFetch(`/api/invites/${inviteId}`, { method: "DELETE" });
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      if (!res.ok) {
+        setPendingActionError(getResponseMessage(body, "Failed to cancel invite."));
+        return;
+      }
+      setCancelConfirmId(null);
+      void loadInvites();
+    } catch {
+      setPendingActionError("Network error. Please try again.");
+    } finally {
+      setPendingActionId(null);
+    }
+  }
+
+  async function handleResendInvite(inviteId: string) {
+    setPendingActionId(inviteId);
+    setPendingActionError(null);
+    setResendSuccessId(null);
+    try {
+      const res = await apiFetch(`/api/invites/${inviteId}/resend`, { method: "POST" });
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      if (!res.ok) {
+        setPendingActionError(getResponseMessage(body, "Failed to resend invite."));
+        return;
+      }
+      setResendSuccessId(inviteId);
+      setTimeout(() => setResendSuccessId(null), 3000);
+      void loadInvites();
+    } catch {
+      setPendingActionError("Network error. Please try again.");
+    } finally {
+      setPendingActionId(null);
     }
   }
 
@@ -641,45 +687,107 @@ export function SettingsPage() {
 
       {accessState === "allowed" && (
         <section style={sectionStyle}>
-          <h2 style={titleStyle}>Recent Invites</h2>
+          <h2 style={titleStyle}>Pending Invites</h2>
           <p style={descriptionStyle}>
-            Invites sent for your organization. Expired invites can be resent by creating a new one.
+            Manage open invites for your organization. Resend or cancel invites that have not yet been accepted.
           </p>
 
           {listError && <p style={errorBannerStyle}>{listError}</p>}
+          {pendingActionError && (
+            <p style={{ ...errorBannerStyle, marginBottom: "0.6rem" }}>{pendingActionError}</p>
+          )}
 
           <div style={cardStyle}>
-            {invites.length === 0 && !listError ? (
-              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.875rem" }}>
-                No invites sent yet.
-              </p>
-            ) : (
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    <th style={thStyle}>Email</th>
-                    <th style={thStyle}>Position</th>
-                    <th style={thStyle}>Status</th>
-                    <th style={thStyle}>Sent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invites.map(row => {
-                    const status = inviteStatus(row);
-                    return (
-                      <tr key={row.id}>
-                        <td style={tdStyle}>{row.email}</td>
-                        <td style={tdStyle}>{row.position ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
-                        <td style={tdStyle}>
-                          <span style={statusBadgeStyle(status)}>{status}</span>
-                        </td>
-                        <td style={tdStyle}>{formatDate(row.created_at)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+            {(() => {
+              const nonAccepted = invites.filter(r => !r.accepted_at);
+              if (nonAccepted.length === 0 && !listError) {
+                return (
+                  <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.875rem" }}>
+                    No pending invites.
+                  </p>
+                );
+              }
+              return (
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Email</th>
+                      <th style={thStyle}>Position</th>
+                      <th style={thStyle}>Created</th>
+                      <th style={thStyle}>Expires</th>
+                      <th style={thStyle}>Status</th>
+                      <th style={thStyle}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nonAccepted.map(row => {
+                      const status = inviteStatus(row);
+                      const isActing = pendingActionId === row.id;
+                      const isConfirmingCancel = cancelConfirmId === row.id;
+                      const justResent = resendSuccessId === row.id;
+                      return (
+                        <tr key={row.id}>
+                          <td style={tdStyle}>{row.email}</td>
+                          <td style={tdStyle}>
+                            {row.position ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                          </td>
+                          <td style={tdStyle}>{formatDate(row.created_at)}</td>
+                          <td style={tdStyle}>{formatDate(row.expires_at)}</td>
+                          <td style={tdStyle}>
+                            <span style={statusBadgeStyle(status)}>{status}</span>
+                          </td>
+                          <td style={tdStyle}>
+                            {isConfirmingCancel ? (
+                              <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+                                <span style={{ fontSize: "0.78rem", color: "#8f2d1f" }}>Cancel invite?</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelInvite(row.id)}
+                                  disabled={isActing}
+                                  style={dangerButtonStyle}
+                                >
+                                  {isActing ? "..." : "Confirm"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setCancelConfirmId(null); setPendingActionError(null); }}
+                                  style={smallSecondaryButtonStyle}
+                                >
+                                  Keep
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
+                                {justResent ? (
+                                  <span style={{ fontSize: "0.78rem", color: "#1f7a42" }}>Sent!</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResendInvite(row.id)}
+                                    disabled={isActing}
+                                    style={smallSecondaryButtonStyle}
+                                  >
+                                    {isActing ? "..." : "Resend"}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => { setCancelConfirmId(row.id); setPendingActionError(null); }}
+                                  disabled={isActing}
+                                  style={dangerButtonStyle}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              );
+            })()}
           </div>
         </section>
       )}

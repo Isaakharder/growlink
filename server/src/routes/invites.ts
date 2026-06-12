@@ -500,9 +500,6 @@ invitesRouter.post("/invites", async (req: Request, res: Response) => {
 });
 
 // GET /api/invites — list all invites for the current organization.
-// requirePermission("admin:invite_users") is the first real-world test of the
-// shared permission middleware; it replaces the previous inline canManageInvites
-// call and produces identical semantics (owner/admin bypass + explicit permission).
 invitesRouter.get("/invites", requirePermission("admin:invite_users"), async (req: Request, res: Response) => {
   const { organizationId } = req;
 
@@ -517,6 +514,102 @@ invitesRouter.get("/invites", requirePermission("admin:invite_users"), async (re
   }
 
   return res.json({ invites: data ?? [] });
+});
+
+// DELETE /api/invites/:id — cancel (hard-delete) a pending or expired invite.
+invitesRouter.delete("/invites/:id", requirePermission("admin:invite_users"), async (req: Request, res: Response) => {
+  const { organizationId } = req;
+  const { id } = req.params;
+
+  const { data: invite, error: fetchError } = await supabase
+    .from("organization_invites")
+    .select("id, accepted_at")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to look up invite.", "Invite cancel fetch error:", fetchError);
+  }
+  if (!invite) {
+    return res.status(404).json({ message: "Invite not found." });
+  }
+
+  const inv = invite as { id: string; accepted_at: string | null };
+  if (inv.accepted_at) {
+    return res.status(409).json({ message: "Cannot cancel an already accepted invite." });
+  }
+
+  const { error: deleteError } = await supabase
+    .from("organization_invites")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+
+  if (deleteError) {
+    return sendSafeError(res, 500, "Failed to cancel invite.", "Invite delete error:", deleteError);
+  }
+
+  console.log(`Invite cancelled: inviteId=${id} org=${organizationId} by=${req.userId ?? "unknown"}`);
+  return res.json({ success: true });
+});
+
+// POST /api/invites/:id/resend — generate a fresh token/expiry and resend the email.
+invitesRouter.post("/invites/:id/resend", requirePermission("admin:invite_users"), async (req: Request, res: Response) => {
+  const { organizationId } = req;
+  const { id } = req.params;
+
+  const { data: invite, error: fetchError } = await supabase
+    .from("organization_invites")
+    .select("id, email, position, accepted_at")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to look up invite.", "Invite resend fetch error:", fetchError);
+  }
+  if (!invite) {
+    return res.status(404).json({ message: "Invite not found." });
+  }
+
+  const inv = invite as { id: string; email: string; position: string | null; accepted_at: string | null };
+  if (inv.accepted_at) {
+    return res.status(409).json({ message: "Cannot resend an already accepted invite." });
+  }
+
+  const token = generateToken();
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + SEVEN_DAYS_MS).toISOString();
+  const inviteUrl = buildInviteUrl(req, token);
+
+  const { error: updateError } = await supabase
+    .from("organization_invites")
+    .update({ token_hash: tokenHash, expires_at: expiresAt })
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+
+  if (updateError) {
+    return sendSafeError(res, 500, "Failed to update invite.", "Invite resend update error:", updateError);
+  }
+
+  const { error: emailError } = await supabase.auth.admin.inviteUserByEmail(inv.email, {
+    redirectTo: inviteUrl,
+    data: {
+      growlinkInviteType: "organization",
+      organizationId,
+      invitedBy: req.userId,
+      inviteToken: token,
+      mustSetPassword: true,
+    },
+  });
+
+  if (emailError) {
+    return sendSafeError(res, 500, "Failed to resend invite email.", "Invite resend email error:", emailError);
+  }
+
+  console.log(`Invite resent: inviteId=${id} org=${organizationId} email=${inv.email} by=${req.userId ?? "unknown"}`);
+  return res.json({ success: true });
 });
 
 export { invitesPublicRouter, invitesRouter };
