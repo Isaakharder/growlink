@@ -122,10 +122,26 @@ adminOrganizationsRouter.post(
       data: inviteDataPayload
     };
 
+    console.log("[admin:org-create] invite send attempt", {
+      email,
+      organizationId,
+      provider: "supabase.auth.admin.inviteUserByEmail",
+      hasRedirectTo: Boolean(inviteOptions.redirectTo),
+    });
+
     let { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(
       email,
       inviteOptions
     );
+
+    console.log("[admin:org-create] invite provider response", {
+      email,
+      organizationId,
+      success: Boolean(inviteData?.user) && !inviteError,
+      status: inviteError?.status,
+      code: inviteError?.code,
+      message: inviteError?.message,
+    });
 
     if (inviteError && inviteOptions.redirectTo && hasRedirectConfigurationError(inviteError)) {
       console.warn(
@@ -138,6 +154,15 @@ adminOrganizationsRouter.post(
       });
       inviteData = retry.data;
       inviteError = retry.error;
+
+      console.log("[admin:org-create] invite provider retry response", {
+        email,
+        organizationId,
+        success: Boolean(inviteData?.user) && !inviteError,
+        status: inviteError?.status,
+        code: inviteError?.code,
+        message: inviteError?.message,
+      });
     }
 
     if (inviteError || !inviteData?.user) {

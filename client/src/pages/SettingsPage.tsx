@@ -337,7 +337,7 @@ export function SettingsPage() {
       <section style={sectionStyle}>
         <h2 style={titleStyle}>Invite Users</h2>
         <p style={descriptionStyle}>
-          Send an invite link so a new team member can create their GrowLink account.
+          Send an email invite so a new team member can create their GrowLink account.
         </p>
 
         {accessState === "loading" && (
@@ -411,7 +411,7 @@ export function SettingsPage() {
               disabled={formState === "submitting"}
               style={primaryButtonStyle}
             >
-              {formState === "submitting" ? "Creating invite..." : "Create invite link"}
+              {formState === "submitting" ? "Sending invite..." : "Send invite email"}
             </button>
           </form>
         )}
@@ -419,10 +419,10 @@ export function SettingsPage() {
         {accessState === "allowed" && formState === "success" && inviteUrl && (
           <div style={successCardStyle}>
             <p style={{ margin: "0 0 0.4rem", fontWeight: 600, color: "var(--brand)" }}>
-              Invite link created
+              Invite email sent
             </p>
             <p style={{ margin: "0 0 0.6rem", fontSize: "0.83rem", color: "var(--text-muted)" }}>
-              Copy and share this link with the invitee. It expires in 7 days.
+              A GrowLink invite email was sent. Keep this link as a backup in case delivery fails.
             </p>
             <div style={monoBoxStyle}>{inviteUrl}</div>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.6rem" }}>
