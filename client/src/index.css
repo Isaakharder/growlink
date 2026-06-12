@@ -1732,6 +1732,70 @@ body {
   color: #0d47a1;
 }
 
+.sync-result-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1.25rem;
+  background: #e8f5e9;
+  color: #1b5e20;
+  border: 1px solid #c8e6c9;
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.sync-result-label {
+  font-weight: 600;
+}
+
+.sync-result-stat {
+  white-space: nowrap;
+}
+
+.sync-result-warn {
+  color: #e65100;
+}
+
+.sync-result-muted {
+  color: var(--text-muted);
+}
+
+.match-badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.match-badge-matched {
+  background: #e8f5e9;
+  color: #1b5e20;
+}
+
+.match-badge-unmatched {
+  background: #fff3e0;
+  color: #bf360c;
+}
+
+.waste-import-row-unmatched {
+  background: #fffde7;
+}
+
+.waste-variety-unmatched {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.waste-variety-docklink-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .weekly-docklink-year-filter {
   display: grid;
   gap: 0.3rem;

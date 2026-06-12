@@ -21,6 +21,8 @@ import { PestPlannerPage } from "../pages/PestPlannerPage";
 import { QualityCheckPage } from "../pages/QualityCheckPage";
 import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
+import { AdminDocklinkIntegrationsPage } from "../pages/AdminDocklinkIntegrationsPage";
+import { AdminGrowlinkAgentPage } from "../pages/AdminGrowlinkAgentPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
 import { PlatformCustomersPage } from "../pages/PlatformCustomersPage";
 import { AcceptInvitePage } from "../pages/AcceptInvitePage";
@@ -192,6 +194,14 @@ export const appRouter = createBrowserRouter([
           {
             path: "admin/customers",
             element: <PlatformCustomersPage />
+          },
+          {
+            path: "admin/docklink",
+            element: <AdminDocklinkIntegrationsPage />
+          },
+          {
+            path: "admin/growlink-agent",
+            element: <AdminGrowlinkAgentPage />
           }
         ]
       }

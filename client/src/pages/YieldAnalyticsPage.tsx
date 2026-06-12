@@ -24,9 +24,18 @@ type AnalyticsRow = {
   variety_name: string;
   entries_count: number;
   total_kg: number;
+  waste_pct: number;
   avg_fruit_weight_g: number | null;
   kg_per_m2: number | null;
   size_pct: Record<string, number>;
+};
+
+type WasteImport = {
+  id: string;
+  variety_id: string | null;
+  year: number;
+  week: number;
+  waste_kg: number;
 };
 
 type AnalyticsSummary = {
@@ -109,6 +118,10 @@ function formatKgPerM2(value: number | null) {
   }
 
   return Number(value).toFixed(1);
+}
+
+function formatWastePct(value: number) {
+  return `${value.toFixed(1)}%`;
 }
 
 function formatAvgFruitWeight(value: number | null) {
@@ -343,6 +356,7 @@ export function YieldAnalyticsPage() {
   const [entries, setEntries] = useState<YieldEntry[]>([]);
   const [colorCaseEntries, setColorCaseEntries] = useState<ColorCaseEntry[]>([]);
   const [varietyMeta, setVarietyMeta] = useState<VarietyMeta[]>([]);
+  const [wasteImports, setWasteImports] = useState<WasteImport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
@@ -361,11 +375,12 @@ export function YieldAnalyticsPage() {
       setError(null);
 
       try {
-        const [summaryRes, entriesRes, colorCaseRes, varietiesRes] = await Promise.all([
+        const [summaryRes, entriesRes, colorCaseRes, varietiesRes, wasteRes] = await Promise.all([
           apiFetch("/api/yield-analytics/summary"),
           apiFetch("/api/yield-entries"),
           apiFetch("/api/color-case-entries"),
-          apiFetch("/api/varieties")
+          apiFetch("/api/varieties"),
+          apiFetch("/api/waste-imports")
         ]);
 
         if (!summaryRes.ok) {
@@ -413,11 +428,17 @@ export function YieldAnalyticsPage() {
             .filter((item): item is VarietyMeta => item !== null);
         }
 
+        let wasteData: WasteImport[] = [];
+        if (wasteRes.ok) {
+          wasteData = (await wasteRes.json()) as WasteImport[];
+        }
+
         if (active) {
           setSummary(summaryData);
           setEntries(entriesData);
           setColorCaseEntries(colorCaseData);
           setVarietyMeta(varietiesData);
+          setWasteImports(wasteData);
         }
       } catch (err) {
         if (active) {
@@ -508,6 +529,35 @@ export function YieldAnalyticsPage() {
     });
   }, [entries, selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]);
 
+  const filteredWasteKgByVarietyId = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const row of wasteImports) {
+      if (!row.variety_id) continue;
+
+      const year = Number(row.year);
+      const week = Number(row.week);
+
+      if (!Number.isInteger(year) || !Number.isInteger(week)) continue;
+      if (year !== selectedYear) continue;
+
+      if (weekFilterMode === "single-week" && week !== selectedWeek) continue;
+
+      if (weekFilterMode === "week-range") {
+        const minWeek = Math.min(fromWeek, toWeek);
+        const maxWeek = Math.max(fromWeek, toWeek);
+        if (week < minWeek || week > maxWeek) continue;
+      }
+
+      const wasteKg = Number(row.waste_kg);
+      if (!Number.isFinite(wasteKg) || wasteKg < 0) continue;
+
+      map.set(row.variety_id, (map.get(row.variety_id) ?? 0) + wasteKg);
+    }
+
+    return map;
+  }, [wasteImports, selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]);
+
   const filteredVarietySummary = useMemo(() => {
     if (!summary) {
       return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[] };
@@ -587,11 +637,15 @@ export function YieldAnalyticsPage() {
           sizePct[size.id] = item.total_kg > 0 ? (sizeKg / item.total_kg) * 100 : 0;
         }
 
+        const wasteKg = filteredWasteKgByVarietyId.get(item.variety_id) ?? 0;
+        const waste_pct = item.total_kg > 0 ? (wasteKg / item.total_kg) * 100 : 0;
+
         return {
           variety_id: item.variety_id,
           variety_name: item.variety_name,
           entries_count: item.entries_count,
           total_kg: item.total_kg,
+          waste_pct,
           avg_fruit_weight_g:
             item.weighted_fw_kg > 0 ? item.weighted_fw_sum / item.weighted_fw_kg : null,
           kg_per_m2: item.area_m2 > 0 ? item.total_kg / item.area_m2 : null,
@@ -601,7 +655,7 @@ export function YieldAnalyticsPage() {
       .sort((a, b) => a.variety_name.localeCompare(b.variety_name));
 
     return { sizes, rows };
-  }, [summary, varietyMeta, filteredEntries]);
+  }, [summary, varietyMeta, filteredEntries, filteredWasteKgByVarietyId]);
 
   const varietySummaryWeekLabel = useMemo(
     () => getWeekFilterLabel(weekFilterMode, selectedWeek, fromWeek, toWeek),
@@ -661,7 +715,8 @@ export function YieldAnalyticsPage() {
       "Variety",
       "Entries",
       "Total kg",
-      "Avg fruit wt (g)",
+      "Waste %",
+      "Avg fw (g)",
       "kg / m2",
       ...filteredVarietySummary.sizes.map((size) => `${size.name} %`)
     ];
@@ -673,6 +728,7 @@ export function YieldAnalyticsPage() {
         row.variety_name,
         row.entries_count,
         roundTo(row.total_kg, 2),
+        formatWastePct(row.waste_pct),
         formatAvgFruitWeight(row.avg_fruit_weight_g),
         formatKgPerM2(row.kg_per_m2),
         ...filteredVarietySummary.sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
@@ -691,7 +747,8 @@ export function YieldAnalyticsPage() {
       "Variety",
       "Entries",
       "Total kg",
-      "Avg fruit wt (g)",
+      "Waste %",
+      "Avg fw (g)",
       "kg/m²",
       ...filteredVarietySummary.sizes.map((size) => `${size.name} %`)
     ];
@@ -713,6 +770,7 @@ export function YieldAnalyticsPage() {
       row.variety_name,
       String(row.entries_count),
       String(roundTo(row.total_kg, 2)),
+      formatWastePct(row.waste_pct),
       formatAvgFruitWeight(row.avg_fruit_weight_g),
       formatKgPerM2(row.kg_per_m2),
       ...filteredVarietySummary.sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
@@ -980,7 +1038,8 @@ export function YieldAnalyticsPage() {
                   <th>Variety</th>
                   <th>Entries</th>
                   <th>Total kg</th>
-                  <th>Avg fruit wt (g)</th>
+                  <th>Waste %</th>
+                  <th>Avg fw (g)</th>
                   <th>kg / m²</th>
                   {filteredVarietySummary.sizes.map((size) => (
                     <th key={size.id}>{size.name} %</th>
@@ -993,6 +1052,7 @@ export function YieldAnalyticsPage() {
                     <td>{row.variety_name}</td>
                     <td>{row.entries_count}</td>
                     <td>{roundTo(row.total_kg, 2)}</td>
+                    <td>{formatWastePct(row.waste_pct)}</td>
                     <td>
                       {formatAvgFruitWeight(row.avg_fruit_weight_g)}
                     </td>
@@ -1225,7 +1285,8 @@ export function YieldAnalyticsPage() {
                         <th>Variety</th>
                         <th>Entries</th>
                         <th>Total kg</th>
-                        <th>Avg fruit wt (g)</th>
+                        <th>Waste %</th>
+                        <th>Avg fw (g)</th>
                         <th>kg / m²</th>
                         {filteredVarietySummary.sizes.map((size) => (
                           <th key={`preview-${size.id}`}>{size.name} %</th>
@@ -1239,6 +1300,7 @@ export function YieldAnalyticsPage() {
                             <td>{row.variety_name}</td>
                             <td>{row.entries_count}</td>
                             <td>{roundTo(row.total_kg, 2)}</td>
+                            <td>{formatWastePct(row.waste_pct)}</td>
                             <td>
                               {formatAvgFruitWeight(row.avg_fruit_weight_g)}
                             </td>
@@ -1254,7 +1316,7 @@ export function YieldAnalyticsPage() {
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={5 + filteredVarietySummary.sizes.length}>No filtered rows to export.</td>
+                          <td colSpan={6 + filteredVarietySummary.sizes.length}>No filtered rows to export.</td>
                         </tr>
                       )}
                     </tbody>

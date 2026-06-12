@@ -43,10 +43,22 @@ export async function requireAdminUser(
     return res.status(401).json({ message: "Failed to resolve authenticated user session." });
   }
 
-  if (!adminUserIds.has(data.user.id)) {
+  const resolvedId = data.user.id;
+  const resolvedEmail = data.user.email ?? "(no email)";
+  const isAdmin = adminUserIds.has(resolvedId);
+
+  console.log(
+    "[requireAdminUser] userId=%s email=%s adminCount=%d isAdmin=%s",
+    resolvedId,
+    resolvedEmail,
+    adminUserIds.size,
+    isAdmin
+  );
+
+  if (!isAdmin) {
     return res.status(403).json({ message: "Access denied." });
   }
 
-  req.userId = data.user.id;
+  req.userId = resolvedId;
   return next();
 }

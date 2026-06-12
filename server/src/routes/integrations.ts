@@ -477,4 +477,315 @@ integrationsRouter.post("/integrations/docklink/sync-color-cases", requirePermis
   }
 });
 
+// --- Waste sync ---
+
+interface DocklinkWeeklyWasteRow {
+  externalVarietyId: string;
+  varietyNameSnapshot: string;
+  year: number;
+  week: number;
+  wasteKg: number;
+}
+
+interface DocklinkWasteFetchResult {
+  wasteRows: DocklinkWeeklyWasteRow[];
+  fetchedRows: number;
+  matchedRows: number;
+  skippedRows: number;
+}
+
+interface DocklinkWasteSyncResult {
+  fetchedRows: number;
+  matchedRows: number;
+  matchedVarieties: number;
+  unmatchedVarieties: number;
+  imported: number;
+  updated: number;
+  skippedRows: number;
+}
+
+async function assertWasteTablesReady(): Promise<void> {
+  const [wasteCheck, mappingsCheck] = await Promise.all([
+    supabase.from("waste_imports").select("organization_id").limit(1),
+    supabase.from("waste_variety_mappings").select("organization_id").limit(1)
+  ]);
+
+  for (const [label, check] of [["waste_imports", wasteCheck], ["waste_variety_mappings", mappingsCheck]] as const) {
+    if (check.error) {
+      const lower = check.error.message.toLowerCase();
+      if (lower.includes("does not exist") || lower.includes("not found")) {
+        throw new HttpError(503, `${label} table is not available. Run latest GrowLink migrations before syncing waste data.`);
+      }
+      console.error(`Waste tables readiness check error (${label}):`, check.error);
+      throw new Error("Failed to validate waste tables.");
+    }
+  }
+}
+
+async function fetchDocklinkWeeklyWaste(externalOrganizationId: string): Promise<DocklinkWasteFetchResult> {
+  if (!docklinkSupabase) {
+    throw new Error("DockLink integration is not configured. Supabase client is unavailable.");
+  }
+
+  const wasteRows: DocklinkWeeklyWasteRow[] = [];
+  let skippedRows = 0;
+
+  const { data: viewRows, error: queryError } = await docklinkSupabase
+    .from("growlink_weekly_waste_totals")
+    .select("organization_id, year, week, external_variety_id, variety_name, waste_kg")
+    .eq("organization_id", externalOrganizationId);
+
+  if (queryError) {
+    const lower = queryError.message.toLowerCase();
+    if (lower.includes("does not exist") || lower.includes("not found")) {
+      throw new Error(
+        "DockLink view growlink_weekly_waste_totals is missing or inaccessible. Ensure the export view exists and service role has access."
+      );
+    }
+    console.error("DockLink weekly waste query error:", queryError);
+    throw new Error("Failed to query DockLink waste data.");
+  }
+
+  const totalRowsReturned = viewRows?.length ?? 0;
+  console.log(`DockLink growlink_weekly_waste_totals rows returned for org ${externalOrganizationId}: ${totalRowsReturned}`);
+
+  // Safety re-filter: discard any row whose organization_id doesn't match,
+  // in case the view's filter ever behaves unexpectedly.
+  const filteredRows = (viewRows ?? []).filter(row =>
+    String(row.organization_id).trim().toLowerCase() ===
+    String(externalOrganizationId).trim().toLowerCase()
+  );
+
+  const rowsAfterFilter = filteredRows.length;
+  if (rowsAfterFilter !== totalRowsReturned) {
+    console.warn(
+      `DockLink waste safety filter removed ${totalRowsReturned - rowsAfterFilter} rows that did not match org ${externalOrganizationId}`
+    );
+  }
+  console.log(`DockLink waste rows after safety filter: ${rowsAfterFilter}`);
+
+  if (filteredRows.length === 0) {
+    return { wasteRows, fetchedRows: totalRowsReturned, matchedRows: rowsAfterFilter, skippedRows };
+  }
+
+  for (const row of filteredRows as Record<string, unknown>[]) {
+    const externalVarietyId = row.external_variety_id;
+    if (typeof externalVarietyId !== "string" || externalVarietyId.trim().length === 0) {
+      skippedRows++;
+      continue;
+    }
+
+    const varietyName = row.variety_name;
+    if (typeof varietyName !== "string" || varietyName.trim().length === 0) {
+      skippedRows++;
+      continue;
+    }
+
+    const wasteKg = getNumericField(row, "waste_kg");
+    if (wasteKg === null || wasteKg < 0) {
+      skippedRows++;
+      continue;
+    }
+
+    const year = getNumericField(row, "year");
+    const week = getNumericField(row, "week");
+    if (year === null || week === null) {
+      skippedRows++;
+      continue;
+    }
+
+    wasteRows.push({
+      externalVarietyId: externalVarietyId.trim(),
+      varietyNameSnapshot: varietyName.trim(),
+      year: Math.trunc(year),
+      week: Math.trunc(week),
+      wasteKg
+    });
+  }
+
+  console.log(`Processed ${wasteRows.length} valid growlink_weekly_waste_totals rows after filtering`);
+  return { wasteRows, fetchedRows: totalRowsReturned, matchedRows: rowsAfterFilter, skippedRows };
+}
+
+async function syncDocklinkWaste(req: Request): Promise<DocklinkWasteSyncResult> {
+  const configError = getDocklinkConfigError();
+  if (configError) throw new Error(configError);
+
+  if (!isDocklinkConfigured()) {
+    throw new Error("DockLink integration is not configured. Supabase client is unavailable.");
+  }
+
+  const organizationId = req.organizationId;
+  await assertWasteTablesReady();
+  const externalOrganizationId = await getDocklinkOrganizationMapping(organizationId);
+
+  const { wasteRows, fetchedRows, matchedRows, skippedRows } =
+    await fetchDocklinkWeeklyWaste(externalOrganizationId);
+
+  if (wasteRows.length === 0) {
+    return { fetchedRows, matchedRows, matchedVarieties: 0, unmatchedVarieties: 0, imported: 0, updated: 0, skippedRows };
+  }
+
+  // Pre-fetch variety mappings and GrowLink varieties in parallel to avoid N+1 queries
+  const [mappingsResult, varietiesResult] = await Promise.all([
+    supabase
+      .from("waste_variety_mappings")
+      .select("external_variety_id, variety_id")
+      .eq("organization_id", organizationId),
+    supabase
+      .from("varieties")
+      .select("id, name, color")
+      .eq("organization_id", organizationId)
+      .eq("status", "active")
+  ]);
+
+  if (mappingsResult.error) {
+    console.error("DockLink waste sync - variety mappings fetch error:", mappingsResult.error);
+    throw new Error("Failed to fetch waste variety mappings.");
+  }
+  if (varietiesResult.error) {
+    console.error("DockLink waste sync - varieties fetch error:", varietiesResult.error);
+    throw new Error("Failed to fetch variety data.");
+  }
+
+  const mappingByExternalId = new Map<string, string>();
+  for (const m of mappingsResult.data ?? []) {
+    if (m.external_variety_id && m.variety_id) {
+      mappingByExternalId.set(m.external_variety_id, m.variety_id);
+    }
+  }
+
+  const varietyColorById = new Map<string, string>();
+  const varietyByNormalizedName = new Map<string, { id: string; color: string }>();
+  for (const v of varietiesResult.data ?? []) {
+    varietyColorById.set(v.id, v.color);
+    varietyByNormalizedName.set(v.name.toLowerCase().trim(), { id: v.id, color: v.color });
+  }
+
+  let imported = 0;
+  let updated = 0;
+  let matchedVarieties = 0;
+  let unmatchedVarieties = 0;
+
+  for (const row of wasteRows) {
+    // Resolve GrowLink variety: explicit mapping first, then case-insensitive name auto-match
+    let resolvedVarietyId: string | null = mappingByExternalId.get(row.externalVarietyId) ?? null;
+    let resolvedColor: string | null = null;
+    let matchSource: string;
+
+    if (resolvedVarietyId) {
+      resolvedColor = varietyColorById.get(resolvedVarietyId) ?? null;
+      matchSource = "mapping";
+      matchedVarieties++;
+    } else {
+      const nameMatch = varietyByNormalizedName.get(row.varietyNameSnapshot.toLowerCase().trim());
+      if (nameMatch) {
+        resolvedVarietyId = nameMatch.id;
+        resolvedColor = nameMatch.color;
+        matchSource = "name_match";
+        matchedVarieties++;
+      } else {
+        matchSource = "unmatched";
+        unmatchedVarieties++;
+      }
+    }
+
+    const { data: existing } = await supabase
+      .from("waste_imports")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("external_variety_id", row.externalVarietyId)
+      .eq("year", row.year)
+      .eq("week", row.week)
+      .maybeSingle();
+
+    const { error: upsertError } = await supabase
+      .from("waste_imports")
+      .upsert(
+        {
+          organization_id: organizationId,
+          variety_id: resolvedVarietyId,
+          external_variety_id: row.externalVarietyId,
+          variety_name_snapshot: row.varietyNameSnapshot,
+          color: resolvedColor,
+          year: row.year,
+          week: row.week,
+          waste_kg: row.wasteKg,
+          source: "docklink",
+          synced_at: new Date().toISOString(),
+          source_summary: {
+            docklink_view: "growlink_weekly_waste_totals",
+            docklink_organization_id: externalOrganizationId,
+            match_source: matchSource
+          }
+        },
+        { onConflict: "organization_id,external_variety_id,year,week" }
+      );
+
+    if (upsertError) {
+      console.error("DockLink waste sync - upsert error:", upsertError);
+      throw new Error("Failed to sync waste data.");
+    }
+
+    if (existing?.id) {
+      updated++;
+    } else {
+      imported++;
+    }
+  }
+
+  return { fetchedRows, matchedRows, matchedVarieties, unmatchedVarieties, imported, updated, skippedRows };
+}
+
+integrationsRouter.post("/integrations/docklink/sync-waste", requirePermission("cases:edit"), async (req: Request, res: Response) => {
+  try {
+    const configError = getDocklinkConfigError();
+    if (configError) {
+      return res.status(503).json({ message: configError });
+    }
+
+    if (!isDocklinkConfigured()) {
+      return res.status(503).json({ message: "DockLink integration is not configured. Supabase client is unavailable." });
+    }
+
+    console.log("DockLink waste sync started");
+    const result = await syncDocklinkWaste(req);
+    console.log(
+      `DockLink waste sync completed: fetched=${result.fetchedRows}, matched=${result.matchedRows}, ` +
+      `matchedVarieties=${result.matchedVarieties}, unmatchedVarieties=${result.unmatchedVarieties}, ` +
+      `imported=${result.imported}, updated=${result.updated}, skipped=${result.skippedRows}`
+    );
+
+    return res.json({
+      success: true,
+      message:
+        `Synced DockLink waste: fetched=${result.fetchedRows}, matched=${result.matchedRows}, ` +
+        `matchedVarieties=${result.matchedVarieties}, unmatchedVarieties=${result.unmatchedVarieties}, ` +
+        `imported=${result.imported}, updated=${result.updated}, skipped=${result.skippedRows}`,
+      ...result
+    });
+  } catch (error) {
+    console.error("DockLink waste sync error:", error);
+    if (error instanceof HttpError) {
+      if (error.status === 200) {
+        return res.json({
+          success: true,
+          message: error.message,
+          fetchedRows: 0,
+          matchedRows: 0,
+          matchedVarieties: 0,
+          unmatchedVarieties: 0,
+          imported: 0,
+          updated: 0,
+          skippedRows: 0
+        });
+      }
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    const message = error instanceof Error ? error.message : "Failed to sync DockLink waste";
+    return res.status(400).json({ message });
+  }
+});
+
 export { integrationsRouter };

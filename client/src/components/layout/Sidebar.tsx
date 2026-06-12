@@ -222,6 +222,20 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             >
               Organizations
             </NavLink>
+            <NavLink
+              to="/admin/docklink"
+              onClick={onCloseMobile}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              DockLink
+            </NavLink>
+            <NavLink
+              to="/admin/growlink-agent"
+              onClick={onCloseMobile}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              GrowLink Agent
+            </NavLink>
           </div>
         )}
 
