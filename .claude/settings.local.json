@@ -20,7 +20,15 @@
       "Bash(node --experimental-vm-modules /tmp/dump_pdf.mjs)",
       "Bash(node dump_pdf.mjs)",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('exports', {}\\), indent=2\\)\\)\")",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(find /c/growlink -type f \\\\\\( -name \"*.sql\" -o -name \"*schema*\" \\\\\\) 2>/dev/null | grep -v node_modules)",
+      "Read(//c/growlink/**)",
+      "Bash(xargs grep -l \"Climate\\\\|Environment\")",
+      "Bash(xargs grep -l \"daily-light\\\\|daily_light\")",
+      "Bash(xargs grep -l \"/api/daily-light\")",
+      "Bash(xargs grep -l \"daily_light\")",
+      "Bash(xargs grep -l \"irrigation\")",
+      "Bash(grep -E \"\\\\.ts$\")"
     ]
   }
 }

@@ -243,6 +243,16 @@ function formatDateInputValue(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function getISOWeekLabel(date: Date): string {
+  // ISO 8601: week 1 = week containing the first Thursday; weeks start Monday
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayOfWeek = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayOfWeek);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `W${String(weekNum).padStart(2, "0")}`;
+}
+
 function getDefaultTrendDateRange() {
   const endDate = new Date();
   endDate.setHours(0, 0, 0, 0);
@@ -588,6 +598,72 @@ export function IrrigationPage() {
     return result;
   }, [lightLogYears]);
 
+  const lightYearComparison = useMemo(() => {
+    const selectedDate = lightForm.log_date;
+    if (!selectedDate) return null;
+    const ts = Date.parse(`${selectedDate}T00:00:00`);
+    if (!Number.isFinite(ts)) return null;
+
+    const date = new Date(ts);
+    const year = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    const thisYearStart = `${year}-01-01`;
+    const lastYearStart = `${year - 1}-01-01`;
+    const lastYearEnd = `${year - 1}-${mm}-${dd}`;
+
+    let thisYearTotal = 0;
+    let lastYearTotal = 0;
+    let thisYearHasData = false;
+    let lastYearHasData = false;
+
+    for (const log of lightLogs) {
+      const d = log.log_date;
+      if (d >= thisYearStart && d <= selectedDate) {
+        thisYearTotal += log.joules_per_cm2;
+        thisYearHasData = true;
+      }
+      if (d >= lastYearStart && d <= lastYearEnd) {
+        lastYearTotal += log.joules_per_cm2;
+        lastYearHasData = true;
+      }
+    }
+
+    const diff = thisYearTotal - lastYearTotal;
+    const percentDiff =
+      lastYearHasData && lastYearTotal > 0 ? (diff / lastYearTotal) * 100 : null;
+
+    return { thisYearTotal, lastYearTotal, thisYearHasData, lastYearHasData, diff, percentDiff, year };
+  }, [lightLogs, lightForm.log_date]);
+
+  const weeklyLightChartData = useMemo(() => {
+    type WeekEntry = { xLabel: string; values: Map<number, number> };
+    const byWeek = new Map<string, WeekEntry>();
+
+    for (const log of lightLogs) {
+      const date = new Date(`${log.log_date}T00:00:00`);
+      const year = date.getFullYear();
+      if (!checkedLightYears.has(year)) continue;
+
+      const weekLabel = getISOWeekLabel(date);
+      if (!byWeek.has(weekLabel)) {
+        byWeek.set(weekLabel, { xLabel: weekLabel, values: new Map() });
+      }
+      const entry = byWeek.get(weekLabel)!;
+      entry.values.set(year, (entry.values.get(year) ?? 0) + log.joules_per_cm2);
+    }
+
+    return Array.from(byWeek.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, entry]) => {
+        const point: Record<string, unknown> = { xLabel: entry.xLabel };
+        for (const year of checkedLightYears) {
+          point[String(year)] = entry.values.get(year) ?? null;
+        }
+        return point;
+      });
+  }, [lightLogs, checkedLightYears]);
+
   const lightChartData = useMemo(() => {
     type MonthDayEntry = { xLabel: string; values: Map<number, number> };
     const byMonthDay = new Map<string, MonthDayEntry>();
@@ -652,12 +728,12 @@ export function IrrigationPage() {
         throw new Error(body?.message ?? `Save failed (${response.status})`);
       }
 
-      // Shift date back one day, clear joules, focus joules for fast historical entry
+      // Advance date by one day, clear joules, focus joules for fast sequential entry
       setLightForm((current) => {
         const timestamp = Date.parse(`${current.log_date}T00:00:00`);
-        const prev = Number.isFinite(timestamp) ? new Date(timestamp) : new Date();
-        prev.setDate(prev.getDate() - 1);
-        return { log_date: formatDateInputValue(prev), joules_per_cm2: "" };
+        const next = Number.isFinite(timestamp) ? new Date(timestamp) : new Date();
+        next.setDate(next.getDate() + 1);
+        return { log_date: formatDateInputValue(next), joules_per_cm2: "" };
       });
       setLightFetchKey((k) => k + 1);
       setTimeout(() => joulesInputRef.current?.focus(), 0);
@@ -712,6 +788,110 @@ export function IrrigationPage() {
         <>
           <div className="coming-soon-card">
             <h2>Log Daily Light</h2>
+
+            {lightYearComparison !== null ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "0.65rem",
+                  marginTop: "0.75rem",
+                  marginBottom: "0.1rem"
+                }}
+              >
+                {/* Last Year Total */}
+                <div
+                  style={{
+                    flex: "1 1 140px",
+                    border: "1px solid var(--border)",
+                    borderRadius: "10px",
+                    padding: "0.6rem 0.85rem",
+                    background: "var(--surface)"
+                  }}
+                >
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.18rem" }}>
+                    Last Year Total
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: "1rem" }}>
+                    {lightYearComparison.lastYearHasData
+                      ? `${Math.round(lightYearComparison.lastYearTotal).toLocaleString()} J/cm²`
+                      : "No data"}
+                  </div>
+                </div>
+
+                {/* This Year Total */}
+                <div
+                  style={{
+                    flex: "1 1 140px",
+                    border: "1px solid var(--border)",
+                    borderRadius: "10px",
+                    padding: "0.6rem 0.85rem",
+                    background: "var(--surface)"
+                  }}
+                >
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.18rem" }}>
+                    This Year Total
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: "1rem" }}>
+                    {lightYearComparison.thisYearHasData
+                      ? `${Math.round(lightYearComparison.thisYearTotal).toLocaleString()} J/cm²`
+                      : "No data"}
+                  </div>
+                </div>
+
+                {/* Difference */}
+                <div
+                  style={{
+                    flex: "1 1 160px",
+                    border: `1px solid ${
+                      !lightYearComparison.lastYearHasData
+                        ? "var(--border)"
+                        : lightYearComparison.diff > 0
+                        ? "#16a34a"
+                        : lightYearComparison.diff < 0
+                        ? "#dc2626"
+                        : "var(--border)"
+                    }`,
+                    borderRadius: "10px",
+                    padding: "0.6rem 0.85rem",
+                    background: "var(--surface)"
+                  }}
+                >
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "0.18rem" }}>
+                    Difference
+                  </div>
+                  {!lightYearComparison.lastYearHasData ? (
+                    <div style={{ fontSize: "0.88rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                      No last year data
+                    </div>
+                  ) : lightYearComparison.diff === 0 ? (
+                    <div style={{ fontWeight: 700, fontSize: "1rem" }}>Same as last year</div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          fontSize: "1rem",
+                          color: lightYearComparison.diff > 0 ? "#16a34a" : "#dc2626"
+                        }}
+                      >
+                        {lightYearComparison.diff > 0 ? "+" : ""}
+                        {Math.round(lightYearComparison.diff).toLocaleString()} J/cm²
+                        {lightYearComparison.percentDiff !== null ? (
+                          <span style={{ fontSize: "0.8rem", marginLeft: "0.4rem", fontWeight: 600 }}>
+                            ({lightYearComparison.diff > 0 ? "+" : ""}
+                            {roundTo(lightYearComparison.percentDiff, 1)}%)
+                          </span>
+                        ) : null}
+                      </div>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.15rem" }}>
+                        {lightYearComparison.diff > 0 ? "More sunlight this year" : "Less sunlight this year"}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
             <div
               style={{
@@ -801,6 +981,9 @@ export function IrrigationPage() {
                   onChange={(event) =>
                     setLightForm((current) => ({ ...current, joules_per_cm2: event.target.value }))
                   }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void handleSaveLight();
+                  }}
                   style={{
                     border: "1px solid var(--border)",
                     borderRadius: "10px",
@@ -838,7 +1021,7 @@ export function IrrigationPage() {
           </div>
 
           <div className="coming-soon-card">
-            <h2>Daily Sunlight</h2>
+            <h2>Weekly Sunlight Totals</h2>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem 0.75rem", marginBottom: "0.65rem" }}>
               {lightLogYears.map((year) => (
@@ -865,6 +1048,117 @@ export function IrrigationPage() {
                 </label>
               ))}
             </div>
+
+            {lightLoading ? <p>Loading...</p> : null}
+            {lightError ? <p className="form-error">{lightError}</p> : null}
+
+            {!lightLoading && !lightError && checkedLightYears.size === 0 ? (
+              <p>Select at least one year to display the chart.</p>
+            ) : null}
+
+            {!lightLoading && !lightError && checkedLightYears.size > 0 && weeklyLightChartData.length === 0 ? (
+              <p>No daily light data for the selected year(s).</p>
+            ) : null}
+
+            {!lightLoading && !lightError && checkedLightYears.size > 0 && weeklyLightChartData.length > 0 ? (
+              <div className="dashboard-chart-wrapper">
+                <ResponsiveContainer width="100%" height={290}>
+                  <LineChart data={weeklyLightChartData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                    <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
+                    <XAxis
+                      dataKey="xLabel"
+                      tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: "var(--border)" }}
+                    />
+                    <YAxis
+                      tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={60}
+                      label={{
+                        value: "J/cm²",
+                        angle: -90,
+                        position: "insideLeft",
+                        offset: 14,
+                        style: { fill: "var(--text-muted)", fontSize: 12 }
+                      }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 10,
+                        fontSize: 13
+                      }}
+                      formatter={(value: unknown, name: unknown) => [
+                        typeof value === "number" ? `${Math.round(value).toLocaleString()} J/cm²` : "--",
+                        String(name)
+                      ]}
+                      labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
+                    />
+                    {Array.from(checkedLightYears)
+                      .sort((a, b) => a - b)
+                      .map((year) => (
+                        <Line
+                          key={year}
+                          type="monotone"
+                          dataKey={String(year)}
+                          name={String(year)}
+                          stroke={lightYearColors[year] ?? "#2f6fed"}
+                          strokeWidth={2.2}
+                          dot={{ r: 3 }}
+                          activeDot={{ r: 5 }}
+                          connectNulls={false}
+                        />
+                      ))}
+                  </LineChart>
+                </ResponsiveContainer>
+
+                <div
+                  aria-label="Weekly sunlight chart legend"
+                  style={{
+                    marginTop: "0.55rem",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "0.45rem 0.7rem",
+                    alignItems: "center"
+                  }}
+                >
+                  {Array.from(checkedLightYears)
+                    .sort((a, b) => b - a)
+                    .map((year) => (
+                      <span
+                        key={year}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.83rem",
+                          color: "var(--text-muted)",
+                          whiteSpace: "nowrap"
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            display: "inline-block",
+                            width: "18px",
+                            height: "3px",
+                            borderRadius: "999px",
+                            background: lightYearColors[year] ?? "#2f6fed"
+                          }}
+                        />
+                        {year}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="coming-soon-card">
+            <h2>Daily Sunlight</h2>
 
             {lightLoading ? <p>Loading...</p> : null}
             {lightError ? <p className="form-error">{lightError}</p> : null}
