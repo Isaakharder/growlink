@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 type View = "login" | "forgot";
 
@@ -28,12 +29,43 @@ export function LoginPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) {
         setError(signInError.message);
         return;
       }
-      navigate(from ?? "/", { replace: true });
+
+      // Preserve deep-link: if the user was bounced here from a protected route,
+      // send them back there instead of applying the default routing logic.
+      if (from) {
+        navigate(from, { replace: true });
+        return;
+      }
+
+      // Determine the correct landing page from the user's membership permissions.
+      let route = "/";
+      try {
+        const userId = authData.user?.id;
+        if (userId) {
+          const { data: row } = await supabase
+            .from("memberships")
+            .select("role, permissions")
+            .eq("user_id", userId)
+            .maybeSingle();
+          if (row) {
+            const rawPerms = (row as { role: string; permissions?: unknown }).permissions;
+            const perms: Record<string, boolean> =
+              rawPerms !== null && typeof rawPerms === "object" && !Array.isArray(rawPerms)
+                ? (rawPerms as Record<string, boolean>)
+                : {};
+            route = getDefaultRoute((row as { role: string }).role, perms);
+          }
+        }
+      } catch {
+        // Membership fetch failed — fall back to dashboard.
+      }
+
+      navigate(route, { replace: true });
     } catch (submitError) {
       setError(
         submitError instanceof Error ? submitError.message : "Unable to log in right now."

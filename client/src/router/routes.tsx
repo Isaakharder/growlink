@@ -26,6 +26,7 @@ import { AdminGrowlinkAgentPage } from "../pages/AdminGrowlinkAgentPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
 import { PlatformCustomersPage } from "../pages/PlatformCustomersPage";
 import { AcceptInvitePage } from "../pages/AcceptInvitePage";
+import { NoAccessPage } from "../pages/NoAccessPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
@@ -47,6 +48,11 @@ export const appRouter = createBrowserRouter([
     path: "/",
     element: <RequireAuth />,
     children: [
+      // No-access page: auth-protected but rendered without any layout shell.
+      {
+        path: "no-access",
+        element: <NoAccessPage />
+      },
       {
         element: <AppLayout />,
         children: [

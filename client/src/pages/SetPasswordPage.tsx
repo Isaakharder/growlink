@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 type SessionBootstrapState = "loading" | "ready" | "invalid";
 
@@ -13,6 +14,7 @@ export function SetPasswordPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [resolvedRoute, setResolvedRoute] = useState("/");
 
   // TODO: In the Supabase dashboard (Authentication → URL Configuration), set the
   // invite redirect URL to <your-origin>/set-password so Supabase delivers the
@@ -109,9 +111,33 @@ export function SetPasswordPage() {
       // Clear the flag so RequireAuth won't redirect this user again.
       await supabase.auth.updateUser({ data: { mustSetPassword: false } });
 
+      // Determine the correct landing page from the user's membership permissions.
+      let route = "/";
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.id) {
+          const { data: row } = await supabase
+            .from("memberships")
+            .select("role, permissions")
+            .eq("user_id", user.id)
+            .maybeSingle();
+          if (row) {
+            const rawPerms = (row as { role: string; permissions?: unknown }).permissions;
+            const perms: Record<string, boolean> =
+              rawPerms !== null && typeof rawPerms === "object" && !Array.isArray(rawPerms)
+                ? (rawPerms as Record<string, boolean>)
+                : {};
+            route = getDefaultRoute((row as { role: string }).role, perms);
+          }
+        }
+      } catch {
+        // Membership fetch failed — fall back to dashboard.
+      }
+
+      setResolvedRoute(route);
       setSuccess(true);
       redirectTimerRef.current = window.setTimeout(() => {
-        navigate("/", { replace: true });
+        navigate(route, { replace: true });
       }, 1200);
     } catch (submitError) {
       setError(
@@ -204,7 +230,7 @@ export function SetPasswordPage() {
             <button
               type="button"
               className="login-secondary-action"
-              onClick={() => navigate("/", { replace: true })}
+              onClick={() => navigate(resolvedRoute, { replace: true })}
             >
               Continue now
             </button>
