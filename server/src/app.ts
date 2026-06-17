@@ -25,6 +25,7 @@ import { mobileDailyYieldRouter } from "./routes/mobileDailyYield";
 import { mobileIrrigationLogRouter } from "./routes/mobileIrrigationLog";
 import { dailyLightRouter } from "./routes/dailyLight";
 import { climateReadingsRouter } from "./routes/climateReadings";
+import { importHistorySettingsRouter } from "./routes/importHistorySettings";
 import { pdfImportRouter } from "./routes/pdfImport";
 import { varietiesRouter } from "./routes/varieties";
 import { yieldEntriesRouter } from "./routes/yieldEntries";
@@ -136,5 +137,6 @@ app.use("/api", mobileDailyYieldRouter);
 app.use("/api", mobileIrrigationLogRouter);
 app.use("/api", dailyLightRouter);
 app.use("/api", climateReadingsRouter);
+app.use("/api", importHistorySettingsRouter);
 
 export { app };

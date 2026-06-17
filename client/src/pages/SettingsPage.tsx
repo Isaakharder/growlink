@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState, type CSSProperties } from "react";
+import { FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { apiFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
 
@@ -6,6 +6,16 @@ import { supabase } from "../lib/supabase";
 
 type AccessState = "loading" | "denied" | "allowed";
 type FormState = "idle" | "submitting" | "success" | "error";
+
+type ImportRunRow = {
+  id: string;
+  lotNumber: string;
+  sourceFilename: string | null;
+  varietyName: string | null;
+  isoYear: number | null;
+  isoWeek: number | null;
+  importedAt: string;
+};
 
 type InviteRow = {
   id: string;
@@ -125,6 +135,17 @@ export function SettingsPage() {
   const [removingMembershipId, setRemovingMembershipId] = useState<string | null>(null);
   const [removeInProgress, setRemoveInProgress] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+
+  // ── import history reset ──────────────────────────────────────────────────
+  const [importRuns, setImportRuns] = useState<ImportRunRow[]>([]);
+  const [importRunsLoading, setImportRunsLoading] = useState(false);
+  const [importRunsError, setImportRunsError] = useState<string | null>(null);
+  const [importFilterYear, setImportFilterYear] = useState("");
+  const [importFilterWeek, setImportFilterWeek] = useState("");
+  const [importFilterFilename, setImportFilterFilename] = useState("");
+  const [importDeleteResult, setImportDeleteResult] = useState<string | null>(null);
+  const [importDeleting, setImportDeleting] = useState(false);
+  const [importDeleteConfirm, setImportDeleteConfirm] = useState<{ title: string; ids: string[] } | null>(null);
 
   // ── pending invite actions ─────────────────────────────────────────────────
   const [cancelConfirmId, setCancelConfirmId] = useState<string | null>(null);
@@ -374,6 +395,102 @@ export function SettingsPage() {
     setCopied(false);
     setFormState("idle");
     setFormError(null);
+  }
+
+  // ── import history ────────────────────────────────────────────────────────
+
+  const currentUserRole = useMemo(
+    () => (currentUserId ? (users.find((u) => u.userId === currentUserId)?.role ?? null) : null),
+    [currentUserId, users]
+  );
+
+  const isOrgOwnerOrAdmin = currentUserRole === "owner" || currentUserRole === "admin";
+
+  useEffect(() => {
+    if (isOrgOwnerOrAdmin) void loadImportRuns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOrgOwnerOrAdmin]);
+
+  async function loadImportRuns() {
+    setImportRunsLoading(true);
+    setImportRunsError(null);
+    try {
+      const res = await apiFetch("/api/settings/import-runs");
+      if (res.status === 401 || res.status === 403) {
+        setImportRunsLoading(false);
+        return;
+      }
+      const body = (await res.json().catch(() => ({}))) as { runs?: ImportRunRow[]; message?: string };
+      if (!res.ok) {
+        setImportRunsError(getResponseMessage(body, "Failed to load import history."));
+        setImportRunsLoading(false);
+        return;
+      }
+      setImportRuns(Array.isArray(body.runs) ? body.runs : []);
+    } catch {
+      setImportRunsError("Network error while loading import history.");
+    } finally {
+      setImportRunsLoading(false);
+    }
+  }
+
+  const importFilteredRuns = useMemo(() => {
+    return importRuns.filter((r) => {
+      if (importFilterYear && String(r.isoYear ?? "") !== importFilterYear) return false;
+      if (importFilterWeek && String(r.isoWeek ?? "").padStart(2, "0") !== importFilterWeek.padStart(2, "0")) return false;
+      if (importFilterFilename && !(r.sourceFilename ?? "").toLowerCase().includes(importFilterFilename.toLowerCase())) return false;
+      return true;
+    });
+  }, [importRuns, importFilterYear, importFilterWeek, importFilterFilename]);
+
+  const importAvailableYears = useMemo(() => {
+    return Array.from(new Set(importRuns.map((r) => String(r.isoYear ?? "")).filter(Boolean))).sort().reverse();
+  }, [importRuns]);
+
+  const importAvailableWeeks = useMemo(() => {
+    const source = importFilterYear
+      ? importRuns.filter((r) => String(r.isoYear ?? "") === importFilterYear)
+      : importRuns;
+    return Array.from(new Set(source.map((r) => String(r.isoWeek ?? "")).filter(Boolean)))
+      .sort((a, b) => Number(a) - Number(b));
+  }, [importRuns, importFilterYear]);
+
+  function handleDeleteImportRuns() {
+    if (importFilteredRuns.length === 0) return;
+    const ids = importFilteredRuns.map((r) => r.id);
+    const count = ids.length;
+    const parts: string[] = [];
+    if (importFilterYear) parts.push(importFilterYear);
+    if (importFilterWeek) parts.push(`Week ${importFilterWeek.padStart(2, "0")}`);
+    const suffix = parts.length > 0 ? ` for ${parts.join(" ")}` : "";
+    setImportDeleteConfirm({ title: `Delete ${count} import run${count === 1 ? "" : "s"}${suffix}?`, ids });
+  }
+
+  async function executeDeleteImportRuns(ids: string[]) {
+    setImportDeleting(true);
+    setImportDeleteResult(null);
+    setImportRunsError(null);
+    try {
+      const res = await apiFetch("/api/settings/import-runs/delete", {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { deletedCount?: number; message?: string };
+      if (!res.ok) {
+        setImportRunsError(getResponseMessage(body, "Failed to delete import history."));
+        return;
+      }
+      const deleted = typeof body.deletedCount === "number" ? body.deletedCount : ids.length;
+      setImportDeleteResult(`Deleted ${deleted} import run${deleted === 1 ? "" : "s"}. Those lots can now be resent by the agent.`);
+      setImportFilterYear("");
+      setImportFilterWeek("");
+      setImportFilterFilename("");
+      void loadImportRuns();
+    } catch {
+      setImportRunsError("Network error. Please try again.");
+    } finally {
+      setImportDeleting(false);
+    }
   }
 
   // ── render ──────────────────────────────────────────────────────────────────
@@ -791,6 +908,150 @@ export function SettingsPage() {
           </div>
         </section>
       )}
+
+      {accessState === "allowed" && isOrgOwnerOrAdmin && (
+        <section style={sectionStyle}>
+          <h2 style={titleStyle}>Import History</h2>
+          <p style={descriptionStyle}>
+            Delete FlowMaster import records so the same lots and files can be resent by the agent. This does not delete any yield entries.
+          </p>
+
+          {importDeleteResult && (
+            <div style={importSuccessBannerStyle}>{importDeleteResult}</div>
+          )}
+          {importRunsError && <p style={errorBannerStyle}>{importRunsError}</p>}
+
+          <div style={cardStyle}>
+            {/* Filters */}
+            <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginBottom: "0.8rem", alignItems: "flex-end" }}>
+              <div>
+                <label style={labelStyle}>Year</label>
+                <select
+                  value={importFilterYear}
+                  onChange={(e) => { setImportFilterYear(e.target.value); setImportFilterWeek(""); }}
+                  style={{ ...inputStyle, width: "auto", minWidth: 90 }}
+                >
+                  <option value="">All years</option>
+                  {importAvailableYears.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Week</label>
+                <select
+                  value={importFilterWeek}
+                  onChange={(e) => setImportFilterWeek(e.target.value)}
+                  style={{ ...inputStyle, width: "auto", minWidth: 90 }}
+                >
+                  <option value="">All weeks</option>
+                  {importAvailableWeeks.map((w) => (
+                    <option key={w} value={w}>W{w.padStart(2, "0")}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <label style={labelStyle}>Source filename</label>
+                <input
+                  type="text"
+                  value={importFilterFilename}
+                  onChange={(e) => setImportFilterFilename(e.target.value)}
+                  placeholder="Filter by filename…"
+                  style={inputStyle}
+                />
+              </div>
+              {(importFilterYear || importFilterWeek || importFilterFilename) && (
+                <button
+                  type="button"
+                  onClick={() => { setImportFilterYear(""); setImportFilterWeek(""); setImportFilterFilename(""); }}
+                  style={secondaryButtonStyle}
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+
+            {/* Delete button */}
+            {importFilteredRuns.length > 0 && (
+              <div style={{ marginBottom: "0.8rem" }}>
+                <button
+                  type="button"
+                  onClick={handleDeleteImportRuns}
+                  disabled={importDeleting}
+                  style={importDeleteButtonStyle}
+                >
+                  {importDeleting
+                    ? "Deleting…"
+                    : `Delete import history${importFilterYear ? ` for ${importFilterYear}${importFilterWeek ? `-W${importFilterWeek.padStart(2, "0")}` : ""}` : ""} (${importFilteredRuns.length})`}
+                </button>
+              </div>
+            )}
+
+            {/* Table */}
+            {importRunsLoading ? (
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.875rem" }}>Loading import history…</p>
+            ) : importFilteredRuns.length === 0 ? (
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.875rem" }}>
+                {importRuns.length === 0 ? "No import history found." : "No records match the current filters."}
+              </p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Source File</th>
+                      <th style={thStyle}>Lot Number</th>
+                      <th style={thStyle}>Year</th>
+                      <th style={thStyle}>Week</th>
+                      <th style={thStyle}>Variety</th>
+                      <th style={thStyle}>Imported At</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importFilteredRuns.map((run) => (
+                      <tr key={run.id}>
+                        <td style={tdStyle}>{run.sourceFilename ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                        <td style={tdStyle}>{run.lotNumber}</td>
+                        <td style={tdStyle}>{run.isoYear ?? "—"}</td>
+                        <td style={tdStyle}>{run.isoWeek != null ? `W${String(run.isoWeek).padStart(2, "0")}` : "—"}</td>
+                        <td style={tdStyle}>{run.varietyName ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                        <td style={tdStyle}>{formatDate(run.importedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {importDeleteConfirm && (
+        <div style={modalOverlayStyle}>
+          <div style={modalPanelStyle}>
+            <h3 style={modalTitleStyle}>{importDeleteConfirm.title}</h3>
+            <p style={modalBodyStyle}>This only deletes import history.</p>
+            <p style={modalBodyStyle}>Yield entries will not be deleted.</p>
+            <p style={modalBodyStyle}>Deleting import history allows the same lots/files to be resent and appear in pending imports again.</p>
+            <div style={modalActionsStyle}>
+              <button type="button" onClick={() => setImportDeleteConfirm(null)} style={secondaryButtonStyle}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = importDeleteConfirm.ids;
+                  setImportDeleteConfirm(null);
+                  void executeDeleteImportRuns(ids);
+                }}
+                style={modalDangerButtonStyle}
+              >
+                Delete Import History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -948,6 +1209,77 @@ const tdStyle: CSSProperties = {
   color: "var(--text)",
   padding: "0.5rem 0.45rem",
   verticalAlign: "middle",
+};
+
+const importSuccessBannerStyle: CSSProperties = {
+  margin: "0 0 0.75rem",
+  padding: "0.55rem 0.7rem",
+  background: "#f0faf4",
+  border: "1px solid #a3d9b5",
+  borderRadius: 6,
+  fontSize: "0.82rem",
+  color: "#1f7a42",
+};
+
+const importDeleteButtonStyle: CSSProperties = {
+  padding: "0.45rem 0.8rem",
+  background: "#c0392b",
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: "0.85rem",
+  fontWeight: 600,
+};
+
+const modalOverlayStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+};
+
+const modalPanelStyle: CSSProperties = {
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  padding: "1.5rem",
+  maxWidth: 420,
+  width: "calc(100% - 2rem)",
+};
+
+const modalTitleStyle: CSSProperties = {
+  fontSize: "1.05rem",
+  fontWeight: 600,
+  color: "var(--text)",
+  margin: "0 0 0.75rem",
+};
+
+const modalBodyStyle: CSSProperties = {
+  fontSize: "0.875rem",
+  color: "var(--text-muted)",
+  margin: "0 0 0.4rem",
+};
+
+const modalActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: "0.6rem",
+  justifyContent: "flex-end",
+  marginTop: "1.25rem",
+};
+
+const modalDangerButtonStyle: CSSProperties = {
+  padding: "0.45rem 0.8rem",
+  background: "#c0392b",
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: "0.875rem",
+  fontWeight: 600,
 };
 
 function permissionsSummary(role: string, permissions: Record<string, boolean>): string {

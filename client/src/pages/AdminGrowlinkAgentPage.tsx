@@ -97,6 +97,11 @@ export function AdminGrowlinkAgentPage() {
   const [importRunsError, setImportRunsError] = useState<string | null>(null);
   const [selectedImportRunIds, setSelectedImportRunIds] = useState<Set<string>>(new Set());
   const [deleteImportRunsBusy, setDeleteImportRunsBusy] = useState(false);
+  const [deleteResult, setDeleteResult] = useState<string | null>(null);
+  const [filterYear, setFilterYear] = useState("");
+  const [filterWeek, setFilterWeek] = useState("");
+  const [filterFilename, setFilterFilename] = useState("");
+  const [importDeleteConfirm, setImportDeleteConfirm] = useState<{ title: string; ids: string[] } | null>(null);
   const [climateSummary, setClimateSummary] = useState<ClimateImportSummary | null>(null);
   const [climateSummaryLoading, setClimateSummaryLoading] = useState(true);
   const [climateSummaryError, setClimateSummaryError] = useState<string | null>(null);
@@ -117,6 +122,40 @@ export function AdminGrowlinkAgentPage() {
       lastImport
     };
   }, [keyRows, importRuns]);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    for (const run of importRuns) {
+      if (run.isoYear !== null) years.add(run.isoYear);
+    }
+    return Array.from(years).sort((a, b) => b - a);
+  }, [importRuns]);
+
+  const availableWeeks = useMemo(() => {
+    const selectedYear = Number(filterYear);
+    if (!Number.isInteger(selectedYear) || !filterYear) return [];
+    const weeks = new Set<number>();
+    for (const run of importRuns) {
+      if (run.isoYear === selectedYear && run.isoWeek !== null) weeks.add(run.isoWeek);
+    }
+    return Array.from(weeks).sort((a, b) => a - b);
+  }, [importRuns, filterYear]);
+
+  const filteredImportRuns = useMemo(() => {
+    return importRuns.filter((run) => {
+      if (filterYear && run.isoYear !== Number(filterYear)) return false;
+      if (filterWeek && run.isoWeek !== Number(filterWeek)) return false;
+      if (filterFilename.trim()) {
+        const q = filterFilename.trim().toLowerCase();
+        if (!run.sourceFilename?.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [importRuns, filterYear, filterWeek, filterFilename]);
+
+  const allFilteredSelected =
+    filteredImportRuns.length > 0 &&
+    filteredImportRuns.every((r) => selectedImportRunIds.has(r.id));
 
   const allImportRunsSelected =
     importRuns.length > 0 && selectedImportRunIds.size === importRuns.length;
@@ -293,32 +332,59 @@ export function AdminGrowlinkAgentPage() {
   }
 
   function toggleSelectAllImportRuns() {
-    setSelectedImportRunIds((prev) =>
-      prev.size === importRuns.length ? new Set() : new Set(importRuns.map((r) => r.id))
-    );
+    setSelectedImportRunIds((prev) => {
+      const next = new Set(prev);
+      if (allFilteredSelected) {
+        for (const r of filteredImportRuns) next.delete(r.id);
+      } else {
+        for (const r of filteredImportRuns) next.add(r.id);
+      }
+      return next;
+    });
   }
 
-  async function handleDeleteSelectedImportRuns() {
+  function handleDeleteSelectedImportRuns() {
     if (selectedImportRunIds.size === 0 || deleteImportRunsBusy) return;
-    const confirmed = window.confirm(
-      "This only deletes import history. It does not delete yield data. This lot may import again if the agent sends it."
-    );
-    if (!confirmed) return;
+    const ids = Array.from(selectedImportRunIds);
+    const count = ids.length;
+    setImportDeleteConfirm({ title: `Delete ${count} selected import run${count === 1 ? "" : "s"}?`, ids });
+  }
+
+  function handleDeleteWeekImportRuns() {
+    if (filteredImportRuns.length === 0 || deleteImportRunsBusy) return;
+    const ids = filteredImportRuns.map((r) => r.id);
+    const count = ids.length;
+    const parts: string[] = [];
+    if (filterYear) parts.push(filterYear);
+    if (filterWeek) parts.push(`Week ${String(filterWeek).padStart(2, "0")}`);
+    const suffix = parts.length > 0 ? ` for ${parts.join(" ")}` : "";
+    setImportDeleteConfirm({ title: `Delete ${count} import run${count === 1 ? "" : "s"}${suffix}?`, ids });
+  }
+
+  async function executeDeleteImportRuns(ids: string[]) {
     setDeleteImportRunsBusy(true);
     setImportRunsError(null);
+    setDeleteResult(null);
     try {
-      const ids = Array.from(selectedImportRunIds);
       const res = await apiFetch("/api/admin/flowmaster/import-runs/delete", {
         method: "POST",
         body: JSON.stringify({ ids })
       });
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const body = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        deletedCount?: number;
+      };
       if (!res.ok) {
-        setImportRunsError(getResponseMessage(body, "Failed to delete selected import runs."));
-        setDeleteImportRunsBusy(false);
+        setImportRunsError(getResponseMessage(body, "Failed to delete import runs."));
         return;
       }
-      setSelectedImportRunIds(new Set());
+      const deleted = typeof body.deletedCount === "number" ? body.deletedCount : ids.length;
+      setDeleteResult(`Deleted ${deleted} import run${deleted === 1 ? "" : "s"}.`);
+      setSelectedImportRunIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
       await loadImportRuns();
     } catch {
       setImportRunsError("Network error while deleting import runs.");
@@ -578,13 +644,80 @@ export function AdminGrowlinkAgentPage() {
       <section style={sectionStyle}>
         <h2 style={titleStyle}>Import History</h2>
         <p style={descriptionStyle}>
-          Lot-level import history. Deleting an entry allows the agent to re-import that lot.
+          Lot-level import history. Deleting records allows the agent to re-queue those lots for review.
         </p>
         <p style={warningTextStyle}>
-          Deleting import history does not delete already-imported yield data.
+          Deleting import history does not delete yield entries. Use this when entries were deleted
+          and the same files need to be resent.
         </p>
 
         {importRunsError && <p style={errorBannerStyle}>{importRunsError}</p>}
+        {deleteResult && <p style={successBannerStyle}>{deleteResult}</p>}
+
+        <div style={{ ...cardStyle, marginBottom: "0.75rem" }}>
+          <h3 style={{ ...subheadingStyle, marginBottom: "0.65rem" }}>Filters</h3>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div>
+              <label htmlFor="filter-year" style={labelStyle}>Year</label>
+              <select
+                id="filter-year"
+                value={filterYear}
+                onChange={(e) => {
+                  setFilterYear(e.target.value);
+                  setFilterWeek("");
+                  setDeleteResult(null);
+                }}
+                style={{ ...inputStyle, width: "auto", minWidth: 100 }}
+              >
+                <option value="">All years</option>
+                {availableYears.map((y) => (
+                  <option key={y} value={String(y)}>{y}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="filter-week" style={labelStyle}>Week</label>
+              <select
+                id="filter-week"
+                value={filterWeek}
+                onChange={(e) => { setFilterWeek(e.target.value); setDeleteResult(null); }}
+                disabled={!filterYear}
+                style={{ ...inputStyle, width: "auto", minWidth: 100 }}
+              >
+                <option value="">All weeks</option>
+                {availableWeeks.map((w) => (
+                  <option key={w} value={String(w)}>Week {w}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="filter-filename" style={labelStyle}>Source file (optional)</label>
+              <input
+                id="filter-filename"
+                type="text"
+                value={filterFilename}
+                onChange={(e) => { setFilterFilename(e.target.value); setDeleteResult(null); }}
+                placeholder="e.g. Packline_W22.pdf"
+                style={{ ...inputStyle, width: 220 }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => { setFilterYear(""); setFilterWeek(""); setFilterFilename(""); setDeleteResult(null); }}
+              disabled={!filterYear && !filterWeek && !filterFilename}
+              style={{ ...secondaryButtonStyle, marginTop: 0 }}
+            >
+              Clear filters
+            </button>
+          </div>
+
+          {(filterYear || filterWeek || filterFilename) && (
+            <p style={{ ...mutedTextStyle, marginTop: "0.5rem" }}>
+              Showing {filteredImportRuns.length} of {importRuns.length} import run
+              {importRuns.length === 1 ? "" : "s"}
+            </p>
+          )}
+        </div>
 
         <div style={cardStyle}>
           <div
@@ -593,25 +726,39 @@ export function AdminGrowlinkAgentPage() {
               justifyContent: "space-between",
               gap: "0.75rem",
               alignItems: "center",
-              marginBottom: "0.6rem",
+              marginBottom: "0.75rem",
               flexWrap: "wrap"
             }}
           >
-            <h3 style={subheadingStyle}>Imports</h3>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <h3 style={subheadingStyle}>Runs</h3>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               <button
                 type="button"
                 onClick={() => void loadImportRuns()}
                 disabled={importRunsLoading || deleteImportRunsBusy}
-                style={secondaryButtonStyle}
+                style={{ ...secondaryButtonStyle, marginTop: 0 }}
               >
                 Refresh
               </button>
               <button
                 type="button"
-                onClick={() => void handleDeleteSelectedImportRuns()}
-                disabled={selectedImportRunIds.size === 0 || deleteImportRunsBusy}
+                onClick={handleDeleteWeekImportRuns}
+                disabled={filteredImportRuns.length === 0 || deleteImportRunsBusy}
                 style={smallDangerButtonStyle}
+                title="Delete import history for all currently filtered runs"
+              >
+                {deleteImportRunsBusy
+                  ? "Deleting..."
+                  : filterYear && filterWeek
+                    ? `Delete history for ${filterYear}-W${String(filterWeek).padStart(2, "0")} (${filteredImportRuns.length})`
+                    : `Delete filtered (${filteredImportRuns.length})`}
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSelectedImportRuns}
+                disabled={selectedImportRunIds.size === 0 || deleteImportRunsBusy}
+                style={{ ...smallDangerButtonStyle, background: "#7f1d1d" }}
+                title="Delete only the individually checked rows"
               >
                 {deleteImportRunsBusy
                   ? "Deleting..."
@@ -622,8 +769,10 @@ export function AdminGrowlinkAgentPage() {
 
           {importRunsLoading ? (
             <p style={mutedTextStyle}>Loading import history...</p>
-          ) : importRuns.length === 0 ? (
-            <p style={mutedTextStyle}>No imports found.</p>
+          ) : filteredImportRuns.length === 0 ? (
+            <p style={mutedTextStyle}>
+              {importRuns.length === 0 ? "No imports found." : "No runs match the current filters."}
+            </p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={tableStyle}>
@@ -632,21 +781,21 @@ export function AdminGrowlinkAgentPage() {
                     <th style={tableHeaderStyle}>
                       <input
                         type="checkbox"
-                        aria-label="Select all import runs"
-                        checked={allImportRunsSelected}
+                        aria-label="Select all visible import runs"
+                        checked={allFilteredSelected}
                         onChange={toggleSelectAllImportRuns}
                       />
                     </th>
-                    <th style={tableHeaderStyle}>Lot Number</th>
                     <th style={tableHeaderStyle}>Source File</th>
+                    <th style={tableHeaderStyle}>Lot Number</th>
                     <th style={tableHeaderStyle}>Variety</th>
-                    <th style={tableHeaderStyle}>ISO Year/Week</th>
+                    <th style={tableHeaderStyle}>Year / Week</th>
                     <th style={tableHeaderStyle}>Start Time</th>
                     <th style={tableHeaderStyle}>Imported At</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {importRuns.map((run) => (
+                  {filteredImportRuns.map((run) => (
                     <tr key={run.id}>
                       <td style={tableCellStyle}>
                         <input
@@ -656,8 +805,8 @@ export function AdminGrowlinkAgentPage() {
                           onChange={() => toggleImportRunSelection(run.id)}
                         />
                       </td>
-                      <td style={tableCellStyle}>{run.lotNumber}</td>
                       <td style={tableCellStyle}>{run.sourceFilename ?? "—"}</td>
+                      <td style={tableCellStyle}>{run.lotNumber}</td>
                       <td style={tableCellStyle}>{run.varietyName ?? "—"}</td>
                       <td style={tableCellStyle}>
                         {run.isoYear !== null && run.isoWeek !== null
@@ -726,6 +875,33 @@ export function AdminGrowlinkAgentPage() {
           </div>
         )}
       </section>
+
+      {importDeleteConfirm && (
+        <div style={modalOverlayStyle}>
+          <div style={modalPanelStyle}>
+            <h3 style={modalTitleStyle}>{importDeleteConfirm.title}</h3>
+            <p style={modalBodyStyle}>This only deletes import history.</p>
+            <p style={modalBodyStyle}>Yield entries will not be deleted.</p>
+            <p style={modalBodyStyle}>Deleting import history allows the same lots/files to be resent and appear in pending imports again.</p>
+            <div style={modalActionsStyle}>
+              <button type="button" onClick={() => setImportDeleteConfirm(null)} style={secondaryButtonStyle}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = importDeleteConfirm.ids;
+                  setImportDeleteConfirm(null);
+                  void executeDeleteImportRuns(ids);
+                }}
+                style={modalDangerButtonStyle}
+              >
+                Delete Import History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -882,6 +1058,16 @@ const errorBannerStyle: CSSProperties = {
   color: "#c0392b"
 };
 
+const successBannerStyle: CSSProperties = {
+  margin: "0 0 0.5rem",
+  padding: "0.55rem 0.7rem",
+  background: "#e8f8ef",
+  border: "1px solid #bfe9cf",
+  borderRadius: 6,
+  fontSize: "0.82rem",
+  color: "#1f7a42"
+};
+
 const tableStyle: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
@@ -941,4 +1127,54 @@ const disconnectedBadgeStyle: CSSProperties = {
   background: "#f9eaea",
   color: "#8f2d1f",
   border: "1px solid #f0c5be"
+};
+
+const modalOverlayStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+};
+
+const modalPanelStyle: CSSProperties = {
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  padding: "1.5rem",
+  maxWidth: 420,
+  width: "calc(100% - 2rem)",
+};
+
+const modalTitleStyle: CSSProperties = {
+  fontSize: "1.05rem",
+  fontWeight: 600,
+  color: "var(--text)",
+  margin: "0 0 0.75rem",
+};
+
+const modalBodyStyle: CSSProperties = {
+  fontSize: "0.875rem",
+  color: "var(--text-muted)",
+  margin: "0 0 0.4rem",
+};
+
+const modalActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: "0.6rem",
+  justifyContent: "flex-end",
+  marginTop: "1.25rem",
+};
+
+const modalDangerButtonStyle: CSSProperties = {
+  padding: "0.45rem 0.8rem",
+  background: "#c0392b",
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: "0.875rem",
+  fontWeight: 600,
 };
