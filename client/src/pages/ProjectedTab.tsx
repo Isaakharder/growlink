@@ -473,7 +473,9 @@ export function ProjectedTab() {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Failed to load projections (${res.status})`);
       }
-      setAllProjections((await res.json()) as ApiProjection[]);
+      const rows = (await res.json()) as ApiProjection[];
+      console.log(`[Projections] API returned ${rows.length} rows for target_year=${targetYear}`, rows.map(r => `W${r.target_week}(forecast W${r.forecast_week})`));
+      setAllProjections(rows);
     } catch (e: unknown) {
       setPageError(e instanceof Error ? e.message : "Failed to load projections");
     } finally {
@@ -522,7 +524,7 @@ export function ProjectedTab() {
   // ── Filtered + grouped projections for display ─────────────────────────────
 
   const filtered = useMemo(() => {
-    return allProjections.filter((p) => {
+    const result = allProjections.filter((p) => {
       if (filterForecastKey && `${p.forecast_year}:${p.forecast_week}` !== filterForecastKey) return false;
       if (filterLevel && p.projection_level !== filterLevel) return false;
       if (filterVarietyId && p.variety_id !== filterVarietyId) return false;
@@ -530,6 +532,8 @@ export function ProjectedTab() {
       if (filterUnit && p.unit !== filterUnit) return false;
       return true;
     });
+    console.log(`[Projections] After filtering: ${result.length} of ${allProjections.length} rows`, { filterForecastKey, filterLevel, filterVarietyId, filterColor, filterUnit });
+    return result;
   }, [allProjections, filterForecastKey, filterLevel, filterVarietyId, filterColor, filterUnit]);
 
   const groupedByTargetWeek = useMemo(() => {
@@ -539,7 +543,7 @@ export function ProjectedTab() {
       g.push(p);
       byWeek.set(p.target_week, g);
     }
-    return [...byWeek.keys()]
+    const groups = [...byWeek.keys()]
       .sort((a, b) => a - b)
       .map((week) => ({
         week,
@@ -551,6 +555,8 @@ export function ProjectedTab() {
           return aLbl.localeCompare(bLbl) || a.unit.localeCompare(b.unit);
         }),
       }));
+    console.log(`[Projections] Rendering ${groups.length} target-week group(s): weeks [${groups.map(g => g.week).join(", ")}], total rows=${groups.reduce((s, g) => s + g.items.length, 0)}`);
+    return groups;
   }, [filtered]);
 
   // ── Inline form: weeks-out preview ────────────────────────────────────────

@@ -10,6 +10,7 @@ type YieldEntryPayload = {
   week: number;
   size_kg: Record<string, number>;
   average_fruit_weight_g: number | null;
+  packed_date: string | null;
 };
 
 type VarietyForCalc = {
@@ -87,12 +88,20 @@ function validatePayload(input: unknown): YieldEntryPayload {
     body.average_fruit_weight_g
   );
 
+  const packedDateRaw =
+    typeof body.packed_date === "string" ? body.packed_date.trim() : null;
+  const packed_date =
+    packedDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(packedDateRaw)
+      ? packedDateRaw
+      : null;
+
   return {
     variety_id,
     year,
     week,
     size_kg,
-    average_fruit_weight_g
+    average_fruit_weight_g,
+    packed_date
   };
 }
 
@@ -170,7 +179,7 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
   const { data, error } = await supabase
     .from("yield_entries")
     .select(
-      "id, variety_id, year, week, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name)"
+      "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name)"
     )
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });

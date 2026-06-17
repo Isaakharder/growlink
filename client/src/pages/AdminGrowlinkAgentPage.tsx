@@ -28,6 +28,12 @@ type ImportRunRow = {
   importedAt: string;
 };
 
+type ClimateImportSummary = {
+  totalImports: number;
+  lastImportAt: string | null;
+  readingsToday: number;
+};
+
 type CreatedKeyState = {
   key: string;
   label: string;
@@ -67,6 +73,12 @@ const DATA_SOURCES = [
     name: "Packline KG Import",
     description: "Raw kg entries from packline systems via upload key",
     status: "enabled" as const
+  },
+  {
+    id: "climate-agent",
+    name: "Climate Agent",
+    description: "Weather station + block summary CSV exports from the Windows Climate Agent",
+    status: "enabled" as const
   }
 ];
 
@@ -85,6 +97,9 @@ export function AdminGrowlinkAgentPage() {
   const [importRunsError, setImportRunsError] = useState<string | null>(null);
   const [selectedImportRunIds, setSelectedImportRunIds] = useState<Set<string>>(new Set());
   const [deleteImportRunsBusy, setDeleteImportRunsBusy] = useState(false);
+  const [climateSummary, setClimateSummary] = useState<ClimateImportSummary | null>(null);
+  const [climateSummaryLoading, setClimateSummaryLoading] = useState(true);
+  const [climateSummaryError, setClimateSummaryError] = useState<string | null>(null);
 
   const agentHealth = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -110,6 +125,7 @@ export function AdminGrowlinkAgentPage() {
     void loadOrganizations();
     void loadKeys();
     void loadImportRuns();
+    void loadClimateSummary();
   }, []);
 
   async function loadOrganizations() {
@@ -174,6 +190,30 @@ export function AdminGrowlinkAgentPage() {
       setImportRunsError("Network error while loading import runs.");
     } finally {
       setImportRunsLoading(false);
+    }
+  }
+
+  async function loadClimateSummary() {
+    setClimateSummaryLoading(true);
+    try {
+      const res = await apiFetch("/api/admin/climate-imports/summary");
+      const body = (await res.json().catch(() => ({}))) as Partial<ClimateImportSummary> & {
+        message?: string;
+      };
+      if (!res.ok) {
+        setClimateSummaryError(getResponseMessage(body, "Failed to load climate import status."));
+        return;
+      }
+      setClimateSummary({
+        totalImports: body.totalImports ?? 0,
+        lastImportAt: body.lastImportAt ?? null,
+        readingsToday: body.readingsToday ?? 0
+      });
+      setClimateSummaryError(null);
+    } catch {
+      setClimateSummaryError("Network error while loading climate import status.");
+    } finally {
+      setClimateSummaryLoading(false);
     }
   }
 
@@ -657,6 +697,34 @@ export function AdminGrowlinkAgentPage() {
             value={agentHealth.lastImport ? formatDateTime(agentHealth.lastImport) : "—"}
           />
         </div>
+      </section>
+
+      {/* ── Section 6: Climate Agent ──────────────────────────────────────── */}
+      <section style={sectionStyle}>
+        <h2 style={titleStyle}>Climate Agent</h2>
+        <p style={descriptionStyle}>
+          Import status for the requesting admin's organization. Scoped the same way as FlowMaster
+          import history above.
+        </p>
+        {climateSummaryError && <p style={errorBannerStyle}>{climateSummaryError}</p>}
+        {climateSummaryLoading ? (
+          <p style={mutedTextStyle}>Loading climate import status...</p>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+              gap: "0.75rem"
+            }}
+          >
+            <StatCard label="Total Climate Imports" value={String(climateSummary?.totalImports ?? 0)} />
+            <StatCard label="Readings Today" value={String(climateSummary?.readingsToday ?? 0)} />
+            <StatCard
+              label="Last Climate Import"
+              value={climateSummary?.lastImportAt ? formatDateTime(climateSummary.lastImportAt) : "—"}
+            />
+          </div>
+        )}
       </section>
     </div>
   );

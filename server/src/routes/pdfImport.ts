@@ -91,6 +91,7 @@ type PdfImportPayload = {
   isoWeek: number;
   sizeBreakdown: Record<string, number>;
   averageFruitWeightG: number | null;
+  packedDate: string | null;
   sourceRuns: Array<{
     lotNumber: string;
     startTime: string | null;
@@ -295,6 +296,13 @@ function parsePdfImportPayload(input: unknown): PdfImportPayload {
     throw new Error("No unique lot numbers were provided for import.");
   }
 
+  const packedDateRaw =
+    typeof body.packedDate === "string" ? body.packedDate.trim() : null;
+  const packedDate =
+    packedDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(packedDateRaw)
+      ? packedDateRaw
+      : null;
+
   return {
     mode: body.mode,
     varietyId,
@@ -302,6 +310,7 @@ function parsePdfImportPayload(input: unknown): PdfImportPayload {
     isoWeek,
     sizeBreakdown,
     averageFruitWeightG,
+    packedDate,
     sourceRuns
   };
 }
@@ -933,6 +942,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       variety_id: payload.varietyId,
       year: payload.isoYear,
       week: payload.isoWeek,
+      packed_date: payload.packedDate,
       size_kg: sizeKgById,
       average_fruit_weight_g: payload.averageFruitWeightG,
       ...totals

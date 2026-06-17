@@ -27,6 +27,7 @@ type YieldEntry = {
   variety_name: string;
   year: number;
   week: number;
+  packed_date: string | null;
   size_kg: Record<string, number>;
   total_kg: number;
   average_fruit_weight_g: number | null;
@@ -40,6 +41,7 @@ type YieldEntryFormState = {
   variety_id: string;
   year: string;
   week: string;
+  packed_date: string;
   average_fruit_weight_g: string;
   size_kg: Record<string, string>;
 };
@@ -196,6 +198,13 @@ function roundTo(value: number, decimals: number) {
   return Math.round(value * factor) / factor;
 }
 
+function localIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function numberOrZero(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -241,6 +250,7 @@ export function KgEntriesTab() {
     variety_id: "",
     year: String(currentYear),
     week: String(getCurrentWeek(currentYear)),
+    packed_date: localIsoDate(new Date()),
     average_fruit_weight_g: "",
     size_kg: {}
   });
@@ -270,6 +280,40 @@ export function KgEntriesTab() {
     }
     return totalKg / selectedVariety.case_kg;
   }, [selectedVariety, totalKg]);
+
+  const weekSummaryDays = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const sunday = new Date(today);
+    sunday.setDate(today.getDate() - today.getDay());
+    const todayIso = localIsoDate(today);
+    const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const day = new Date(sunday);
+      day.setDate(sunday.getDate() + i);
+      const isoDate = localIsoDate(day);
+
+      const byVariety = new Map<string, { name: string; kg: number }>();
+      for (const entry of entries) {
+        if (entry.packed_date !== isoDate) continue;
+        const existing = byVariety.get(entry.variety_id);
+        if (existing) {
+          existing.kg += Number(entry.total_kg);
+        } else {
+          byVariety.set(entry.variety_id, { name: entry.variety_name, kg: Number(entry.total_kg) });
+        }
+      }
+
+      return {
+        isoDate,
+        dayName: DAY_NAMES[i],
+        shortDate: day.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+        isToday: isoDate === todayIso,
+        varieties: Array.from(byVariety.values()).sort((a, b) => b.kg - a.kg)
+      };
+    });
+  }, [entries]);
 
   function resetSizeKgFields(sizes: YieldSizeOption[]) {
     const next: Record<string, string> = {};
@@ -464,6 +508,7 @@ export function KgEntriesTab() {
       variety_id: form.variety_id,
       year: Number(form.year),
       week: Number(form.week),
+      packed_date: form.packed_date || null,
       size_kg: payloadSizeKg,
       average_fruit_weight_g:
         form.average_fruit_weight_g.trim() === ""
@@ -551,6 +596,7 @@ export function KgEntriesTab() {
       variety_id: entry.variety_id,
       year: String(entry.year),
       week: String(entry.week),
+      packed_date: entry.packed_date ?? localIsoDate(new Date()),
       average_fruit_weight_g:
         entry.average_fruit_weight_g === null ? "" : String(entry.average_fruit_weight_g),
       size_kg: nextSizeKg
@@ -565,6 +611,7 @@ export function KgEntriesTab() {
       variety_id: varieties[0]?.id ?? "",
       year: String(currentYear),
       week: String(getCurrentWeek(currentYear)),
+      packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
       size_kg: resetSizeKgFields(yieldSizes)
     });
@@ -579,6 +626,7 @@ export function KgEntriesTab() {
       variety_id: varieties[0]?.id ?? "",
       year: String(currentYear),
       week: String(getCurrentWeek(currentYear)),
+      packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
       size_kg: resetSizeKgFields(yieldSizes)
     });
@@ -1092,6 +1140,11 @@ export function KgEntriesTab() {
         throw new Error("No new lot readings are available to import for this preview card.");
       }
 
+      const packedDate =
+        group.sourceReadings
+          .filter((r) => !r.skipped && r.startDate != null)
+          .map((r) => r.startDate)[0] ?? null;
+
       const response = await apiFetch(PDF_IMPORT_URL, {
         method: "POST",
         body: JSON.stringify({
@@ -1101,6 +1154,7 @@ export function KgEntriesTab() {
           isoWeek: group.isoWeek,
           sizeBreakdown: group.sizeBreakdown,
           averageFruitWeightG: group.averageFruitWeightG,
+          packedDate,
           sourceRuns: importableSourceRuns
         })
       });
@@ -1293,6 +1347,35 @@ export function KgEntriesTab() {
           </div>
         )}
 
+        <div className="coming-soon-card yield-entry-weekly-summary">
+          <h2>This Week</h2>
+          <div className="week-day-grid">
+            {weekSummaryDays.map((day) => (
+              <div
+                key={day.isoDate}
+                className={`week-day-col${day.isToday ? " week-day-today" : ""}`}
+              >
+                <div className="week-day-header">
+                  <span className="week-day-name">{day.dayName}</span>
+                  <span className="week-day-date">{day.shortDate}</span>
+                </div>
+                {day.varieties.length === 0 ? (
+                  <p className="week-day-empty">No entries</p>
+                ) : (
+                  <ul className="week-day-entries">
+                    {day.varieties.map((v) => (
+                      <li key={v.name} className="week-day-entry">
+                        <span className="week-day-variety">{v.name}</span>
+                        <span className="week-day-kg">{roundTo(v.kg, 1)} kg</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="coming-soon-card yield-entry-recent-entries">
           <h2>Recent Entries</h2>
 
@@ -1301,6 +1384,7 @@ export function KgEntriesTab() {
           {entries.length === 0 && <p>No yield entries yet.</p>}
 
           {entries.length > 0 && (
+            <>
             <div className="varieties-table-wrapper yield-entry-table-wrapper">
               <table className="varieties-table yield-entry-table">
                 <thead>
@@ -1308,6 +1392,7 @@ export function KgEntriesTab() {
                     <th>Variety</th>
                     <th>Year</th>
                     <th>Week</th>
+                    <th>Packed Date</th>
                     <th>Total kg</th>
                     <th>kg/m²</th>
                     <th>Total cases</th>
@@ -1316,11 +1401,12 @@ export function KgEntriesTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.map((entry) => (
+                  {entries.slice(0, 7).map((entry) => (
                     <tr key={entry.id}>
                       <td>{entry.variety_name}</td>
                       <td>{entry.year}</td>
                       <td>{entry.week}</td>
+                      <td>{entry.packed_date ?? "—"}</td>
                       <td>{roundTo(entry.total_kg, 3)}</td>
                       <td>{roundTo(entry.kg_per_m2, 3)}</td>
                       <td>{roundTo(entry.total_cases, 3)}</td>
@@ -1348,6 +1434,8 @@ export function KgEntriesTab() {
                 </tbody>
               </table>
             </div>
+            <p className="recent-entries-footer">Showing 7 most recent entries</p>
+            </>
           )}
         </div>
       </div>
@@ -1699,6 +1787,17 @@ export function KgEntriesTab() {
                       </option>
                     ))}
                   </select>
+                </label>
+
+                <label>
+                  Packed Date
+                  <input
+                    type="date"
+                    value={form.packed_date}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, packed_date: event.target.value }))
+                    }
+                  />
                 </label>
 
                 <div className="yield-size-fields">

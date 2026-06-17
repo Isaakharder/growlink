@@ -307,7 +307,7 @@ export function CasesEntryTab() {
       }
 
       return b.updated_at.localeCompare(a.updated_at);
-    });
+    }).slice(0, 7);
   }, [entries, isRecentExpanded, latestWeekKey, recentSixWeekKeys]);
 
   const varietyStatsByColor = useMemo(() => {
@@ -720,6 +720,7 @@ export function CasesEntryTab() {
         {entries.length === 0 && <p>No case entries yet.</p>}
 
         {entries.length > 0 && displayedRecentEntries.length > 0 && (
+          <>
           <div className="varieties-table-wrapper yield-entry-table-wrapper">
             <table className="varieties-table yield-entry-table">
               <thead>
@@ -814,6 +815,8 @@ export function CasesEntryTab() {
               </tbody>
             </table>
           </div>
+          <p className="recent-entries-footer">Showing 7 most recent entries</p>
+          </>
         )}
       </div>
 

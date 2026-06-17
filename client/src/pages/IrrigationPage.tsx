@@ -8,7 +8,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { apiFetch } from "../lib/api";
+import { apiFetch, fetchClimateReadings, type ClimateReading } from "../lib/api";
 
 type GroupType = "phase" | "zone" | "color";
 
@@ -74,6 +74,13 @@ type DailyLightLog = {
 
 const IRRIGATION_LOGS_URL = "/api/irrigation/logs?days=30";
 const DAILY_LIGHT_URL = "/api/daily-light?days=1095";
+
+// Display label + unit for each metric_name the Climate Agent reports.
+// GrowLink only imports Weather Station Radiation Sum -- block summary
+// metrics (air temperature, heating setpoint, RH) belong to CropLink.
+const CLIMATE_METRICS: Array<{ key: string; label: string; unit: string }> = [
+  { key: "radiation_sum", label: "Radiation Sum", unit: "J/cm²" }
+];
 const LIGHT_YEAR_COLOR_PALETTE = ["#2f6fed", "#0f766e", "#d97706", "#7c3aed", "#c026d3", "#b45309"];
 const TREND_LIMITS: Record<"ec" | "ph" | "drain" | "feedVolume", MetricLimit> = {
   ec: { lower: 2, upper: 5 },
@@ -199,6 +206,13 @@ function formatLogDate(value: string | null): string {
   return new Date(time).toLocaleDateString();
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) return "--";
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return value;
+  return new Date(time).toLocaleString();
+}
+
 function scaleToDisplayRange(value: number | null, limit: MetricLimit): number | null {
   if (value === null || !Number.isFinite(value)) {
     return null;
@@ -296,6 +310,9 @@ export function IrrigationPage() {
   const [checkedLightYears, setCheckedLightYears] = useState<Set<number>>(
     () => new Set([new Date().getFullYear()])
   );
+  const [climateReadings, setClimateReadings] = useState<ClimateReading[]>([]);
+  const [climateLoading, setClimateLoading] = useState(false);
+  const [climateError, setClimateError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -373,6 +390,58 @@ export function IrrigationPage() {
       active = false;
     };
   }, [pageTab, lightFetchKey]);
+
+  useEffect(() => {
+    if (pageTab !== "climate") return;
+
+    let active = true;
+    setClimateLoading(true);
+    setClimateError(null);
+
+    async function fetchClimate() {
+      try {
+        const data = await fetchClimateReadings({ limit: 1000 });
+        if (active) {
+          setClimateReadings(data);
+        }
+      } catch (fetchError) {
+        if (active) {
+          setClimateError(
+            fetchError instanceof Error ? fetchError.message : "Failed to load climate readings"
+          );
+        }
+      } finally {
+        if (active) {
+          setClimateLoading(false);
+        }
+      }
+    }
+
+    void fetchClimate();
+
+    return () => {
+      active = false;
+    };
+  }, [pageTab]);
+
+  // Most recent reading per (metric, zone), newest first from the API.
+  const latestClimateByMetricZone = useMemo(() => {
+    const map = new Map<string, ClimateReading>();
+    for (const reading of climateReadings) {
+      const key = `${reading.metric_name}::${reading.zone_label ?? ""}`;
+      if (!map.has(key)) {
+        map.set(key, reading);
+      }
+    }
+    return map;
+  }, [climateReadings]);
+
+  const climateLastUpdated = useMemo(() => {
+    return climateReadings.reduce<string | null>((latest, reading) => {
+      if (!latest || reading.timestamp > latest) return reading.timestamp;
+      return latest;
+    }, null);
+  }, [climateReadings]);
 
   const rowsWithMetrics = useMemo(
     () => logs.map((log) => ({ log, metrics: computeRowMetrics(log) })),
@@ -786,6 +855,81 @@ export function IrrigationPage() {
 
       {pageTab === "climate" ? (
         <>
+          <div className="coming-soon-card">
+            <h2>Climate Agent</h2>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "-0.3rem" }}>
+              Automated light/radiation readings ingested from the GrowLink Climate Agent (Weather
+              Station Radiation Sum). Separate from the manual Daily Light log below. Block summary
+              climate data (temperature, heating setpoint, RH) is handled by CropLink, not GrowLink.
+            </p>
+
+            {climateLoading ? <p>Loading...</p> : null}
+            {climateError ? <p className="form-error">{climateError}</p> : null}
+
+            {!climateLoading && !climateError && climateReadings.length === 0 ? (
+              <p>
+                No Climate Agent data yet. Create an upload key for this organization in Admin
+                &gt; GrowLink Agent, then connect the Windows Climate Agent.
+              </p>
+            ) : null}
+
+            {!climateLoading && !climateError && climateReadings.length > 0 ? (
+              <>
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                  Last reading: {formatDateTime(climateLastUpdated)}
+                </p>
+
+                {CLIMATE_METRICS.map((metric) => {
+                  const rows = Array.from(latestClimateByMetricZone.values())
+                    .filter((reading) => reading.metric_name === metric.key)
+                    .sort((a, b) => (a.zone_label ?? "").localeCompare(b.zone_label ?? ""));
+
+                  if (rows.length === 0) return null;
+
+                  return (
+                    <div key={metric.key} style={{ marginTop: "1rem" }}>
+                      <h3 style={{ fontSize: "0.95rem", marginBottom: "0.4rem" }}>
+                        {metric.label} [{metric.unit}]
+                      </h3>
+                      {metric.key === "radiation_sum" ? (
+                        <p
+                          style={{
+                            fontSize: "0.78rem",
+                            color: "var(--text-muted)",
+                            marginTop: "-0.2rem",
+                            marginBottom: "0.5rem"
+                          }}
+                        >
+                          Synced into Daily Light below
+                        </p>
+                      ) : null}
+                      <div className="varieties-table-wrapper irrigation-raw-table-wrapper">
+                        <table className="varieties-table irrigation-raw-table">
+                          <thead>
+                            <tr>
+                              <th>Zone / Station</th>
+                              <th>Latest Value</th>
+                              <th>As Of</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((reading) => (
+                              <tr key={`${reading.metric_name}-${reading.zone_label ?? "site"}`}>
+                                <td>{reading.zone_label ?? "(whole site)"}</td>
+                                <td>{roundTo(reading.metric_value, 1)} {reading.unit}</td>
+                                <td>{formatDateTime(reading.timestamp)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            ) : null}
+          </div>
+
           <div className="coming-soon-card">
             <h2>Log Daily Light</h2>
 

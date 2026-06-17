@@ -28,7 +28,19 @@
       "Bash(xargs grep -l \"/api/daily-light\")",
       "Bash(xargs grep -l \"daily_light\")",
       "Bash(xargs grep -l \"irrigation\")",
-      "Bash(grep -E \"\\\\.ts$\")"
+      "Bash(grep -E \"\\\\.ts$\")",
+      "Bash(xargs grep -l \"projection\\\\|projected\")",
+      "Bash(xargs grep -l \"projection\\\\|forecast\")",
+      "Bash(cd /c/GrowLink/server && cat .env 2>/dev/null | grep -v '^#' | sed 's/=.*/=<redacted>/' ; echo \"---\"; ls src/scripts)",
+      "Read(//c/c/GrowLink/server/**)",
+      "Read(//c/c/GrowLink/**)",
+      "Read(//c/c/GrowLink/supabase/**)",
+      "Bash(npx tsx *)",
+      "Bash(curl -s http://localhost:8080/api/health)",
+      "Bash(curl -s -X POST http://localhost:8080/api/agent/ping -H \"X-Upload-Key: test-climate-key-12345\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8080/api/climate/readings)",
+      "Bash(GROWLINK_API_URL=http://localhost:8080/api GROWLINK_UPLOAD_KEY=radiation-sync-test-key-67890 npx tsx src/scripts/testImport.ts)",
+      "Bash(GROWLINK_API_URL=http://localhost:8080/api GROWLINK_UPLOAD_KEY=policy-change-test-key-001 npx tsx src/scripts/testImport.ts)"
     ]
   }
 }

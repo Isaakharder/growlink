@@ -109,6 +109,50 @@ export async function getOrganizationId(): Promise<string> {
   }
 }
 
+export type ClimateReading = {
+  id: number;
+  timestamp: string;
+  zone_label: string | null;
+  metric_name: string;
+  metric_value: number;
+  unit: string;
+  source_file: string;
+};
+
+export type ClimateReadingsQuery = {
+  metricName?: string;
+  zoneLabel?: string;
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
+};
+
+/**
+ * Fetches recent climate_readings (Climate Agent CSV imports) for the
+ * caller's organization, newest first. Throws on a non-OK response so
+ * callers can surface the error message from the body.
+ */
+export async function fetchClimateReadings(
+  query: ClimateReadingsQuery = {}
+): Promise<ClimateReading[]> {
+  const params = new URLSearchParams();
+  if (query.metricName) params.set("metric_name", query.metricName);
+  if (query.zoneLabel) params.set("zone_label", query.zoneLabel);
+  if (query.startDate) params.set("start_date", query.startDate);
+  if (query.endDate) params.set("end_date", query.endDate);
+  if (query.limit) params.set("limit", String(query.limit));
+
+  const queryString = params.toString();
+  const response = await apiFetch(`/api/climate/readings${queryString ? `?${queryString}` : ""}`);
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? `Failed to load climate readings (${response.status})`);
+  }
+
+  return (await response.json()) as ClimateReading[];
+}
+
 export async function getOrganizationName(): Promise<string | null> {
   try {
     const { data: { user } } = await supabase.auth.getUser();
