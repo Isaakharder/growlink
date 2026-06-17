@@ -15,6 +15,7 @@ type YieldEntryPayload = {
 
 type VarietyForCalc = {
   id: string;
+  name: string;
   area_m2: number;
   case_kg: number;
 };
@@ -119,7 +120,7 @@ async function fetchVarietyForCalc(
 ): Promise<VarietyForCalc> {
   const { data, error } = await supabase
     .from("varieties")
-    .select("id, area_m2, case_kg")
+    .select("id, name, area_m2, case_kg")
     .eq("id", varietyId)
     .eq("organization_id", organizationId)
     .single();
@@ -232,6 +233,15 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
       .single();
 
     if (error) {
+      if (
+        error.code === "23505" &&
+        typeof error.message === "string" &&
+        error.message.includes("yield_entries_org_variety_year_week_key")
+      ) {
+        return res.status(409).json({
+          message: `A yield entry already exists for ${variety.name} – Week ${payload.week}, ${payload.year}. Edit the existing entry instead.`
+        });
+      }
       return sendSafeError(res, 500, "Failed to create yield entry.", "Yield entry insert error:", error);
     }
 
