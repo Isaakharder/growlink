@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
 
+type CheckType = "winding_pruning" | "picking_peppers";
+
 type SetupGroup = {
   id: string;
   type: string;
@@ -12,6 +14,8 @@ type SetupRow = {
   id: string;
   group_id: string;
   row_number: number;
+  plants_per_slab: number;
+  stems_per_plant: number;
   length_meters: number | null;
 };
 
@@ -25,6 +29,7 @@ type QualityMetric = {
   id: string;
   name: string;
   active: boolean;
+  check_type: CheckType;
 };
 
 type QualityCheck = {
@@ -73,11 +78,12 @@ export function MobileQualityCheckPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Selection state
+  const [checkType, setCheckType] = useState<CheckType | "">("");
   const [phaseId, setPhaseId] = useState("");
   const [rowId, setRowId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
   const [slabsChecked, setSlabsChecked] = useState("");
-  const [stemsPerSlab, setStemsPerSlab] = useState("1");
+  const [manualStemsPerSlab, setManualStemsPerSlab] = useState("");
   const [notes, setNotes] = useState("");
 
   // Metric counts keyed by metric id
@@ -144,6 +150,21 @@ export function MobileQualityCheckPage() {
     [groups, phaseId]
   );
 
+  // Derived stems_per_slab from row data; 0 means not configured — fall back to manual
+  const derivedStemsPerSlab = useMemo(() => {
+    if (!selectedRow) return 0;
+    const val = selectedRow.plants_per_slab * selectedRow.stems_per_plant;
+    return Number.isFinite(val) && val > 0 ? val : 0;
+  }, [selectedRow]);
+
+  const effectiveStemsPerSlab = derivedStemsPerSlab > 0 ? derivedStemsPerSlab : safeNum(manualStemsPerSlab);
+
+  // Metrics filtered by the selected check type
+  const visibleMetrics = useMemo(
+    () => (checkType ? metrics.filter((m) => m.check_type === checkType) : []),
+    [metrics, checkType]
+  );
+
   const totalIssues = useMemo(
     () => Object.values(counts).reduce((sum, n) => sum + safeNum(n), 0),
     [counts]
@@ -179,27 +200,40 @@ export function MobileQualityCheckPage() {
   function handlePhaseChange(id: string) {
     setPhaseId(id);
     setRowId("");
+    setManualStemsPerSlab("");
+    setSavedMessage("");
+  }
+
+  function handleRowChange(id: string) {
+    setRowId(id);
+    setManualStemsPerSlab("");
+    setSavedMessage("");
+  }
+
+  function handleCheckTypeChange(ct: CheckType) {
+    setCheckType(ct);
+    setCounts({});
     setSavedMessage("");
   }
 
   const slabsNum = safeNum(slabsChecked);
-  const stemsPerSlabNum = safeNum(stemsPerSlab);
-  const stemsNum = slabsNum * stemsPerSlabNum;
+
   const canSave =
+    checkType !== "" &&
     phaseId !== "" &&
     rowId !== "" &&
     employeeId !== "" &&
     slabsNum > 0 &&
-    stemsPerSlabNum > 0;
+    effectiveStemsPerSlab > 0;
 
   async function handleSave() {
-    if (!canSave || saving) return;
+    if (!canSave || saving || !checkType) return;
     setSaving(true);
     setError(null);
     setSavedMessage("");
 
     const metricCounts: Record<string, number> = {};
-    for (const m of metrics) {
+    for (const m of visibleMetrics) {
       metricCounts[m.id] = safeNum(counts[m.id]);
     }
 
@@ -207,12 +241,14 @@ export function MobileQualityCheckPage() {
       const res = await apiFetch("/api/quality/checks", {
         method: "POST",
         body: JSON.stringify({
+          check_type: checkType,
           employee_id: employeeId,
           phase_id: phaseId || null,
           phase_name: selectedPhase?.name ?? "",
           row_id: rowId || null,
           row_number: selectedRow?.row_number ?? 0,
-          stems_checked: stemsNum,
+          slabs_checked: slabsNum,
+          stems_per_slab_snapshot: effectiveStemsPerSlab,
           metric_counts: metricCounts,
           total_issues: totalIssues,
           notes: notes.trim() || null
@@ -226,7 +262,7 @@ export function MobileQualityCheckPage() {
       setPhaseId("");
       setRowId("");
       setSlabsChecked("");
-      setStemsPerSlab("1");
+      setManualStemsPerSlab("");
       setNotes("");
       setCounts({});
       // Refresh week checks so the duplicate warning stays accurate
@@ -253,11 +289,49 @@ export function MobileQualityCheckPage() {
     );
   }
 
+  const checkTypeLabel = checkType === "winding_pruning" ? "Winding/Pruning"
+    : checkType === "picking_peppers" ? "Picking Peppers"
+    : "";
+
   return (
     <section className="mobile-page">
       <h2>Quality Check</h2>
 
       {error ? <p className="form-error" style={{ marginBottom: "0.75rem" }}>{error}</p> : null}
+
+      {/* Step 0: Check Type */}
+      <div className="pest-section-form" style={{ marginBottom: "0.75rem" }}>
+        <p style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", margin: "0 0 0.5rem" }}>
+          0. Check Type <span style={{ color: "#dc3545" }}>*</span>
+        </p>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          {(["winding_pruning", "picking_peppers"] as const).map((ct) => {
+            const label = ct === "winding_pruning" ? "Winding/Pruning" : "Picking Peppers";
+            const isSelected = checkType === ct;
+            return (
+              <button
+                key={ct}
+                type="button"
+                onClick={() => handleCheckTypeChange(ct)}
+                style={{
+                  flex: 1,
+                  padding: "0.65rem 0.5rem",
+                  borderRadius: "10px",
+                  border: `2px solid ${isSelected ? "var(--brand)" : "var(--border)"}`,
+                  background: isSelected ? "var(--brand-soft)" : "var(--surface)",
+                  color: isSelected ? "var(--brand)" : "var(--text)",
+                  fontWeight: isSelected ? 700 : 400,
+                  fontSize: "0.88rem",
+                  cursor: "pointer",
+                  transition: "all 0.15s"
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Step 1: Phase */}
       <div className="pest-section-form" style={{ marginBottom: "0.75rem" }}>
@@ -295,7 +369,7 @@ export function MobileQualityCheckPage() {
           <select
             className="quality-select"
             value={rowId}
-            onChange={(e) => { setRowId(e.target.value); setSavedMessage(""); }}
+            onChange={(e) => handleRowChange(e.target.value)}
           >
             <option value="">Select row…</option>
             {phaseRows.map((r) => (
@@ -336,19 +410,23 @@ export function MobileQualityCheckPage() {
         )}
       </div>
 
-      {/* Step 4: Metrics */}
+      {/* Step 4: Issues Found */}
       <div className="pest-section-form" style={{ marginBottom: "0.75rem" }}>
         <p style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", margin: "0 0 0.6rem" }}>
-          4. Issues Found
+          4. Issues Found{checkTypeLabel ? ` — ${checkTypeLabel}` : ""}
         </p>
 
-        {metrics.length === 0 ? (
+        {!checkType ? (
           <p style={{ fontSize: "0.88em", color: "var(--text-muted)" }}>
-            No active metrics. Add metrics in Quality Check Setup.
+            Select a check type above to see metrics.
+          </p>
+        ) : visibleMetrics.length === 0 ? (
+          <p style={{ fontSize: "0.88em", color: "var(--text-muted)" }}>
+            No active {checkTypeLabel} metrics. Add metrics in Quality Check Setup.
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            {metrics.map((m) => {
+            {visibleMetrics.map((m) => {
               const count = safeNum(counts[m.id]);
               return (
                 <div
@@ -430,7 +508,7 @@ export function MobileQualityCheckPage() {
         )}
 
         {/* Total issues summary */}
-        {metrics.length > 0 ? (
+        {visibleMetrics.length > 0 ? (
           <div
             style={{
               marginTop: "0.75rem",
@@ -476,20 +554,40 @@ export function MobileQualityCheckPage() {
             <span style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.25rem" }}>
               Stems per slab <span style={{ color: "#dc3545" }}>*</span>
             </span>
-            <input
-              className="quality-input"
-              type="number"
-              min="1"
-              step="1"
-              value={stemsPerSlab}
-              placeholder="e.g. 10"
-              onChange={(e) => { setStemsPerSlab(e.target.value); setSavedMessage(""); }}
-            />
+            {derivedStemsPerSlab > 0 ? (
+              <div
+                style={{
+                  padding: "0.55rem 0.65rem",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  background: "var(--surface-soft)",
+                  fontSize: "0.95rem",
+                  color: "var(--text)",
+                  fontWeight: 600
+                }}
+              >
+                {derivedStemsPerSlab}
+                <span style={{ fontSize: "0.75rem", fontWeight: 400, color: "var(--text-muted)", marginLeft: "0.35rem" }}>
+                  (from row)
+                </span>
+              </div>
+            ) : (
+              <input
+                className="quality-input"
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={manualStemsPerSlab}
+                placeholder="Enter manually"
+                onChange={(e) => { setManualStemsPerSlab(e.target.value); setSavedMessage(""); }}
+              />
+            )}
           </label>
         </div>
-        {slabsNum > 0 && stemsPerSlabNum > 0 ? (
+
+        {slabsNum > 0 && effectiveStemsPerSlab > 0 ? (
           <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "0 0 0.6rem" }}>
-            Calculated stems checked: <strong>{stemsNum}</strong>
+            Calculated stems checked: <strong>{Math.round(slabsNum * effectiveStemsPerSlab)}</strong>
           </p>
         ) : (
           <div style={{ marginBottom: "0.6rem" }} />
@@ -520,13 +618,17 @@ export function MobileQualityCheckPage() {
 
       {!canSave && !saving ? (
         <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center" }}>
-          {!phaseId
+          {!checkType
+            ? "Select a check type to continue."
+            : !phaseId
             ? "Select a phase to continue."
             : !rowId
             ? "Select a row to continue."
             : !employeeId
             ? "Select an employee to continue."
-            : "Enter stems checked to save."}
+            : effectiveStemsPerSlab <= 0
+            ? "Enter stems per slab to save."
+            : "Enter slabs checked to save."}
         </p>
       ) : null}
 

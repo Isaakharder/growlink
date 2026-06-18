@@ -11,6 +11,8 @@ import {
 } from "recharts";
 import { apiFetch } from "../lib/api";
 
+type CheckType = "winding_pruning" | "picking_peppers";
+
 type QualityEmployee = {
   id: string;
   name: string;
@@ -22,6 +24,7 @@ type QualityMetric = {
   id: string;
   name: string;
   active: boolean;
+  check_type: CheckType;
   created_at: string;
 };
 
@@ -29,6 +32,7 @@ type QualityThreshold = {
   id?: string;
   allowed_issues: number;
   stems_checked: number;
+  check_type?: CheckType;
 };
 
 type QualityCheck = {
@@ -77,7 +81,8 @@ export function QualityCheckPage() {
 
   const [employees, setEmployees] = useState<QualityEmployee[]>([]);
   const [metrics, setMetrics] = useState<QualityMetric[]>([]);
-  const [threshold, setThreshold] = useState<QualityThreshold>({ allowed_issues: 10, stems_checked: 100 });
+  const [thresholdWP, setThresholdWP] = useState<QualityThreshold>({ allowed_issues: 10, stems_checked: 100 });
+  const [thresholdPP, setThresholdPP] = useState<QualityThreshold>({ allowed_issues: 10, stems_checked: 100 });
   const [checks, setChecks] = useState<QualityCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,12 +90,23 @@ export function QualityCheckPage() {
   // Setup form state
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [employeeSaving, setEmployeeSaving] = useState(false);
-  const [newMetricName, setNewMetricName] = useState("");
-  const [metricSaving, setMetricSaving] = useState(false);
-  const [thresholdAllowed, setThresholdAllowed] = useState("10");
-  const [thresholdStems, setThresholdStems] = useState("100");
-  const [thresholdSaving, setThresholdSaving] = useState(false);
-  const [thresholdSaved, setThresholdSaved] = useState(false);
+  const [newMetricNameWP, setNewMetricNameWP] = useState("");
+  const [metricSavingWP, setMetricSavingWP] = useState(false);
+  const [newMetricNamePP, setNewMetricNamePP] = useState("");
+  const [metricSavingPP, setMetricSavingPP] = useState(false);
+
+  // Threshold WP
+  const [thresholdAllowedWP, setThresholdAllowedWP] = useState("10");
+  const [thresholdStemsWP, setThresholdStemsWP] = useState("100");
+  const [thresholdSavingWP, setThresholdSavingWP] = useState(false);
+  const [thresholdSavedWP, setThresholdSavedWP] = useState(false);
+
+  // Threshold PP
+  const [thresholdAllowedPP, setThresholdAllowedPP] = useState("10");
+  const [thresholdStemsPP, setThresholdStemsPP] = useState("100");
+  const [thresholdSavingPP, setThresholdSavingPP] = useState(false);
+  const [thresholdSavedPP, setThresholdSavedPP] = useState(false);
+
   const [setupError, setSetupError] = useState<string | null>(null);
 
   const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
@@ -101,26 +117,31 @@ export function QualityCheckPage() {
     setLoading(true);
     setError(null);
     try {
-      const [empRes, metRes, thrRes, chkRes] = await Promise.all([
+      const [empRes, metRes, thrWPRes, thrPPRes, chkRes] = await Promise.all([
         apiFetch("/api/quality/employees"),
         apiFetch("/api/quality/metrics"),
-        apiFetch("/api/quality/threshold"),
+        apiFetch("/api/quality/threshold?check_type=winding_pruning"),
+        apiFetch("/api/quality/threshold?check_type=picking_peppers"),
         apiFetch("/api/quality/checks")
       ]);
-      if (!empRes.ok || !metRes.ok || !thrRes.ok || !chkRes.ok) {
+      if (!empRes.ok || !metRes.ok || !thrWPRes.ok || !thrPPRes.ok || !chkRes.ok) {
         throw new Error("Failed to load quality data");
       }
-      const [empData, metData, thrData, chkData] = await Promise.all([
+      const [empData, metData, thrWPData, thrPPData, chkData] = await Promise.all([
         empRes.json() as Promise<QualityEmployee[]>,
         metRes.json() as Promise<QualityMetric[]>,
-        thrRes.json() as Promise<QualityThreshold>,
+        thrWPRes.json() as Promise<QualityThreshold>,
+        thrPPRes.json() as Promise<QualityThreshold>,
         chkRes.json() as Promise<QualityCheck[]>
       ]);
       setEmployees(empData);
       setMetrics(metData);
-      setThreshold(thrData);
-      setThresholdAllowed(String(thrData.allowed_issues));
-      setThresholdStems(String(thrData.stems_checked));
+      setThresholdWP(thrWPData);
+      setThresholdPP(thrPPData);
+      setThresholdAllowedWP(String(thrWPData.allowed_issues));
+      setThresholdStemsWP(String(thrWPData.stems_checked));
+      setThresholdAllowedPP(String(thrPPData.allowed_issues));
+      setThresholdStemsPP(String(thrPPData.stems_checked));
       setChecks(chkData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load quality data");
@@ -134,8 +155,8 @@ export function QualityCheckPage() {
   // ── Reports derivations ──────────────────────────────────────────────────
 
   const thresholdRate = useMemo(
-    () => safeRate(threshold.allowed_issues, threshold.stems_checked),
-    [threshold]
+    () => safeRate(thresholdWP.allowed_issues, thresholdWP.stems_checked),
+    [thresholdWP]
   );
 
   const employeeReports = useMemo((): EmployeeReport[] => {
@@ -176,7 +197,6 @@ export function QualityCheckPage() {
   );
 
   const trendData = useMemo((): EmployeeTrend[] => {
-    // Group checks by employee, sorted by checked_at ascending.
     const byEmployee = new Map<string, typeof checks>();
     for (const chk of checks) {
       if (!byEmployee.has(chk.employee_id)) byEmployee.set(chk.employee_id, []);
@@ -222,7 +242,6 @@ export function QualityCheckPage() {
       results.push({ employee_id, name, checkCount: n, earlierPct, recentPct, diffPct, status });
     }
 
-    // Sort: worsening first, then stable, then improving, then insufficient.
     const order = { worsening: 0, stable: 1, improving: 2, insufficient: 3 };
     return results.sort((a, b) => order[a.status] - order[b.status]);
   }, [checks, employees]);
@@ -336,27 +355,28 @@ export function QualityCheckPage() {
     }
   }
 
-  async function addMetric(e: FormEvent) {
+  async function addMetric(e: FormEvent, checkType: CheckType) {
     e.preventDefault();
-    const name = newMetricName.trim();
+    const isWP = checkType === "winding_pruning";
+    const name = (isWP ? newMetricNameWP : newMetricNamePP).trim();
     if (!name) return;
-    setMetricSaving(true);
+    if (isWP) setMetricSavingWP(true); else setMetricSavingPP(true);
     setSetupError(null);
     try {
       const res = await apiFetch("/api/quality/metrics", {
         method: "POST",
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, check_type: checkType })
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? "Failed to add metric");
       }
-      setNewMetricName("");
+      if (isWP) setNewMetricNameWP(""); else setNewMetricNamePP("");
       await load();
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : "Failed to add metric");
     } finally {
-      setMetricSaving(false);
+      if (isWP) setMetricSavingWP(false); else setMetricSavingPP(false);
     }
   }
 
@@ -374,10 +394,11 @@ export function QualityCheckPage() {
     }
   }
 
-  async function saveThreshold(e: FormEvent) {
+  async function saveThreshold(e: FormEvent, checkType: CheckType) {
     e.preventDefault();
-    const allowed_issues = Number(thresholdAllowed);
-    const stems_checked = Number(thresholdStems);
+    const isWP = checkType === "winding_pruning";
+    const allowed_issues = Number(isWP ? thresholdAllowedWP : thresholdAllowedPP);
+    const stems_checked = Number(isWP ? thresholdStemsWP : thresholdStemsPP);
     if (!Number.isInteger(allowed_issues) || allowed_issues < 1) {
       setSetupError("Allowed issues must be 1 or greater.");
       return;
@@ -386,24 +407,24 @@ export function QualityCheckPage() {
       setSetupError("Stems checked must be 1 or greater.");
       return;
     }
-    setThresholdSaving(true);
+    if (isWP) { setThresholdSavingWP(true); setThresholdSavedWP(false); }
+    else { setThresholdSavingPP(true); setThresholdSavedPP(false); }
     setSetupError(null);
-    setThresholdSaved(false);
     try {
       const res = await apiFetch("/api/quality/threshold", {
         method: "PUT",
-        body: JSON.stringify({ allowed_issues, stems_checked })
+        body: JSON.stringify({ allowed_issues, stems_checked, check_type: checkType })
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? "Failed to save threshold");
       }
-      setThresholdSaved(true);
+      if (isWP) setThresholdSavedWP(true); else setThresholdSavedPP(true);
       await load();
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : "Failed to save threshold");
     } finally {
-      setThresholdSaving(false);
+      if (isWP) setThresholdSavingWP(false); else setThresholdSavingPP(false);
     }
   }
 
@@ -415,6 +436,9 @@ export function QualityCheckPage() {
       </section>
     );
   }
+
+  const metricsWP = metrics.filter((m) => m.check_type === "winding_pruning");
+  const metricsPP = metrics.filter((m) => m.check_type === "picking_peppers");
 
   return (
     <section className="page-shell">
@@ -457,7 +481,7 @@ export function QualityCheckPage() {
               <div className="coming-soon-card" style={{ marginBottom: "1rem" }}>
                 <h2 style={{ marginBottom: "0.25rem" }}>Issue Rate by Employee</h2>
                 <p style={{ fontSize: "0.8em", color: "var(--text-muted)", marginBottom: "0.85rem" }}>
-                  Threshold: {threshold.allowed_issues} issues per {threshold.stems_checked} stems
+                  Threshold: {thresholdWP.allowed_issues} issues per {thresholdWP.stems_checked} stems
                   ({formatPct(thresholdRate)}). Red bars are at or above threshold.
                 </p>
                 <ResponsiveContainer width="100%" height={240}>
@@ -767,16 +791,16 @@ export function QualityCheckPage() {
             </form>
           </div>
 
-          {/* Card 2: Quality Metrics */}
+          {/* Card 2: Quality Metrics – Winding/Pruning */}
           <div className="coming-soon-card">
-            <h2>Quality Metrics</h2>
+            <h2>Quality Metrics – Winding/Pruning</h2>
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.25rem" }}>
-              Issues to check for on plants (e.g. Double peppers, Missed side shoot, Bad winding).
+              Issues to check during winding and pruning (e.g. Missed side shoot, Bad winding).
             </p>
 
-            {metrics.length > 0 ? (
+            {metricsWP.length > 0 ? (
               <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                {metrics.map((m) => (
+                {metricsWP.map((m) => (
                   <div
                     key={m.id}
                     style={{
@@ -810,40 +834,108 @@ export function QualityCheckPage() {
               </div>
             ) : (
               <p style={{ marginTop: "0.65rem", fontSize: "0.85em", color: "var(--text-muted)" }}>
-                No metrics added yet.
+                No winding/pruning metrics added yet.
               </p>
             )}
 
-            <form onSubmit={(e) => void addMetric(e)} style={{ marginTop: "0.85rem" }}>
+            <form onSubmit={(e) => void addMetric(e, "winding_pruning")} style={{ marginTop: "0.85rem" }}>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 <input
                   type="text"
-                  placeholder="Metric name (e.g. Double peppers)"
-                  value={newMetricName}
-                  onChange={(e) => setNewMetricName(e.target.value)}
+                  placeholder="Metric name (e.g. Missed side shoot)"
+                  value={newMetricNameWP}
+                  onChange={(e) => setNewMetricNameWP(e.target.value)}
                   style={{ flex: "1 1 200px", minWidth: 0 }}
                 />
                 <button
                   type="submit"
                   className="primary-action-button"
-                  disabled={metricSaving || !newMetricName.trim()}
+                  disabled={metricSavingWP || !newMetricNameWP.trim()}
                   style={{ flexShrink: 0 }}
                 >
-                  {metricSaving ? "Adding…" : "Add Metric"}
+                  {metricSavingWP ? "Adding…" : "Add Metric"}
                 </button>
               </div>
             </form>
           </div>
 
-          {/* Card 3: Thresholds */}
+          {/* Card 3: Quality Metrics – Picking Peppers */}
           <div className="coming-soon-card">
-            <h2>Thresholds</h2>
+            <h2>Quality Metrics – Picking Peppers</h2>
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.25rem" }}>
-              Set the pass/fail threshold. If an employee's issue count per stems checked is at or above
-              this rate, their bar turns red on the Reports tab.
+              Issues to check during pepper picking (e.g. Double peppers, Missed pepper).
             </p>
 
-            <form onSubmit={(e) => void saveThreshold(e)}>
+            {metricsPP.length > 0 ? (
+              <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                {metricsPP.map((m) => (
+                  <div
+                    key={m.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "0.45rem 0.65rem",
+                      border: "1px solid var(--border)",
+                      borderRadius: "8px",
+                      background: m.active ? "var(--surface)" : "var(--surface-soft)"
+                    }}
+                  >
+                    <span style={{ fontSize: "0.9em", color: m.active ? "var(--text)" : "var(--text-muted)" }}>
+                      {m.name}
+                      {!m.active ? (
+                        <span style={{ marginLeft: "0.4rem", fontSize: "0.8em", color: "var(--text-muted)" }}>
+                          (inactive)
+                        </span>
+                      ) : null}
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary"
+                      style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                      onClick={() => void toggleMetric(m)}
+                    >
+                      {m.active ? "Deactivate" : "Activate"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ marginTop: "0.65rem", fontSize: "0.85em", color: "var(--text-muted)" }}>
+                No picking peppers metrics added yet.
+              </p>
+            )}
+
+            <form onSubmit={(e) => void addMetric(e, "picking_peppers")} style={{ marginTop: "0.85rem" }}>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <input
+                  type="text"
+                  placeholder="Metric name (e.g. Double peppers)"
+                  value={newMetricNamePP}
+                  onChange={(e) => setNewMetricNamePP(e.target.value)}
+                  style={{ flex: "1 1 200px", minWidth: 0 }}
+                />
+                <button
+                  type="submit"
+                  className="primary-action-button"
+                  disabled={metricSavingPP || !newMetricNamePP.trim()}
+                  style={{ flexShrink: 0 }}
+                >
+                  {metricSavingPP ? "Adding…" : "Add Metric"}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Card 4: Threshold – Winding/Pruning */}
+          <div className="coming-soon-card">
+            <h2>Threshold – Winding/Pruning</h2>
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.25rem" }}>
+              Pass/fail threshold for winding and pruning checks. If an employee's issue count per stems checked
+              is at or above this rate, their bar turns red on the Reports tab.
+            </p>
+
+            <form onSubmit={(e) => void saveThreshold(e, "winding_pruning")}>
               <div
                 className="varieties-form"
                 style={{ marginTop: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}
@@ -854,8 +946,8 @@ export function QualityCheckPage() {
                     type="number"
                     min="1"
                     step="1"
-                    value={thresholdAllowed}
-                    onChange={(e) => { setThresholdAllowed(e.target.value); setThresholdSaved(false); }}
+                    value={thresholdAllowedWP}
+                    onChange={(e) => { setThresholdAllowedWP(e.target.value); setThresholdSavedWP(false); }}
                   />
                 </label>
                 <label>
@@ -864,28 +956,76 @@ export function QualityCheckPage() {
                     type="number"
                     min="1"
                     step="1"
-                    value={thresholdStems}
-                    onChange={(e) => { setThresholdStems(e.target.value); setThresholdSaved(false); }}
+                    value={thresholdStemsWP}
+                    onChange={(e) => { setThresholdStemsWP(e.target.value); setThresholdSavedWP(false); }}
                   />
                 </label>
               </div>
 
-              {Number(thresholdAllowed) > 0 && Number(thresholdStems) > 0 ? (
+              {Number(thresholdAllowedWP) > 0 && Number(thresholdStemsWP) > 0 ? (
                 <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.45rem" }}>
-                  Red if {thresholdAllowed} or more issues found per {thresholdStems} stems (
-                  {formatPct(safeRate(Number(thresholdAllowed), Number(thresholdStems)))}).
+                  Red if {thresholdAllowedWP} or more issues found per {thresholdStemsWP} stems (
+                  {formatPct(safeRate(Number(thresholdAllowedWP), Number(thresholdStemsWP)))}).
                 </p>
               ) : null}
 
               <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
-                <button
-                  type="submit"
-                  className="primary-action-button"
-                  disabled={thresholdSaving}
-                >
-                  {thresholdSaving ? "Saving…" : "Save Threshold"}
+                <button type="submit" className="primary-action-button" disabled={thresholdSavingWP}>
+                  {thresholdSavingWP ? "Saving…" : "Save Threshold"}
                 </button>
-                {thresholdSaved ? (
+                {thresholdSavedWP ? (
+                  <span style={{ fontSize: "0.85em", color: "var(--brand)" }}>Saved.</span>
+                ) : null}
+              </div>
+            </form>
+          </div>
+
+          {/* Card 5: Threshold – Picking Peppers */}
+          <div className="coming-soon-card">
+            <h2>Threshold – Picking Peppers</h2>
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.25rem" }}>
+              Pass/fail threshold for picking peppers checks.
+            </p>
+
+            <form onSubmit={(e) => void saveThreshold(e, "picking_peppers")}>
+              <div
+                className="varieties-form"
+                style={{ marginTop: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}
+              >
+                <label>
+                  Allowed issues
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={thresholdAllowedPP}
+                    onChange={(e) => { setThresholdAllowedPP(e.target.value); setThresholdSavedPP(false); }}
+                  />
+                </label>
+                <label>
+                  Per stems checked
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={thresholdStemsPP}
+                    onChange={(e) => { setThresholdStemsPP(e.target.value); setThresholdSavedPP(false); }}
+                  />
+                </label>
+              </div>
+
+              {Number(thresholdAllowedPP) > 0 && Number(thresholdStemsPP) > 0 ? (
+                <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.45rem" }}>
+                  Red if {thresholdAllowedPP} or more issues found per {thresholdStemsPP} stems (
+                  {formatPct(safeRate(Number(thresholdAllowedPP), Number(thresholdStemsPP)))}).
+                </p>
+              ) : null}
+
+              <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
+                <button type="submit" className="primary-action-button" disabled={thresholdSavingPP}>
+                  {thresholdSavingPP ? "Saving…" : "Save Threshold"}
+                </button>
+                {thresholdSavedPP ? (
                   <span style={{ fontSize: "0.85em", color: "var(--brand)" }}>Saved.</span>
                 ) : null}
               </div>

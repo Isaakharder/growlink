@@ -8,6 +8,16 @@ const router = Router();
 const canView = requireAnyPermission(["mobile:quality", "quality:view", "quality:edit"]);
 const canEdit = requireAnyPermission(["mobile:quality", "quality:edit"]);
 
+const VALID_CHECK_TYPES = ["winding_pruning", "picking_peppers"] as const;
+type CheckType = (typeof VALID_CHECK_TYPES)[number];
+
+function parseCheckType(value: unknown): CheckType {
+  if (typeof value === "string" && VALID_CHECK_TYPES.includes(value as CheckType)) {
+    return value as CheckType;
+  }
+  return "winding_pruning";
+}
+
 // ── Employees ──────────────────────────────────────────────────────────────
 
 router.get("/quality/employees", canView, async (req, res) => {
@@ -124,14 +134,21 @@ router.delete("/quality/employees/:id/permanent", canEdit, async (req, res) => {
 });
 
 // ── Metrics ────────────────────────────────────────────────────────────────
+// Optional ?check_type= filter. Omit to return all (setup page loads everything at once).
 
 router.get("/quality/metrics", canView, async (req, res) => {
   const orgId = req.organizationId;
-  const { data, error } = await supabase
+  let query = supabase
     .from("quality_metrics")
     .select("*")
     .eq("organization_id", orgId)
     .order("name");
+
+  if (typeof req.query.check_type === "string" && VALID_CHECK_TYPES.includes(req.query.check_type as CheckType)) {
+    query = query.eq("check_type", req.query.check_type);
+  }
+
+  const { data, error } = await query;
   if (error) return sendSafeError(res, 500, "Failed to load metrics.", "quality metrics select:", error);
   return res.json(data);
 });
@@ -141,9 +158,10 @@ router.post("/quality/metrics", canEdit, async (req, res) => {
   const body = req.body as Record<string, unknown>;
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name) return res.status(400).json({ message: "name is required" });
+  const check_type = parseCheckType(body.check_type);
   const { data, error } = await supabase
     .from("quality_metrics")
-    .insert({ organization_id: orgId, name, active: true })
+    .insert({ organization_id: orgId, name, active: true, check_type })
     .select()
     .single();
   if (error) return sendSafeError(res, 500, "Failed to create metric.", "quality metric insert:", error);
@@ -170,16 +188,19 @@ router.patch("/quality/metrics/:id", canEdit, async (req, res) => {
 });
 
 // ── Threshold ──────────────────────────────────────────────────────────────
+// One row per (org, check_type). Pass ?check_type= on GET, check_type in body on PUT.
 
 router.get("/quality/threshold", canView, async (req, res) => {
   const orgId = req.organizationId;
+  const check_type = parseCheckType(req.query.check_type);
   const { data, error } = await supabase
     .from("quality_thresholds")
     .select("*")
     .eq("organization_id", orgId)
+    .eq("check_type", check_type)
     .maybeSingle();
   if (error) return sendSafeError(res, 500, "Failed to load threshold.", "quality threshold select:", error);
-  return res.json(data ?? { allowed_issues: 10, stems_checked: 100 });
+  return res.json(data ?? { allowed_issues: 10, stems_checked: 100, check_type });
 });
 
 router.put("/quality/threshold", canEdit, async (req, res) => {
@@ -187,6 +208,8 @@ router.put("/quality/threshold", canEdit, async (req, res) => {
   const body = req.body as Record<string, unknown>;
   const allowed_issues = Number(body.allowed_issues);
   const stems_checked = Number(body.stems_checked);
+  const check_type = parseCheckType(body.check_type);
+
   if (!Number.isInteger(allowed_issues) || allowed_issues < 1) {
     return res.status(400).json({ message: "allowed_issues must be 1 or greater" });
   }
@@ -198,6 +221,7 @@ router.put("/quality/threshold", canEdit, async (req, res) => {
     .from("quality_thresholds")
     .select("id")
     .eq("organization_id", orgId)
+    .eq("check_type", check_type)
     .maybeSingle();
 
   if (existing) {
@@ -214,7 +238,7 @@ router.put("/quality/threshold", canEdit, async (req, res) => {
 
   const { data, error } = await supabase
     .from("quality_thresholds")
-    .insert({ organization_id: orgId, allowed_issues, stems_checked })
+    .insert({ organization_id: orgId, allowed_issues, stems_checked, check_type })
     .select()
     .single();
   if (error) return sendSafeError(res, 500, "Failed to create threshold.", "quality threshold insert:", error);
@@ -243,16 +267,24 @@ router.post("/quality/checks", canEdit, async (req, res) => {
   const employee_id = typeof body.employee_id === "string" ? body.employee_id.trim() : "";
   const phase_name = typeof body.phase_name === "string" ? body.phase_name.trim() : "";
   const row_number = Number(body.row_number);
-  const stems_checked = Number(body.stems_checked);
+  const slabs_checked = Number(body.slabs_checked);
+  const stems_per_slab_snapshot = Number(body.stems_per_slab_snapshot);
+  const check_type = parseCheckType(body.check_type);
 
   if (!employee_id) return res.status(400).json({ message: "employee_id is required" });
   if (!phase_name) return res.status(400).json({ message: "phase_name is required" });
   if (!Number.isInteger(row_number) || row_number < 1) {
     return res.status(400).json({ message: "row_number must be 1 or greater" });
   }
-  if (!Number.isInteger(stems_checked) || stems_checked < 1) {
-    return res.status(400).json({ message: "stems_checked must be 1 or greater" });
+  if (!Number.isInteger(slabs_checked) || slabs_checked < 1) {
+    return res.status(400).json({ message: "slabs_checked must be 1 or greater" });
   }
+  if (!Number.isFinite(stems_per_slab_snapshot) || stems_per_slab_snapshot <= 0) {
+    return res.status(400).json({ message: "stems_per_slab_snapshot must be greater than 0" });
+  }
+
+  const total_stems_checked = slabs_checked * stems_per_slab_snapshot;
+  const stems_checked = Math.round(total_stems_checked);
 
   const metric_counts =
     typeof body.metric_counts === "object" && body.metric_counts !== null
@@ -306,6 +338,10 @@ router.post("/quality/checks", canEdit, async (req, res) => {
       phase_name,
       row_id,
       row_number,
+      check_type,
+      slabs_checked,
+      stems_per_slab_snapshot,
+      total_stems_checked,
       stems_checked,
       metric_counts,
       total_issues,
