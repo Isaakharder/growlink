@@ -21,6 +21,13 @@ type YieldSizeOption = {
   status: YieldSizeStatus;
 };
 
+type DailyBreakdown = {
+  id: string;
+  packed_date: string | null;
+  size_kg: Record<string, number>;
+  total_kg: number;
+};
+
 type YieldEntry = {
   id: string;
   variety_id: string;
@@ -35,6 +42,7 @@ type YieldEntry = {
   total_cases: number;
   created_at: string;
   updated_at: string;
+  daily_breakdowns: DailyBreakdown[];
 };
 
 type YieldEntryFormState = {
@@ -233,6 +241,20 @@ export function KgEntriesTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [pendingAppend, setPendingAppend] = useState<{
+    varietyName: string;
+    week: number;
+    year: number;
+    payload: {
+      variety_id: string;
+      year: number;
+      week: number;
+      packed_date: string | null;
+      size_kg: Record<string, number>;
+      average_fruit_weight_g: number | null;
+    };
+  } | null>(null);
   const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
   const [pdfPreviewUploading, setPdfPreviewUploading] = useState(false);
   const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
@@ -296,12 +318,14 @@ export function KgEntriesTab() {
 
       const byVariety = new Map<string, { name: string; kg: number }>();
       for (const entry of entries) {
-        if (entry.packed_date !== isoDate) continue;
-        const existing = byVariety.get(entry.variety_id);
-        if (existing) {
-          existing.kg += Number(entry.total_kg);
-        } else {
-          byVariety.set(entry.variety_id, { name: entry.variety_name, kg: Number(entry.total_kg) });
+        for (const breakdown of entry.daily_breakdowns) {
+          if (breakdown.packed_date !== isoDate) continue;
+          const existing = byVariety.get(entry.variety_id);
+          if (existing) {
+            existing.kg += breakdown.total_kg;
+          } else {
+            byVariety.set(entry.variety_id, { name: entry.variety_name, kg: breakdown.total_kg });
+          }
         }
       }
 
@@ -485,55 +509,14 @@ export function KgEntriesTab() {
     };
   }, [isPdfPreviewOpen]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-
-    if (!form.variety_id) {
-      setError("Variety is required.");
-      return;
-    }
-
-    const payloadSizeKg: Record<string, number> = {};
-    for (const size of yieldSizes) {
-      const kg = numberOrZero(form.size_kg[size.id] ?? "0");
-      if (kg < 0) {
-        setError("Kg values must be 0 or greater.");
-        return;
-      }
-      payloadSizeKg[size.id] = kg;
-    }
-
-    const payload = {
-      variety_id: form.variety_id,
-      year: Number(form.year),
-      week: Number(form.week),
-      packed_date: form.packed_date || null,
-      size_kg: payloadSizeKg,
-      average_fruit_weight_g:
-        form.average_fruit_weight_g.trim() === ""
-          ? null
-          : Number(form.average_fruit_weight_g)
-    };
-
-    if (!Number.isInteger(payload.year)) {
-      setError("Year is required.");
-      return;
-    }
-
-    if (!Number.isInteger(payload.week)) {
-      setError("Week is required.");
-      return;
-    }
-
-    if (
-      payload.average_fruit_weight_g !== null &&
-      (!Number.isFinite(payload.average_fruit_weight_g) || payload.average_fruit_weight_g < 0)
-    ) {
-      setError("Average fruit weight must be 0 or greater.");
-      return;
-    }
-
+  async function executeSubmit(submitPayload: {
+    variety_id: string;
+    year: number;
+    week: number;
+    packed_date: string | null;
+    size_kg: Record<string, number>;
+    average_fruit_weight_g: number | null;
+  }) {
     setSaving(true);
 
     try {
@@ -542,7 +525,7 @@ export function KgEntriesTab() {
 
       const response = await apiFetch(url, {
         method,
-        body: JSON.stringify(payload)
+        body: JSON.stringify(submitPayload)
       });
 
       if (!response.ok) {
@@ -558,6 +541,17 @@ export function KgEntriesTab() {
         throw new Error(message);
       }
 
+      let appendMessage: string | null = null;
+      try {
+        const responseBody = (await response.json()) as { message?: string };
+        if (responseBody.message) {
+          appendMessage = responseBody.message;
+        }
+      } catch {
+        // Ignore
+      }
+
+      setSuccessMessage(appendMessage);
       setEditingId(null);
       setForm((current) => ({
         ...current,
@@ -582,6 +576,76 @@ export function KgEntriesTab() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setSuccessMessage(null);
+
+    if (!form.variety_id) {
+      setError("Variety is required.");
+      return;
+    }
+
+    const payloadSizeKg: Record<string, number> = {};
+    for (const size of yieldSizes) {
+      const kg = numberOrZero(form.size_kg[size.id] ?? "0");
+      if (kg < 0) {
+        setError("Kg values must be 0 or greater.");
+        return;
+      }
+      payloadSizeKg[size.id] = kg;
+    }
+
+    const submitPayload = {
+      variety_id: form.variety_id,
+      year: Number(form.year),
+      week: Number(form.week),
+      packed_date: form.packed_date || null,
+      size_kg: payloadSizeKg,
+      average_fruit_weight_g:
+        form.average_fruit_weight_g.trim() === ""
+          ? null
+          : Number(form.average_fruit_weight_g)
+    };
+
+    if (!Number.isInteger(submitPayload.year)) {
+      setError("Year is required.");
+      return;
+    }
+
+    if (!Number.isInteger(submitPayload.week)) {
+      setError("Week is required.");
+      return;
+    }
+
+    if (
+      submitPayload.average_fruit_weight_g !== null &&
+      (!Number.isFinite(submitPayload.average_fruit_weight_g) || submitPayload.average_fruit_weight_g < 0)
+    ) {
+      setError("Average fruit weight must be 0 or greater.");
+      return;
+    }
+
+    // For new entries, check if a weekly entry already exists and ask for confirmation
+    if (!editingId) {
+      const existingEntry = entries.find(
+        (e) =>
+          e.variety_id === submitPayload.variety_id &&
+          e.year === submitPayload.year &&
+          e.week === submitPayload.week
+      );
+
+      if (existingEntry) {
+        const varietyName =
+          varieties.find((v) => v.id === submitPayload.variety_id)?.name ?? "this variety";
+        setPendingAppend({ varietyName, week: submitPayload.week, year: submitPayload.year, payload: submitPayload });
+        return;
+      }
+    }
+
+    await executeSubmit(submitPayload);
   }
 
   function beginEdit(entry: YieldEntry) {
@@ -639,6 +703,7 @@ export function KgEntriesTab() {
     }
 
     setError(null);
+    setSuccessMessage(null);
 
     try {
       const response = await apiFetch(`${ENTRIES_URL}/${id}`, { method: "DELETE" });
@@ -1380,6 +1445,7 @@ export function KgEntriesTab() {
           <h2>Recent Entries</h2>
 
           {error && <p className="form-error">{error}</p>}
+          {successMessage && <p className="form-success">{successMessage}</p>}
 
           {entries.length === 0 && <p>No yield entries yet.</p>}
 
@@ -1715,6 +1781,46 @@ export function KgEntriesTab() {
                 type="button"
                 className="secondary"
                 onClick={closePdfPreviewModal}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingAppend ? (
+        <div className="modal-overlay" onClick={() => setPendingAppend(null)}>
+          <div
+            className="variety-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-append-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="confirm-append-title">Add to Existing Entry?</h2>
+            <p>
+              An entry already exists for <strong>{pendingAppend.varietyName}</strong> Week{" "}
+              {pendingAppend.week}, {pendingAppend.year}. Add these kg to the existing weekly
+              total?
+            </p>
+            <div className="form-actions">
+              <button
+                type="button"
+                onClick={async () => {
+                  const payload = pendingAppend.payload;
+                  setPendingAppend(null);
+                  await executeSubmit(payload);
+                }}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Add to Existing"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setPendingAppend(null)}
+                disabled={saving}
               >
                 Cancel
               </button>

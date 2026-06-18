@@ -684,7 +684,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       .eq("status", "active"),
     supabase
       .from("yield_entries")
-      .select("id, size_kg, average_fruit_weight_g")
+      .select("id, size_kg, average_fruit_weight_g, packed_date")
       .eq("organization_id", organizationId)
       .eq("variety_id", payload.varietyId)
       .eq("year", payload.isoYear)
@@ -772,6 +772,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       id: string;
       size_kg: Record<string, unknown> | null;
       average_fruit_weight_g: number | null;
+      packed_date: string | null;
     };
 
     // Claim the lots first — the unique constraint on (organization_id, lot_number)
@@ -878,6 +879,27 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       });
     }
 
+    // Write a breakdown row for this PDF packing run
+    const incomingBreakdownTotal = Object.values(sizeKgById).reduce((sum, v) => sum + v, 0);
+    const { error: appendBreakdownError } = await supabase
+      .from("yield_entry_daily_breakdown")
+      .insert({
+        organization_id: organizationId,
+        yield_entry_id: existingEntry.id,
+        packed_date: payload.packedDate ?? null,
+        size_kg: sizeKgById,
+        total_kg: incomingBreakdownTotal
+      });
+
+    if (appendBreakdownError) {
+      console.warn("[pdf-import/import] breakdown insert failed (append mode):", {
+        organizationId,
+        entryId: existingEntry.id,
+        code: appendBreakdownError.code,
+        message: appendBreakdownError.message
+      });
+    }
+
     const { error: appendCleanupError } = await supabase
       .from("agent_pending_imports")
       .delete()
@@ -968,6 +990,27 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
     }
     return res.status(500).json({
       message: "Failed to import PDF preview data into weekly entry."
+    });
+  }
+
+  // Write a breakdown row for this PDF packing run
+  const createBreakdownTotal = Object.values(sizeKgById).reduce((sum, v) => sum + v, 0);
+  const { error: createBreakdownError } = await supabase
+    .from("yield_entry_daily_breakdown")
+    .insert({
+      organization_id: organizationId,
+      yield_entry_id: inserted.id,
+      packed_date: payload.packedDate ?? null,
+      size_kg: sizeKgById,
+      total_kg: createBreakdownTotal
+    });
+
+  if (createBreakdownError) {
+    console.warn("[pdf-import/import] breakdown insert failed (create mode):", {
+      organizationId,
+      entryId: inserted.id,
+      code: createBreakdownError.code,
+      message: createBreakdownError.message
     });
   }
 

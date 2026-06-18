@@ -180,7 +180,7 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
   const { data, error } = await supabase
     .from("yield_entries")
     .select(
-      "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name)"
+      "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg)"
     )
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
@@ -199,12 +199,28 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
       ? (varietyRef[0]?.name ?? "-")
       : (varietyRef?.name ?? "-");
 
-    const { varieties, ...rest } = entry;
+    const rawBreakdowns = entry.yield_entry_daily_breakdown as Array<{
+      id?: string;
+      packed_date?: string | null;
+      size_kg?: Record<string, unknown> | null;
+      total_kg?: number | null;
+    }> | null;
+
+    const daily_breakdowns = (rawBreakdowns ?? []).map((b) => ({
+      id: b.id ?? "",
+      packed_date: b.packed_date ?? null,
+      size_kg: (b.size_kg ?? {}) as Record<string, number>,
+      total_kg: Number(b.total_kg ?? 0)
+    }));
+
+    const { varieties, yield_entry_daily_breakdown, ...rest } = entry;
     void varieties;
+    void yield_entry_daily_breakdown;
 
     return {
       ...rest,
-      variety_name: varietyName
+      variety_name: varietyName,
+      daily_breakdowns
     };
   });
 
@@ -224,6 +240,77 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
 
   try {
     const variety = await fetchVarietyForCalc(payload.variety_id, organizationId);
+
+    const { data: existing, error: lookupError } = await supabase
+      .from("yield_entries")
+      .select("id, size_kg, average_fruit_weight_g, packed_date")
+      .eq("organization_id", organizationId)
+      .eq("variety_id", payload.variety_id)
+      .eq("year", payload.year)
+      .eq("week", payload.week)
+      .maybeSingle();
+
+    if (lookupError) {
+      return sendSafeError(res, 500, "Failed to check existing yield entry.", "Yield entry lookup error:", lookupError);
+    }
+
+    if (existing) {
+      const existingSizeKg: Record<string, number> = {};
+      for (const [sizeId, rawKg] of Object.entries((existing.size_kg ?? {}) as Record<string, unknown>)) {
+        const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
+        if (Number.isFinite(kg) && kg >= 0) {
+          existingSizeKg[sizeId] = kg;
+        }
+      }
+
+      const mergedSizeKg: Record<string, number> = { ...existingSizeKg };
+      for (const [sizeId, incomingKg] of Object.entries(payload.size_kg)) {
+        mergedSizeKg[sizeId] = (mergedSizeKg[sizeId] ?? 0) + incomingKg;
+      }
+
+      const mergedTotals = calculateTotals(mergedSizeKg, variety);
+      const mergedPackedDate = existing.packed_date !== null ? existing.packed_date : (payload.packed_date ?? null);
+
+      const { data: updated, error: updateError } = await supabase
+        .from("yield_entries")
+        .update({
+          size_kg: mergedSizeKg,
+          average_fruit_weight_g: payload.average_fruit_weight_g,
+          packed_date: mergedPackedDate,
+          ...mergedTotals,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", existing.id)
+        .eq("organization_id", organizationId)
+        .select("*")
+        .single();
+
+      if (updateError) {
+        return sendSafeError(res, 500, "Failed to update existing yield entry.", "Yield entry update (append) error:", updateError);
+      }
+
+      // Write a breakdown row for this packing day
+      const incomingTotal = Object.values(payload.size_kg).reduce((sum, v) => sum + v, 0);
+      const { error: breakdownError } = await supabase
+        .from("yield_entry_daily_breakdown")
+        .insert({
+          organization_id: organizationId,
+          yield_entry_id: existing.id,
+          packed_date: payload.packed_date,
+          size_kg: payload.size_kg,
+          total_kg: incomingTotal
+        });
+
+      if (breakdownError) {
+        console.error("Yield entry breakdown insert error (append):", breakdownError);
+      }
+
+      return res.status(200).json({
+        ...updated,
+        message: `Added to existing ${variety.name} Week ${payload.week} entry.`
+      });
+    }
+
     const totals = calculateTotals(payload.size_kg, variety);
 
     const { data, error } = await supabase
@@ -233,16 +320,22 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
       .single();
 
     if (error) {
-      if (
-        error.code === "23505" &&
-        typeof error.message === "string" &&
-        error.message.includes("yield_entries_org_variety_year_week_key")
-      ) {
-        return res.status(409).json({
-          message: `A yield entry already exists for ${variety.name} – Week ${payload.week}, ${payload.year}. Edit the existing entry instead.`
-        });
-      }
       return sendSafeError(res, 500, "Failed to create yield entry.", "Yield entry insert error:", error);
+    }
+
+    // Write a breakdown row for this packing day
+    const { error: breakdownError } = await supabase
+      .from("yield_entry_daily_breakdown")
+      .insert({
+        organization_id: organizationId,
+        yield_entry_id: data.id,
+        packed_date: payload.packed_date,
+        size_kg: payload.size_kg,
+        total_kg: totals.total_kg
+      });
+
+    if (breakdownError) {
+      console.error("Yield entry breakdown insert error (create):", breakdownError);
     }
 
     return res.status(201).json(data);
@@ -278,6 +371,27 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
 
     if (error) {
       return sendSafeError(res, 500, "Failed to update yield entry.", "Yield entry update error:", error);
+    }
+
+    // Replace all breakdown rows with a single row reflecting the edited totals
+    await supabase
+      .from("yield_entry_daily_breakdown")
+      .delete()
+      .eq("yield_entry_id", id)
+      .eq("organization_id", organizationId);
+
+    const { error: breakdownError } = await supabase
+      .from("yield_entry_daily_breakdown")
+      .insert({
+        organization_id: organizationId,
+        yield_entry_id: id,
+        packed_date: payload.packed_date,
+        size_kg: payload.size_kg,
+        total_kg: totals.total_kg
+      });
+
+    if (breakdownError) {
+      console.error("Yield entry breakdown replace error (edit):", breakdownError);
     }
 
     return res.json(data);

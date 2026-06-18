@@ -2004,6 +2004,11 @@ body {
   margin-top: 0.7rem;
 }
 
+.form-success {
+  color: #0c6a56;
+  margin-top: 0.7rem;
+}
+
 .primary-action-button {
   border: 1px solid #0c6a56;
   border-radius: 12px;
