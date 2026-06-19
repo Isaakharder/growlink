@@ -43,6 +43,7 @@ type QualityCheck = {
   stems_checked: number;
   total_issues: number;
   checked_at: string;
+  check_type: CheckType;
 };
 
 type EmployeeReport = {
@@ -64,7 +65,7 @@ type EmployeeTrend = {
   status: "improving" | "worsening" | "stable" | "insufficient";
 };
 
-type ActiveTab = "reports" | "setup";
+type ActiveTab = "wp_report" | "pp_report" | "setup";
 
 function safeRate(issues: number, stems: number): number {
   if (!Number.isFinite(stems) || stems <= 0) return 0;
@@ -76,8 +77,93 @@ function formatPct(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
 }
 
+function buildEmployeeReports(checks: QualityCheck[], employees: QualityEmployee[]): EmployeeReport[] {
+  const map = new Map<string, { totalIssues: number; totalStems: number; checkCount: number }>();
+  for (const chk of checks) {
+    const existing = map.get(chk.employee_id) ?? { totalIssues: 0, totalStems: 0, checkCount: 0 };
+    map.set(chk.employee_id, {
+      totalIssues: existing.totalIssues + chk.total_issues,
+      totalStems: existing.totalStems + chk.stems_checked,
+      checkCount: existing.checkCount + 1
+    });
+  }
+  const results: EmployeeReport[] = [];
+  for (const [employee_id, agg] of map.entries()) {
+    const emp = employees.find((e) => e.id === employee_id);
+    results.push({
+      employee_id,
+      name: emp?.name ?? "Unknown",
+      totalIssues: agg.totalIssues,
+      totalStems: agg.totalStems,
+      issueRate: safeRate(agg.totalIssues, agg.totalStems),
+      checkCount: agg.checkCount
+    });
+  }
+  return results.sort((a, b) => b.issueRate - a.issueRate);
+}
+
+function buildChartData(reports: EmployeeReport[], thresholdRate: number) {
+  return reports.map((r) => ({
+    name: r.name,
+    rate: parseFloat((r.issueRate * 100).toFixed(2)),
+    isOver: r.issueRate >= thresholdRate,
+    totalIssues: r.totalIssues,
+    totalStems: r.totalStems
+  }));
+}
+
+function buildTrendData(checks: QualityCheck[], employees: QualityEmployee[]): EmployeeTrend[] {
+  const byEmployee = new Map<string, typeof checks>();
+  for (const chk of checks) {
+    if (!byEmployee.has(chk.employee_id)) byEmployee.set(chk.employee_id, []);
+    byEmployee.get(chk.employee_id)!.push(chk);
+  }
+  for (const arr of byEmployee.values()) {
+    arr.sort((a, b) => a.checked_at.localeCompare(b.checked_at));
+  }
+
+  const results: EmployeeTrend[] = [];
+  for (const [employee_id, empChecks] of byEmployee.entries()) {
+    const emp = employees.find((e) => e.id === employee_id);
+    const name = emp?.name ?? "Unknown";
+    const n = empChecks.length;
+
+    if (n < 2) {
+      results.push({ employee_id, name, checkCount: n, earlierPct: 0, recentPct: 0, diffPct: 0, status: "insufficient" });
+      continue;
+    }
+
+    const splitIdx = Math.ceil(n / 2);
+    const earlier = empChecks.slice(0, splitIdx);
+    const recent = empChecks.slice(splitIdx);
+
+    const earlierRate = safeRate(
+      earlier.reduce((s, c) => s + c.total_issues, 0),
+      earlier.reduce((s, c) => s + c.stems_checked, 0)
+    );
+    const recentRate = safeRate(
+      recent.reduce((s, c) => s + c.total_issues, 0),
+      recent.reduce((s, c) => s + c.stems_checked, 0)
+    );
+
+    const earlierPct = earlierRate * 100;
+    const recentPct = recentRate * 100;
+    const diffPct = recentPct - earlierPct;
+
+    let status: EmployeeTrend["status"];
+    if (Math.abs(diffPct) < 0.5) status = "stable";
+    else if (diffPct < 0) status = "improving";
+    else status = "worsening";
+
+    results.push({ employee_id, name, checkCount: n, earlierPct, recentPct, diffPct, status });
+  }
+
+  const order = { worsening: 0, stable: 1, improving: 2, insufficient: 3 };
+  return results.sort((a, b) => order[a.status] - order[b.status]);
+}
+
 export function QualityCheckPage() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("reports");
+  const [activeTab, setActiveTab] = useState<ActiveTab>("wp_report");
 
   const [employees, setEmployees] = useState<QualityEmployee[]>([]);
   const [metrics, setMetrics] = useState<QualityMetric[]>([]);
@@ -152,99 +238,40 @@ export function QualityCheckPage() {
 
   useEffect(() => { void load(); }, []);
 
-  // ── Reports derivations ──────────────────────────────────────────────────
+  // ── Reports derivations — separated by check_type ────────────────────────
 
-  const thresholdRate = useMemo(
+  const checksWP = useMemo(() => checks.filter((c) => c.check_type === "winding_pruning"), [checks]);
+  const checksPP = useMemo(() => checks.filter((c) => c.check_type === "picking_peppers"), [checks]);
+
+  const thresholdRateWP = useMemo(
     () => safeRate(thresholdWP.allowed_issues, thresholdWP.stems_checked),
     [thresholdWP]
   );
-
-  const employeeReports = useMemo((): EmployeeReport[] => {
-    const map = new Map<string, { totalIssues: number; totalStems: number; checkCount: number }>();
-    for (const chk of checks) {
-      const existing = map.get(chk.employee_id) ?? { totalIssues: 0, totalStems: 0, checkCount: 0 };
-      map.set(chk.employee_id, {
-        totalIssues: existing.totalIssues + chk.total_issues,
-        totalStems: existing.totalStems + chk.stems_checked,
-        checkCount: existing.checkCount + 1
-      });
-    }
-    const results: EmployeeReport[] = [];
-    for (const [employee_id, agg] of map.entries()) {
-      const emp = employees.find((e) => e.id === employee_id);
-      results.push({
-        employee_id,
-        name: emp?.name ?? "Unknown",
-        totalIssues: agg.totalIssues,
-        totalStems: agg.totalStems,
-        issueRate: safeRate(agg.totalIssues, agg.totalStems),
-        checkCount: agg.checkCount
-      });
-    }
-    return results.sort((a, b) => b.issueRate - a.issueRate);
-  }, [checks, employees]);
-
-  const chartData = useMemo(
-    () =>
-      employeeReports.map((r) => ({
-        name: r.name,
-        rate: parseFloat((r.issueRate * 100).toFixed(2)),
-        isOver: r.issueRate >= thresholdRate,
-        totalIssues: r.totalIssues,
-        totalStems: r.totalStems
-      })),
-    [employeeReports, thresholdRate]
+  const thresholdRatePP = useMemo(
+    () => safeRate(thresholdPP.allowed_issues, thresholdPP.stems_checked),
+    [thresholdPP]
   );
 
-  const trendData = useMemo((): EmployeeTrend[] => {
-    const byEmployee = new Map<string, typeof checks>();
-    for (const chk of checks) {
-      if (!byEmployee.has(chk.employee_id)) byEmployee.set(chk.employee_id, []);
-      byEmployee.get(chk.employee_id)!.push(chk);
-    }
-    for (const arr of byEmployee.values()) {
-      arr.sort((a, b) => a.checked_at.localeCompare(b.checked_at));
-    }
+  const employeeReportsWP = useMemo(
+    () => buildEmployeeReports(checksWP, employees),
+    [checksWP, employees]
+  );
+  const employeeReportsPP = useMemo(
+    () => buildEmployeeReports(checksPP, employees),
+    [checksPP, employees]
+  );
 
-    const results: EmployeeTrend[] = [];
-    for (const [employee_id, empChecks] of byEmployee.entries()) {
-      const emp = employees.find((e) => e.id === employee_id);
-      const name = emp?.name ?? "Unknown";
-      const n = empChecks.length;
+  const chartDataWP = useMemo(
+    () => buildChartData(employeeReportsWP, thresholdRateWP),
+    [employeeReportsWP, thresholdRateWP]
+  );
+  const chartDataPP = useMemo(
+    () => buildChartData(employeeReportsPP, thresholdRatePP),
+    [employeeReportsPP, thresholdRatePP]
+  );
 
-      if (n < 2) {
-        results.push({ employee_id, name, checkCount: n, earlierPct: 0, recentPct: 0, diffPct: 0, status: "insufficient" });
-        continue;
-      }
-
-      const splitIdx = Math.ceil(n / 2);
-      const earlier = empChecks.slice(0, splitIdx);
-      const recent = empChecks.slice(splitIdx);
-
-      const earlierRate = safeRate(
-        earlier.reduce((s, c) => s + c.total_issues, 0),
-        earlier.reduce((s, c) => s + c.stems_checked, 0)
-      );
-      const recentRate = safeRate(
-        recent.reduce((s, c) => s + c.total_issues, 0),
-        recent.reduce((s, c) => s + c.stems_checked, 0)
-      );
-
-      const earlierPct = earlierRate * 100;
-      const recentPct = recentRate * 100;
-      const diffPct = recentPct - earlierPct;
-
-      let status: EmployeeTrend["status"];
-      if (Math.abs(diffPct) < 0.5) status = "stable";
-      else if (diffPct < 0) status = "improving";
-      else status = "worsening";
-
-      results.push({ employee_id, name, checkCount: n, earlierPct, recentPct, diffPct, status });
-    }
-
-    const order = { worsening: 0, stable: 1, improving: 2, insufficient: 3 };
-    return results.sort((a, b) => order[a.status] - order[b.status]);
-  }, [checks, employees]);
+  const trendDataWP = useMemo(() => buildTrendData(checksWP, employees), [checksWP, employees]);
+  const trendDataPP = useMemo(() => buildTrendData(checksPP, employees), [checksPP, employees]);
 
   // ── Setup handlers ────────────────────────────────────────────────────────
 
@@ -440,6 +467,105 @@ export function QualityCheckPage() {
   const metricsWP = metrics.filter((m) => m.check_type === "winding_pruning");
   const metricsPP = metrics.filter((m) => m.check_type === "picking_peppers");
 
+  // ── Shared trend row renderer ─────────────────────────────────────────────
+
+  function renderTrendRows(trendData: EmployeeTrend[]) {
+    return trendData.map((t) => {
+      const badgeStyle: React.CSSProperties = {
+        display: "inline-block",
+        padding: "0.2rem 0.6rem",
+        borderRadius: "999px",
+        fontSize: "0.75rem",
+        fontWeight: 700,
+        background:
+          t.status === "improving" ? "#d1e7dd"
+          : t.status === "worsening" ? "#f8d7da"
+          : "#e9ecef",
+        color:
+          t.status === "improving" ? "#0a3622"
+          : t.status === "worsening" ? "#842029"
+          : "#495057"
+      };
+      const label =
+        t.status === "improving" ? "Improving ↓"
+        : t.status === "worsening" ? "Getting worse ↑"
+        : t.status === "stable" ? "Stable"
+        : "Need more checks";
+      const diffSign = t.diffPct > 0 ? "+" : "";
+      return (
+        <tr key={t.employee_id}>
+          <td>{t.name}</td>
+          <td style={{ textAlign: "right" }}>{t.checkCount}</td>
+          <td style={{ textAlign: "right" }}>
+            {t.status === "insufficient" ? "–" : `${t.earlierPct.toFixed(1)}%`}
+          </td>
+          <td style={{ textAlign: "right" }}>
+            {t.status === "insufficient" ? "–" : `${t.recentPct.toFixed(1)}%`}
+          </td>
+          <td style={{ textAlign: "right", color: t.status === "improving" ? "#0a3622" : t.status === "worsening" ? "#842029" : "var(--text-muted)" }}>
+            {t.status === "insufficient" ? "–" : `${diffSign}${t.diffPct.toFixed(1)}%`}
+          </td>
+          <td style={{ textAlign: "center" }}>
+            <span style={badgeStyle}>{label}</span>
+          </td>
+        </tr>
+      );
+    });
+  }
+
+  function renderSummaryRows(reports: EmployeeReport[], thresholdRate: number) {
+    return reports.map((r) => {
+      const isOver = r.issueRate >= thresholdRate;
+      const emp = employees.find((e) => e.id === r.employee_id);
+      return (
+        <tr key={r.employee_id}>
+          <td>{r.name}</td>
+          <td style={{ textAlign: "right" }}>{r.checkCount}</td>
+          <td style={{ textAlign: "right" }}>{r.totalIssues}</td>
+          <td style={{ textAlign: "right" }}>{r.totalStems}</td>
+          <td style={{ textAlign: "right" }}>{formatPct(r.issueRate)}</td>
+          <td style={{ textAlign: "center" }}>
+            <span
+              style={{
+                display: "inline-block",
+                padding: "0.2rem 0.6rem",
+                borderRadius: "999px",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                background: isOver ? "#f8d7da" : "#d1e7dd",
+                color: isOver ? "#842029" : "#0a3622"
+              }}
+            >
+              {isOver ? "Over threshold" : "Good"}
+            </span>
+          </td>
+          <td>
+            {emp ? (
+              <div className="row-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                  onClick={() => startEditEmployee(emp)}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
+                  onClick={() => void deleteEmployee(emp)}
+                >
+                  Delete
+                </button>
+              </div>
+            ) : null}
+          </td>
+        </tr>
+      );
+    });
+  }
+
   return (
     <section className="page-shell">
       <header>
@@ -452,10 +578,17 @@ export function QualityCheckPage() {
       <div className="tab-navigation">
         <button
           type="button"
-          className={`tab-button${activeTab === "reports" ? " active" : ""}`}
-          onClick={() => setActiveTab("reports")}
+          className={`tab-button${activeTab === "wp_report" ? " active" : ""}`}
+          onClick={() => setActiveTab("wp_report")}
         >
-          Reports
+          W/P Report
+        </button>
+        <button
+          type="button"
+          className={`tab-button${activeTab === "pp_report" ? " active" : ""}`}
+          onClick={() => setActiveTab("pp_report")}
+        >
+          Picking Report
         </button>
         <button
           type="button"
@@ -466,26 +599,25 @@ export function QualityCheckPage() {
         </button>
       </div>
 
-      {/* ── Reports tab ───────────────────────────────────────────────── */}
-      {activeTab === "reports" ? (
-        <div style={{ marginTop: "1.25rem" }}>
-          {checks.length === 0 ? (
+      {/* ── W/P Report tab ────────────────────────────────────────────── */}
+      {activeTab === "wp_report" ? (
+        <div style={{ marginTop: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+          {checksWP.length === 0 ? (
             <div className="coming-soon-card">
               <p style={{ fontSize: "0.9em", color: "var(--text-muted)" }}>
-                No quality checks recorded yet. Use the mobile Quality Check page to start logging.
+                No Winding/Pruning checks recorded yet. Use the mobile Quality Check page to start logging.
               </p>
             </div>
           ) : (
             <>
-              {/* Bar chart */}
-              <div className="coming-soon-card" style={{ marginBottom: "1rem" }}>
+              <div className="coming-soon-card">
                 <h2 style={{ marginBottom: "0.25rem" }}>Issue Rate by Employee</h2>
                 <p style={{ fontSize: "0.8em", color: "var(--text-muted)", marginBottom: "0.85rem" }}>
                   Threshold: {thresholdWP.allowed_issues} issues per {thresholdWP.stems_checked} stems
-                  ({formatPct(thresholdRate)}). Red bars are at or above threshold.
+                  ({formatPct(thresholdRateWP)}). Red bars are at or above threshold.
                 </p>
                 <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                  <BarChart data={chartDataWP} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                     <YAxis
@@ -501,7 +633,7 @@ export function QualityCheckPage() {
                       labelFormatter={(label) => `Employee: ${String(label ?? "")}`}
                     />
                     <Bar dataKey="rate" radius={[4, 4, 0, 0]}>
-                      {chartData.map((entry, index) => (
+                      {chartDataWP.map((entry, index) => (
                         <Cell
                           key={index}
                           fill={entry.isOver ? "#dc3545" : "#198754"}
@@ -513,8 +645,7 @@ export function QualityCheckPage() {
                 </ResponsiveContainer>
               </div>
 
-              {/* Trend card */}
-              <div className="coming-soon-card" style={{ marginBottom: "1rem" }}>
+              <div className="coming-soon-card">
                 <h2 style={{ marginBottom: "0.25rem" }}>Quality Trend by Employee</h2>
                 <p style={{ fontSize: "0.8em", color: "var(--text-muted)", marginBottom: "0.85rem" }}>
                   Compares each employee's earlier checks against their recent checks. Lower issue rate is better.
@@ -531,54 +662,11 @@ export function QualityCheckPage() {
                         <th style={{ textAlign: "center" }}>Trend</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {trendData.map((t) => {
-                        const badgeStyle: React.CSSProperties = {
-                          display: "inline-block",
-                          padding: "0.2rem 0.6rem",
-                          borderRadius: "999px",
-                          fontSize: "0.75rem",
-                          fontWeight: 700,
-                          background:
-                            t.status === "improving" ? "#d1e7dd"
-                            : t.status === "worsening" ? "#f8d7da"
-                            : "#e9ecef",
-                          color:
-                            t.status === "improving" ? "#0a3622"
-                            : t.status === "worsening" ? "#842029"
-                            : "#495057"
-                        };
-                        const label =
-                          t.status === "improving" ? "Improving ↓"
-                          : t.status === "worsening" ? "Getting worse ↑"
-                          : t.status === "stable" ? "Stable"
-                          : "Need more checks";
-                        const diffSign = t.diffPct > 0 ? "+" : "";
-                        return (
-                          <tr key={t.employee_id}>
-                            <td>{t.name}</td>
-                            <td style={{ textAlign: "right" }}>{t.checkCount}</td>
-                            <td style={{ textAlign: "right" }}>
-                              {t.status === "insufficient" ? "–" : `${t.earlierPct.toFixed(1)}%`}
-                            </td>
-                            <td style={{ textAlign: "right" }}>
-                              {t.status === "insufficient" ? "–" : `${t.recentPct.toFixed(1)}%`}
-                            </td>
-                            <td style={{ textAlign: "right", color: t.status === "improving" ? "#0a3622" : t.status === "worsening" ? "#842029" : "var(--text-muted)" }}>
-                              {t.status === "insufficient" ? "–" : `${diffSign}${t.diffPct.toFixed(1)}%`}
-                            </td>
-                            <td style={{ textAlign: "center" }}>
-                              <span style={badgeStyle}>{label}</span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
+                    <tbody>{renderTrendRows(trendDataWP)}</tbody>
                   </table>
                 </div>
               </div>
 
-              {/* Detail table */}
               <div className="coming-soon-card">
                 <h2 style={{ marginBottom: "0.75rem" }}>Employee Summary</h2>
                 <div className="varieties-table-wrapper">
@@ -594,58 +682,99 @@ export function QualityCheckPage() {
                         <th>Actions</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {employeeReports.map((r) => {
-                        const isOver = r.issueRate >= thresholdRate;
-                        const emp = employees.find((e) => e.id === r.employee_id);
-                        return (
-                          <tr key={r.employee_id}>
-                            <td>{r.name}</td>
-                            <td style={{ textAlign: "right" }}>{r.checkCount}</td>
-                            <td style={{ textAlign: "right" }}>{r.totalIssues}</td>
-                            <td style={{ textAlign: "right" }}>{r.totalStems}</td>
-                            <td style={{ textAlign: "right" }}>{formatPct(r.issueRate)}</td>
-                            <td style={{ textAlign: "center" }}>
-                              <span
-                                style={{
-                                  display: "inline-block",
-                                  padding: "0.2rem 0.6rem",
-                                  borderRadius: "999px",
-                                  fontSize: "0.75rem",
-                                  fontWeight: 700,
-                                  background: isOver ? "#f8d7da" : "#d1e7dd",
-                                  color: isOver ? "#842029" : "#0a3622"
-                                }}
-                              >
-                                {isOver ? "Over threshold" : "Good"}
-                              </span>
-                            </td>
-                            <td>
-                              {emp ? (
-                                <div className="row-actions">
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
-                                    onClick={() => startEditEmployee(emp)}
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="danger"
-                                    style={{ fontSize: "0.75em", padding: "0.2rem 0.55rem" }}
-                                    onClick={() => void deleteEmployee(emp)}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              ) : null}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
+                    <tbody>{renderSummaryRows(employeeReportsWP, thresholdRateWP)}</tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {/* ── Picking Report tab ────────────────────────────────────────── */}
+      {activeTab === "pp_report" ? (
+        <div style={{ marginTop: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+          {checksPP.length === 0 ? (
+            <div className="coming-soon-card">
+              <p style={{ fontSize: "0.9em", color: "var(--text-muted)" }}>
+                No Picking Peppers checks recorded yet. Use the mobile Quality Check page to start logging.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="coming-soon-card">
+                <h2 style={{ marginBottom: "0.25rem" }}>Issue Rate by Employee</h2>
+                <p style={{ fontSize: "0.8em", color: "var(--text-muted)", marginBottom: "0.85rem" }}>
+                  Threshold: {thresholdPP.allowed_issues} issues per {thresholdPP.stems_checked} stems
+                  ({formatPct(thresholdRatePP)}). Red bars are at or above threshold.
+                </p>
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={chartDataPP} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                    <YAxis
+                      tickFormatter={(v: number) => `${v}%`}
+                      tick={{ fontSize: 12 }}
+                      domain={[0, "auto"]}
+                    />
+                    <Tooltip
+                      formatter={(value) => {
+                        const n = typeof value === "number" ? value : 0;
+                        return `${n}%`;
+                      }}
+                      labelFormatter={(label) => `Employee: ${String(label ?? "")}`}
+                    />
+                    <Bar dataKey="rate" radius={[4, 4, 0, 0]}>
+                      {chartDataPP.map((entry, index) => (
+                        <Cell
+                          key={index}
+                          fill={entry.isOver ? "#dc3545" : "#198754"}
+                          fillOpacity={0.85}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="coming-soon-card">
+                <h2 style={{ marginBottom: "0.25rem" }}>Quality Trend by Employee</h2>
+                <p style={{ fontSize: "0.8em", color: "var(--text-muted)", marginBottom: "0.85rem" }}>
+                  Compares each employee's earlier checks against their recent checks. Lower issue rate is better.
+                </p>
+                <div className="varieties-table-wrapper">
+                  <table className="varieties-table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th style={{ textAlign: "right" }}>Checks</th>
+                        <th style={{ textAlign: "right" }}>Earlier rate</th>
+                        <th style={{ textAlign: "right" }}>Recent rate</th>
+                        <th style={{ textAlign: "right" }}>Change</th>
+                        <th style={{ textAlign: "center" }}>Trend</th>
+                      </tr>
+                    </thead>
+                    <tbody>{renderTrendRows(trendDataPP)}</tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="coming-soon-card">
+                <h2 style={{ marginBottom: "0.75rem" }}>Employee Summary</h2>
+                <div className="varieties-table-wrapper">
+                  <table className="varieties-table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th style={{ textAlign: "right" }}>Checks</th>
+                        <th style={{ textAlign: "right" }}>Total Issues</th>
+                        <th style={{ textAlign: "right" }}>Stems Checked</th>
+                        <th style={{ textAlign: "right" }}>Issue Rate</th>
+                        <th style={{ textAlign: "center" }}>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>{renderSummaryRows(employeeReportsPP, thresholdRatePP)}</tbody>
                   </table>
                 </div>
               </div>

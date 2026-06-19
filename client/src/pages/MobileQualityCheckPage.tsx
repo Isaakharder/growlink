@@ -35,6 +35,7 @@ type QualityMetric = {
 type QualityCheck = {
   employee_id: string;
   checked_at: string;
+  check_type: CheckType;
 };
 
 function getISOWeekYear(date: Date): { year: number; week: number } {
@@ -177,15 +178,18 @@ export function MobileQualityCheckPage() {
   }, [employees]);
 
   const weekCheckedList = useMemo(() => {
+    const relevant = checkType
+      ? weekChecks.filter((c) => c.check_type === checkType)
+      : weekChecks;
     const byEmp = new Map<string, string>();
-    for (const c of weekChecks) {
+    for (const c of relevant) {
       const existing = byEmp.get(c.employee_id);
       if (!existing || c.checked_at > existing) byEmp.set(c.employee_id, c.checked_at);
     }
     return Array.from(byEmp.entries())
       .map(([empId, checkedAt]) => ({ empId, name: empMap[empId] ?? "Unknown employee", checkedAt }))
       .sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
-  }, [weekChecks, empMap]);
+  }, [weekChecks, empMap, checkType]);
 
   function increment(metricId: string) {
     setCounts((prev) => ({ ...prev, [metricId]: safeNum(prev[metricId]) + 1 }));
@@ -395,7 +399,7 @@ export function MobileQualityCheckPage() {
             onChange={(e) => {
               const id = e.target.value;
               setSavedMessage("");
-              if (id && weekChecks.some((c) => c.employee_id === id)) {
+              if (id && checkType && weekChecks.some((c) => c.employee_id === id && c.check_type === checkType)) {
                 setDuplicateWarning({ pendingEmployeeId: id });
               } else {
                 setEmployeeId(id);

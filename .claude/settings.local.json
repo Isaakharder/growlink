@@ -42,7 +42,8 @@
       "Bash(GROWLINK_API_URL=http://localhost:8080/api GROWLINK_UPLOAD_KEY=radiation-sync-test-key-67890 npx tsx src/scripts/testImport.ts)",
       "Bash(GROWLINK_API_URL=http://localhost:8080/api GROWLINK_UPLOAD_KEY=policy-change-test-key-001 npx tsx src/scripts/testImport.ts)",
       "PowerShell(cd C:\\\\GrowLink\\\\server; npx tsc --noEmit 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
-      "PowerShell(cd C:\\\\GrowLink\\\\client; npx tsc --noEmit 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")"
+      "PowerShell(cd C:\\\\GrowLink\\\\client; npx tsc --noEmit 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "Bash(node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

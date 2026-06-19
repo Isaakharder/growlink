@@ -249,12 +249,18 @@ router.put("/quality/threshold", canEdit, async (req, res) => {
 
 router.get("/quality/checks", canView, async (req, res) => {
   const orgId = req.organizationId;
-  const { data, error } = await supabase
+  let query = supabase
     .from("quality_checks")
     .select("*")
     .eq("organization_id", orgId)
     .order("checked_at", { ascending: false })
     .limit(500);
+
+  if (typeof req.query.check_type === "string" && VALID_CHECK_TYPES.includes(req.query.check_type as CheckType)) {
+    query = query.eq("check_type", req.query.check_type);
+  }
+
+  const { data, error } = await query;
   if (error) return sendSafeError(res, 500, "Failed to load checks.", "quality checks select:", error);
   return res.json(data);
 });
