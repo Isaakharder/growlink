@@ -16,7 +16,7 @@ adminUploadKeysRouter.get(
   async (_req: Request, res: Response) => {
     const { data: keys, error: keysError } = await supabase
       .from("organization_upload_keys")
-      .select("id, organization_id, label, status, created_at, last_used_at")
+      .select("id, organization_id, label, status, created_at, last_used_at, data_source_type")
       .order("created_at", { ascending: false });
 
     if (keysError) {
@@ -26,6 +26,18 @@ adminUploadKeysRouter.get(
         "Upload key list error:",
         keysError
       );
+    }
+
+    const keyIds = (keys ?? []).map((k) => k.id);
+    const templateKeyIds = new Set<string>();
+    if (keyIds.length > 0) {
+      const { data: templates } = await supabase
+        .from("import_source_templates")
+        .select("upload_key_id")
+        .in("upload_key_id", keyIds);
+      for (const t of templates ?? []) {
+        templateKeyIds.add(t.upload_key_id as string);
+      }
     }
 
     const organizationIds = Array.from(
@@ -61,6 +73,8 @@ adminUploadKeysRouter.get(
         organizationName: organizationsById.get(key.organization_id) ?? "Unknown",
         label: key.label,
         status: key.status,
+        dataSourceType: key.data_source_type ?? "flowmaster",
+        hasTemplate: templateKeyIds.has(key.id),
         createdAt: key.created_at,
         lastUsedAt: key.last_used_at
       }))
@@ -72,7 +86,7 @@ adminUploadKeysRouter.post(
   "/admin/upload-keys",
   requireAdminUser,
   async (req: Request, res: Response) => {
-    const { organizationId, label } = req.body as Record<string, unknown>;
+    const { organizationId, label, dataSourceType } = req.body as Record<string, unknown>;
 
     if (typeof organizationId !== "string" || !organizationId.trim()) {
       return res.status(400).json({ message: "organizationId is required." });
@@ -84,6 +98,12 @@ adminUploadKeysRouter.post(
 
     const orgId = organizationId.trim();
     const keyLabel = label.trim();
+    const allowedTypes = ["flowmaster", "generic_csv"] as const;
+    const sourceType =
+      typeof dataSourceType === "string" &&
+      allowedTypes.includes(dataSourceType as typeof allowedTypes[number])
+        ? (dataSourceType as typeof allowedTypes[number])
+        : "flowmaster";
 
     const { data: org, error: orgError } = await supabase
       .from("organizations")
@@ -113,7 +133,8 @@ adminUploadKeysRouter.post(
         organization_id: orgId,
         key_hash: keyHash,
         label: keyLabel,
-        status: "active"
+        status: "active",
+        data_source_type: sourceType
       })
       .select("id, label, created_at")
       .single();
@@ -136,6 +157,7 @@ adminUploadKeysRouter.post(
       id: inserted.id,
       organizationId: orgId,
       label: inserted.label,
+      dataSourceType: sourceType,
       createdAt: inserted.created_at,
       key: rawKey
     });

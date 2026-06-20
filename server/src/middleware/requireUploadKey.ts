@@ -26,7 +26,7 @@ export async function requireUploadKey(
 
   const { data, error } = await supabase
     .from("organization_upload_keys")
-    .select("id, organization_id, label")
+    .select("id, organization_id, label, data_source_type")
     .eq("key_hash", keyHash)
     .eq("status", "active")
     .maybeSingle();
@@ -42,6 +42,8 @@ export async function requireUploadKey(
 
   req.organizationId = data.organization_id;
   req.uploadKeyLabel = data.label;
+  req.uploadKeyId = data.id;
+  req.dataSourceType = data.data_source_type ?? "flowmaster";
 
   // Fire-and-forget: update last_used_at without blocking the request.
   // Use two-arg .then() because the Supabase builder returns PromiseLike, not Promise.

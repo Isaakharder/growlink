@@ -5,6 +5,11 @@ import { requireUploadKey } from "../middleware/requireUploadKey";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
 import { parseFlowMasterCsvBuffer } from "../utils/flowMasterCsvParser";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
+import {
+  parseGenericCsvBuffer,
+  extractCsvHeaders,
+  type ColumnMappings,
+} from "../utils/genericCsvParser";
 
 const agentRouter = Router();
 
@@ -53,11 +58,8 @@ agentRouter.post("/agent/ping", requireUploadKey, async (req: Request, res: Resp
 });
 
 type FileResult =
-  | {
-      filename: string;
-      status: "queued";
-      lotNumber: string;
-    }
+  | { filename: string; status: "queued"; lotNumber: string }
+  | { filename: string; status: "pending_template" }
   | {
       filename: string;
       status: "skipped";
@@ -67,9 +69,10 @@ type FileResult =
   | { filename: string; status: "error"; reason: string };
 
 // POST /api/agent/pdf-import
-// Accepts multipart PDFs/CSVs, parses each run, and queues them in
-// agent_pending_imports for manual review in Yield Data Entry.
-// Lots already present in yield_import_runs (completed imports) are skipped.
+// Accepts multipart PDFs/CSVs. Routing by data_source_type:
+//   flowmaster  → existing FlowMaster PDF/CSV parsers (unchanged)
+//   generic_csv → template-driven CSV parser; if no template is saved yet,
+//                 stores raw CSV and marks as needs_template=true
 agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Response) => {
   upload.array("files", MAX_FILES_PER_REQUEST)(req, res, async (uploadError) => {
     if (uploadError) {
@@ -98,10 +101,170 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
     const organizationId = req.organizationId;
     const uploadKeyLabel = req.uploadKeyLabel ?? null;
+    const uploadKeyId = req.uploadKeyId ?? null;
+    const dataSourceType = req.dataSourceType ?? "flowmaster";
 
+    if (dataSourceType !== "flowmaster" && dataSourceType !== "generic_csv") {
+      return res.status(400).json({
+        message: `Unsupported data source type: ${dataSourceType}. Contact GrowLink support.`
+      });
+    }
+
+    // ── generic_csv path ──────────────────────────────────────────────────────
+    if (dataSourceType === "generic_csv") {
+      // Look up the saved template for this upload key.
+      const { data: templateRow } = await supabase
+        .from("import_source_templates")
+        .select("column_mappings")
+        .eq("upload_key_id", uploadKeyId)
+        .maybeSingle();
+
+      const columnMappings = templateRow?.column_mappings as ColumnMappings | null;
+      const results: FileResult[] = [];
+
+      for (const file of uploadedFiles) {
+        const isCsv =
+          /\.csv$/i.test(file.originalname) ||
+          file.mimetype === "text/csv" ||
+          file.mimetype === "application/csv";
+
+        if (!isCsv) {
+          results.push({
+            filename: file.originalname,
+            status: "error",
+            reason:
+              "Non-CSV files are not supported for generic CSV import keys. Only .csv files are accepted.",
+          });
+          continue;
+        }
+
+        if (!columnMappings) {
+          // No template yet — store raw CSV so admin can configure the mapping.
+          let headers: string[] = [];
+          try {
+            headers = extractCsvHeaders(file.buffer);
+          } catch {
+            // Non-fatal: headers are best-effort for the UI preview.
+          }
+
+          const { error: insertError } = await supabase
+            .from("agent_pending_imports")
+            .insert({
+              organization_id: organizationId,
+              lot_number: null,
+              variety_name: null,
+              source_filename: file.originalname,
+              size_kg: {},
+              parsed_total_kg: null,
+              warnings: [
+                "No import template configured for this upload key. " +
+                  "Open GrowLink Admin → Agent → configure the import mapping to process this file.",
+              ],
+              unknown_sizes: [],
+              upload_key_label: uploadKeyLabel,
+              upload_key_id: uploadKeyId,
+              data_source_type: "generic_csv",
+              source_type: "agent",
+              needs_template: true,
+              raw_payload: {
+                csv_text: file.buffer.toString("utf-8"),
+                csv_headers: headers,
+              },
+              uploaded_at: new Date().toISOString(),
+            });
+
+          if (insertError) {
+            console.error("[agent/pdf-import] needs_template insert failed", {
+              organizationId,
+              filename: file.originalname,
+              code: insertError.code,
+              message: insertError.message,
+            });
+            results.push({ filename: file.originalname, status: "error", reason: "Failed to store file for configuration." });
+          } else {
+            results.push({ filename: file.originalname, status: "pending_template" });
+          }
+          continue;
+        }
+
+        // Template exists — parse and upsert normally.
+        let parsedFiles: FlowMasterParseResult[];
+        try {
+          parsedFiles = parseGenericCsvBuffer(file.buffer, file.originalname, columnMappings);
+        } catch (err) {
+          results.push({
+            filename: file.originalname,
+            status: "error",
+            reason: err instanceof Error ? err.message : "Failed to parse CSV.",
+          });
+          continue;
+        }
+
+        for (const parsed of parsedFiles) {
+          if (!parsed.lotNumber) {
+            results.push({
+              filename: file.originalname,
+              status: "error",
+              reason: "Could not extract unique key from file using the saved template.",
+            });
+            continue;
+          }
+
+          const { error: upsertError } = await supabase
+            .from("agent_pending_imports")
+            .upsert(
+              {
+                organization_id: organizationId,
+                lot_number: parsed.lotNumber,
+                variety_name: parsed.varietyName,
+                source_filename: file.originalname,
+                start_time: parsed.startTime,
+                iso_year: parsed.isoYear,
+                iso_week: parsed.isoWeek,
+                average_fruit_weight_g: parsed.averageFruitWeightG,
+                size_kg: parsed.sizeKg,
+                parsed_total_kg: parsed.totalKg,
+                warnings: parsed.warnings,
+                unknown_sizes: parsed.unknownSizes,
+                upload_key_label: uploadKeyLabel,
+                upload_key_id: uploadKeyId,
+                data_source_type: "generic_csv",
+                source_type: "agent",
+                needs_template: false,
+                raw_payload: parsed,
+                uploaded_at: new Date().toISOString(),
+              },
+              { onConflict: "organization_id,lot_number" }
+            );
+
+          if (upsertError) {
+            console.error("[agent/pdf-import] generic_csv upsert failed", {
+              organizationId,
+              lotNumber: parsed.lotNumber,
+              code: upsertError.code,
+              message: upsertError.message,
+            });
+            results.push({ filename: file.originalname, status: "error", reason: "Failed to queue import for review." });
+          } else {
+            results.push({ filename: file.originalname, status: "queued", lotNumber: parsed.lotNumber });
+          }
+        }
+      }
+
+      const queued = results.filter((r) => r.status === "queued").length;
+      const pendingTemplate = results.filter((r) => r.status === "pending_template").length;
+      const errors = results.filter((r) => r.status === "error").length;
+
+      return res.json({
+        success: true,
+        summary: { queued, pendingTemplate, errors },
+        results,
+      });
+    }
+
+    // ── flowmaster path (unchanged) ───────────────────────────────────────────
     const csvSettings = await fetchCsvSizeSettings(organizationId);
 
-    // Parse all files in parallel; CSVs may fan into multiple runs per file.
     type ParsedEntry = { filename: string; parsed: FlowMasterParseResult | null; parseError: string | null };
     const fileParseArrays = await Promise.all(
       uploadedFiles.map(async (file): Promise<ParsedEntry[]> => {
@@ -135,8 +298,6 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
     );
     const parsedFiles = fileParseArrays.flat();
 
-    // Batch-check already-imported lots against yield_import_runs.
-    // Lots present there are fully imported and must not be re-queued.
     const uploadedLots = parsedFiles
       .map((f) => f.parsed?.lotNumber)
       .filter((n): n is string => typeof n === "string" && n.length > 0);
@@ -155,13 +316,12 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
       }
     }
 
-    const results: FileResult[] = [];
+    const fmResults: FileResult[] = [];
     const seenLotsInBatch = new Set<string>();
 
     for (const file of parsedFiles) {
-      // Parse failure.
       if (!file.parsed) {
-        results.push({
+        fmResults.push({
           filename: file.filename,
           status: "error",
           reason: file.parseError ?? "Failed to parse file."
@@ -171,9 +331,8 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
       const parsed = file.parsed;
 
-      // Lot number is required as the unique key.
       if (!parsed.lotNumber) {
-        results.push({
+        fmResults.push({
           filename: file.filename,
           status: "error",
           reason: "Could not extract lot number from file."
@@ -181,9 +340,8 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         continue;
       }
 
-      // Already in yield_import_runs → fully imported, skip.
       if (alreadyImportedLots.has(parsed.lotNumber)) {
-        results.push({
+        fmResults.push({
           filename: file.filename,
           status: "skipped",
           reason: "already_imported",
@@ -192,9 +350,8 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         continue;
       }
 
-      // Duplicate lot within this batch → skip the later occurrence.
       if (seenLotsInBatch.has(parsed.lotNumber)) {
-        results.push({
+        fmResults.push({
           filename: file.filename,
           status: "skipped",
           reason: "duplicate_in_batch",
@@ -205,8 +362,6 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
       seenLotsInBatch.add(parsed.lotNumber);
 
-      // Upsert into agent_pending_imports.
-      // ON CONFLICT (organization_id, lot_number): overwrite with the freshest parsed data.
       const { error: upsertError } = await supabase
         .from("agent_pending_imports")
         .upsert(
@@ -224,7 +379,10 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
             warnings: parsed.warnings,
             unknown_sizes: parsed.unknownSizes,
             upload_key_label: uploadKeyLabel,
+            upload_key_id: uploadKeyId,
+            data_source_type: "flowmaster",
             source_type: "agent",
+            needs_template: false,
             raw_payload: parsed,
             uploaded_at: new Date().toISOString()
           },
@@ -240,7 +398,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           details: upsertError.details,
           hint: upsertError.hint
         });
-        results.push({
+        fmResults.push({
           filename: file.filename,
           status: "error",
           reason: "Failed to queue import for review."
@@ -257,21 +415,21 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         sourceFilename: file.filename
       });
 
-      results.push({
+      fmResults.push({
         filename: file.filename,
         status: "queued",
         lotNumber: parsed.lotNumber
       });
     }
 
-    const queuedCount = results.filter((r) => r.status === "queued").length;
-    const skippedCount = results.filter((r) => r.status === "skipped").length;
-    const errorCount = results.filter((r) => r.status === "error").length;
+    const queuedCount = fmResults.filter((r) => r.status === "queued").length;
+    const skippedCount = fmResults.filter((r) => r.status === "skipped").length;
+    const errorCount = fmResults.filter((r) => r.status === "error").length;
 
     return res.json({
       success: true,
       summary: { queued: queuedCount, skipped: skippedCount, errors: errorCount },
-      results
+      results: fmResults
     });
   });
 });

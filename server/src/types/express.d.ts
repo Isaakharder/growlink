@@ -6,6 +6,8 @@ declare global {
       userId?: string;
       organizationId: string;
       uploadKeyLabel?: string;
+      uploadKeyId?: string;
+      dataSourceType?: string;
     }
   }
 }

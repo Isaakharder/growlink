@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 
 type OrganizationOption = {
@@ -12,6 +13,8 @@ type UploadKeyRow = {
   organizationName: string;
   label: string;
   status: "active" | "revoked";
+  dataSourceType: string;
+  hasTemplate: boolean;
   createdAt: string;
   lastUsedAt: string | null;
 };
@@ -86,6 +89,7 @@ export function AdminGrowlinkAgentPage() {
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [keyLabel, setKeyLabel] = useState("");
+  const [keyDataSourceType, setKeyDataSourceType] = useState("flowmaster");
   const [keyRows, setKeyRows] = useState<UploadKeyRow[]>([]);
   const [keysLoading, setKeysLoading] = useState(true);
   const [keyCreateState, setKeyCreateState] = useState<KeyCreateState>({ kind: "idle" });
@@ -270,7 +274,7 @@ export function AdminGrowlinkAgentPage() {
     try {
       const res = await apiFetch("/api/admin/upload-keys", {
         method: "POST",
-        body: JSON.stringify({ organizationId: selectedOrganizationId, label: keyLabel.trim() })
+        body: JSON.stringify({ organizationId: selectedOrganizationId, label: keyLabel.trim(), dataSourceType: keyDataSourceType })
       });
       const body = (await res.json().catch(() => ({}))) as { message?: string; key?: string };
       if (!res.ok) {
@@ -415,6 +419,7 @@ export function AdminGrowlinkAgentPage() {
                     <th style={tableHeaderStyle}>Agent Name</th>
                     <th style={tableHeaderStyle}>Organization</th>
                     <th style={tableHeaderStyle}>Status</th>
+                    <th style={tableHeaderStyle}>Data Source</th>
                     <th style={tableHeaderStyle}>Created</th>
                     <th style={tableHeaderStyle}>Last Seen</th>
                     <th style={tableHeaderStyle}>Last Used</th>
@@ -431,6 +436,11 @@ export function AdminGrowlinkAgentPage() {
                           style={row.status === "active" ? connectedBadgeStyle : disconnectedBadgeStyle}
                         >
                           {row.status === "active" ? "Connected" : "Disconnected"}
+                        </span>
+                      </td>
+                      <td style={tableCellStyle}>
+                        <span style={row.dataSourceType === "generic_csv" ? genericCsvBadgeStyle : flowmasterBadgeStyle}>
+                          {row.dataSourceType === "generic_csv" ? "Generic CSV" : "FlowMaster"}
                         </span>
                       </td>
                       <td style={tableCellStyle}>{formatDateTime(row.createdAt)}</td>
@@ -467,7 +477,7 @@ export function AdminGrowlinkAgentPage() {
         </p>
 
         <form onSubmit={handleCreateUploadKey} style={cardStyle}>
-          <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "1fr 1fr auto" }}>
+          <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "1fr 1fr 1fr auto" }}>
             <div>
               <label htmlFor="key-org" style={labelStyle}>
                 Organization <span style={{ color: "#c0392b" }}>*</span>
@@ -503,6 +513,18 @@ export function AdminGrowlinkAgentPage() {
                 placeholder="e.g. Packline 1"
                 style={inputStyle}
               />
+            </div>
+            <div>
+              <label htmlFor="key-data-source" style={labelStyle}>Data Source</label>
+              <select
+                id="key-data-source"
+                value={keyDataSourceType}
+                onChange={(e) => setKeyDataSourceType(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="flowmaster">FlowMaster</option>
+                <option value="generic_csv">Generic CSV</option>
+              </select>
             </div>
             <div style={{ alignSelf: "end" }}>
               <button
@@ -568,9 +590,10 @@ export function AdminGrowlinkAgentPage() {
                     <th style={tableHeaderStyle}>Label</th>
                     <th style={tableHeaderStyle}>Organization</th>
                     <th style={tableHeaderStyle}>Status</th>
+                    <th style={tableHeaderStyle}>Data Source</th>
                     <th style={tableHeaderStyle}>Created</th>
                     <th style={tableHeaderStyle}>Last Used</th>
-                    <th style={tableHeaderStyle}>Action</th>
+                    <th style={tableHeaderStyle}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -583,21 +606,36 @@ export function AdminGrowlinkAgentPage() {
                           {row.status}
                         </span>
                       </td>
+                      <td style={tableCellStyle}>
+                        <span style={row.dataSourceType === "generic_csv" ? genericCsvBadgeStyle : flowmasterBadgeStyle}>
+                          {row.dataSourceType === "generic_csv" ? "Generic CSV" : "FlowMaster"}
+                        </span>
+                      </td>
                       <td style={tableCellStyle}>{formatDateTime(row.createdAt)}</td>
                       <td style={tableCellStyle}>{formatDateTime(row.lastUsedAt)}</td>
                       <td style={tableCellStyle}>
-                        <button
-                          type="button"
-                          onClick={() => void handleRevokeKey(row.id)}
-                          disabled={row.status === "revoked" || revokeBusyId === row.id}
-                          style={smallDangerButtonStyle}
-                        >
-                          {row.status === "revoked"
-                            ? "Revoked"
-                            : revokeBusyId === row.id
-                              ? "Revoking..."
-                              : "Revoke"}
-                        </button>
+                        <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+                          {row.dataSourceType === "generic_csv" && (
+                            <Link
+                              to={`/admin/import-templates/${row.id}`}
+                              style={row.hasTemplate ? configuredLinkStyle : configureLinkStyle}
+                            >
+                              {row.hasTemplate ? "Edit mapping" : "Configure import"}
+                            </Link>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleRevokeKey(row.id)}
+                            disabled={row.status === "revoked" || revokeBusyId === row.id}
+                            style={smallDangerButtonStyle}
+                          >
+                            {row.status === "revoked"
+                              ? "Revoked"
+                              : revokeBusyId === row.id
+                                ? "Revoking..."
+                                : "Revoke"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1127,6 +1165,50 @@ const disconnectedBadgeStyle: CSSProperties = {
   background: "#f9eaea",
   color: "#8f2d1f",
   border: "1px solid #f0c5be"
+};
+
+const flowmasterBadgeStyle: CSSProperties = {
+  display: "inline-block",
+  borderRadius: 999,
+  padding: "0.1rem 0.45rem",
+  fontSize: "0.72rem",
+  background: "var(--surface-soft)",
+  color: "var(--text-muted)",
+  border: "1px solid var(--border)"
+};
+
+const genericCsvBadgeStyle: CSSProperties = {
+  display: "inline-block",
+  borderRadius: 999,
+  padding: "0.1rem 0.45rem",
+  fontSize: "0.72rem",
+  background: "#eef4ff",
+  color: "#1a4a8f",
+  border: "1px solid #b8d0f7"
+};
+
+const configureLinkStyle: CSSProperties = {
+  fontSize: "0.78rem",
+  color: "#c0392b",
+  textDecoration: "none",
+  fontWeight: 600,
+  padding: "0.2rem 0.4rem",
+  border: "1px solid #f5c6c6",
+  borderRadius: 5,
+  background: "#fdf2f2",
+  whiteSpace: "nowrap"
+};
+
+const configuredLinkStyle: CSSProperties = {
+  fontSize: "0.78rem",
+  color: "#1a4a8f",
+  textDecoration: "none",
+  fontWeight: 500,
+  padding: "0.2rem 0.4rem",
+  border: "1px solid #b8d0f7",
+  borderRadius: 5,
+  background: "#eef4ff",
+  whiteSpace: "nowrap"
 };
 
 const modalOverlayStyle: CSSProperties = {

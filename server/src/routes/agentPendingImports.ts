@@ -11,7 +11,7 @@ const canEdit = requirePermission("yield:edit");
 
 type PendingImportRow = {
   id: string;
-  lot_number: string;
+  lot_number: string | null;
   variety_name: string | null;
   source_filename: string;
   start_time: string | null;
@@ -23,6 +23,8 @@ type PendingImportRow = {
   warnings: unknown[];
   unknown_sizes: unknown[];
   raw_payload: Record<string, unknown> | null;
+  needs_template: boolean;
+  data_source_type: string;
 };
 
 type ActiveVariety = { id: string; name: string };
@@ -60,6 +62,9 @@ type PdfPreviewSuccess = {
   unknownSizes: string[];
   warnings: string[];
   csvSizes: CsvSizeEntry[];
+  needsTemplate: boolean;
+  dataSourceType: string;
+  csvHeaders: string[];
 };
 
 // GET /api/agent-pending-imports[?isoYear=YYYY&isoWeek=WW]
@@ -71,13 +76,28 @@ type PdfPreviewSuccess = {
 agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res) => {
   const organizationId = req.organizationId;
 
-  const { data: pendingRows, error: pendingError } = await supabase
+  // Optional filter: ?dataSourceType=flowmaster restricts results to one source type.
+  // KgEntriesTab passes this so it only ever sees FlowMaster imports.
+  const rawDst = req.query.dataSourceType;
+  const dataSourceTypeFilter = typeof rawDst === "string" && rawDst.trim() ? rawDst.trim() : null;
+
+  let pendingQuery = supabase
     .from("agent_pending_imports")
     .select(
-      "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes, raw_payload"
+      "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes, raw_payload, needs_template, data_source_type"
     )
     .eq("organization_id", organizationId)
     .order("uploaded_at", { ascending: false });
+
+  if (dataSourceTypeFilter) {
+    pendingQuery = pendingQuery.eq("data_source_type", dataSourceTypeFilter);
+  }
+  if (dataSourceTypeFilter === "flowmaster") {
+    // Exclude rows still waiting for template configuration from the FlowMaster review panel.
+    pendingQuery = pendingQuery.eq("needs_template", false);
+  }
+
+  const { data: pendingRows, error: pendingError } = await pendingQuery;
 
   if (pendingError) {
     console.error("[agent-pending-imports] fetch failed:", {
@@ -94,7 +114,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
     return res.json({ success: true, count: 0, files: [] });
   }
 
-  const lotNumbers = rows.map((r) => r.lot_number);
+  const lotNumbers = rows.map((r) => r.lot_number).filter((n): n is string => n !== null);
 
   const [varietiesResult, yieldSizesResult, yieldEntriesResult, importRunsResult] =
     await Promise.all([
@@ -162,7 +182,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
       ? (row.warnings as string[]).filter((w) => typeof w === "string")
       : [];
 
-    const alreadyImported = alreadyImportedLots.has(row.lot_number);
+    const alreadyImported = row.lot_number !== null && alreadyImportedLots.has(row.lot_number);
     const skipped = alreadyImported;
 
     if (alreadyImported) {
@@ -235,6 +255,11 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
         )
       : [];
 
+    const rawCsvHeaders = row.raw_payload?.csv_headers;
+    const csvHeaders: string[] = Array.isArray(rawCsvHeaders)
+      ? (rawCsvHeaders as unknown[]).filter((h): h is string => typeof h === "string")
+      : [];
+
     return {
       id: row.id,
       filename: row.source_filename,
@@ -264,7 +289,10 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
       duplicateStatus: { found: hasExistingWeeklyData },
       unknownSizes,
       warnings: Array.from(new Set(warnings)),
-      csvSizes
+      csvSizes,
+      needsTemplate: row.needs_template,
+      dataSourceType: row.data_source_type,
+      csvHeaders,
     };
   });
 

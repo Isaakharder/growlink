@@ -7,6 +7,7 @@ import { adminDocklinkIntegrationsRouter } from "./routes/adminDocklinkIntegrati
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
 import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportRuns";
 import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
+import { importSourceTemplatesRouter } from "./routes/importSourceTemplates";
 import { adminClimateImportsRouter } from "./routes/adminClimateImports";
 import { agentPendingImportsRouter } from "./routes/agentPendingImports";
 import { invitesPublicRouter, invitesRouter } from "./routes/invites";
@@ -113,6 +114,7 @@ app.use("/api", adminDocklinkIntegrationsRouter);
 app.use("/api", adminOrganizationsRouter);
 app.use("/api", adminFlowMasterImportRunsRouter);
 app.use("/api", adminUploadKeysRouter);
+app.use("/api", importSourceTemplatesRouter);
 app.use("/api", adminClimateImportsRouter);
 app.use("/api", agentRouter);
 app.use("/api", climateImportRouter);

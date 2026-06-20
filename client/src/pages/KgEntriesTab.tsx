@@ -64,6 +64,7 @@ const ENTRIES_URL = "/api/yield-entries";
 const PDF_PREVIEW_URL = "/api/pdf-import/preview";
 const PDF_IMPORT_URL = "/api/pdf-import/import";
 const PENDING_IMPORTS_URL = "/api/agent-pending-imports";
+const FLOWMASTER_FILTER = "?dataSourceType=flowmaster";
 const CSV_SETTINGS_URL = "/api/greenhouse-setup/csv-size-settings";
 
 type CsvSizeEntry = {
@@ -410,7 +411,7 @@ export function KgEntriesTab() {
 
   async function fetchPendingWeeks() {
     try {
-      const res = await apiFetch(PENDING_IMPORTS_URL);
+      const res = await apiFetch(`${PENDING_IMPORTS_URL}${FLOWMASTER_FILTER}`);
       if (!res.ok) return;
       const body = (await res.json()) as { weeks?: PendingAgentWeek[] };
       setPendingWeeks(body.weeks ?? []);
@@ -447,12 +448,12 @@ export function KgEntriesTab() {
   }
 
   async function handlePendingWeekClick(isoYear: number | null, isoWeek: number | null) {
-    const params =
+    const weekParams =
       isoYear !== null && isoWeek !== null
-        ? `?isoYear=${isoYear}&isoWeek=${isoWeek}`
+        ? `&isoYear=${isoYear}&isoWeek=${isoWeek}`
         : "";
     try {
-      const res = await apiFetch(`${PENDING_IMPORTS_URL}${params}`);
+      const res = await apiFetch(`${PENDING_IMPORTS_URL}${FLOWMASTER_FILTER}${weekParams}`);
       if (!res.ok) return;
       const body = (await res.json()) as { files?: PdfPreviewFile[] };
       setPdfPreviewFiles(body.files ?? []);
