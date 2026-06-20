@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { enqueue } from "../services/offlineQueue";
 
 type CheckType = "winding_pruning" | "picking_peppers";
 
@@ -71,6 +73,7 @@ function safeNum(v: unknown): number {
 }
 
 export function MobileQualityCheckPage() {
+  const { isOnline } = useOnlineStatus();
   const [groups, setGroups] = useState<SetupGroup[]>([]);
   const [allRows, setAllRows] = useState<SetupRow[]>([]);
   const [employees, setEmployees] = useState<QualityEmployee[]>([]);
@@ -241,23 +244,34 @@ export function MobileQualityCheckPage() {
       metricCounts[m.id] = safeNum(counts[m.id]);
     }
 
+    const postBody = JSON.stringify({
+      check_type: checkType,
+      employee_id: employeeId,
+      phase_id: phaseId || null,
+      phase_name: selectedPhase?.name ?? "",
+      row_id: rowId || null,
+      row_number: selectedRow?.row_number ?? 0,
+      slabs_checked: slabsNum,
+      stems_per_slab_snapshot: effectiveStemsPerSlab,
+      metric_counts: metricCounts,
+      total_issues: totalIssues,
+      notes: notes.trim() || null
+    });
+
     try {
-      const res = await apiFetch("/api/quality/checks", {
-        method: "POST",
-        body: JSON.stringify({
-          check_type: checkType,
-          employee_id: employeeId,
-          phase_id: phaseId || null,
-          phase_name: selectedPhase?.name ?? "",
-          row_id: rowId || null,
-          row_number: selectedRow?.row_number ?? 0,
-          slabs_checked: slabsNum,
-          stems_per_slab_snapshot: effectiveStemsPerSlab,
-          metric_counts: metricCounts,
-          total_issues: totalIssues,
-          notes: notes.trim() || null
-        })
-      });
+      if (!isOnline) {
+        await enqueue({ module: "quality", url: "/api/quality/checks", method: "POST", body: postBody });
+        setSavedMessage("Saved offline — will sync when connected.");
+        setPhaseId("");
+        setRowId("");
+        setSlabsChecked("");
+        setManualStemsPerSlab("");
+        setNotes("");
+        setCounts({});
+        return;
+      }
+
+      const res = await apiFetch("/api/quality/checks", { method: "POST", body: postBody });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? "Failed to save");

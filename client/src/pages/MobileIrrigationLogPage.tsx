@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { enqueue } from "../services/offlineQueue";
 
 type GroupType = "phase" | "zone" | "color";
 
@@ -158,6 +160,7 @@ function formatMetric(value: number | null, decimals = 2) {
 }
 
 export function MobileIrrigationLogPage() {
+  const { isOnline } = useOnlineStatus();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [trackingMode, setTrackingMode] = useState<GroupType | null>(null);
@@ -394,25 +397,38 @@ export function MobileIrrigationLogPage() {
       return;
     }
 
+    const putBody = JSON.stringify({
+      log_date: logDate,
+      tracking_mode: trackingMode,
+      feed_valve_ids: selectedGroup.feedValves.map((valve) => valve.id),
+      drain_bucket_ids: selectedGroup.drainBuckets.map((bucket) => bucket.id),
+      feed_valve_readings: feedValveReadings,
+      drain_bucket_readings: drainBucketReadings,
+      feed_ph: feedPh,
+      feed_ec: feedEc,
+      drain_ph: drainPh,
+      drain_ec: drainEc,
+      notes: draft.notes.trim() || null
+    });
+
     setSaving(true);
     setSavedMessage("");
 
     try {
+      if (!isOnline) {
+        await enqueue({
+          module: "irrigation",
+          url: `${IRRIGATION_LOG_URL}/${selectedGroup.id}`,
+          method: "PUT",
+          body: putBody,
+        });
+        setSavedMessage(`Saved offline — ${selectedGroup.name} will sync when connected`);
+        return;
+      }
+
       const response = await apiFetch(`${IRRIGATION_LOG_URL}/${selectedGroup.id}`, {
         method: "PUT",
-        body: JSON.stringify({
-          log_date: logDate,
-          tracking_mode: trackingMode,
-          feed_valve_ids: selectedGroup.feedValves.map((valve) => valve.id),
-          drain_bucket_ids: selectedGroup.drainBuckets.map((bucket) => bucket.id),
-          feed_valve_readings: feedValveReadings,
-          drain_bucket_readings: drainBucketReadings,
-          feed_ph: feedPh,
-          feed_ec: feedEc,
-          drain_ph: drainPh,
-          drain_ec: drainEc,
-          notes: draft.notes.trim() || null
-        })
+        body: putBody,
       });
 
       if (!response.ok) {
@@ -425,10 +441,7 @@ export function MobileIrrigationLogPage() {
       setGroups((current) =>
         current.map((entry) =>
           entry.id === selectedGroup.id
-            ? {
-                ...entry,
-                existingLog: saved
-              }
+            ? { ...entry, existingLog: saved }
             : entry
         )
       );

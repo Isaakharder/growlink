@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../hooks/usePermissions";
+import { useMembership } from "../../contexts/MembershipContext";
+import { getDefaultRoute } from "../../utils/getDefaultRoute";
 
 type Props = {
   permission: string;
@@ -19,6 +21,9 @@ export function RequirePermission({ permission, children }: Props) {
 }
 
 export function Unauthorized() {
+  const { role, permissions } = useMembership();
+  const home = getDefaultRoute(role, permissions);
+
   return (
     <div
       style={{
@@ -51,7 +56,7 @@ export function Unauthorized() {
         Contact your organization owner to request access.
       </p>
       <Link
-        to="/"
+        to={home}
         style={{
           marginTop: "0.5rem",
           display: "inline-block",
@@ -64,7 +69,7 @@ export function Unauthorized() {
           fontWeight: 600,
         }}
       >
-        Back to Dashboard
+        Go to Home
       </Link>
     </div>
   );

@@ -2,9 +2,13 @@ import { NavLink, Outlet } from "react-router-dom";
 import { MembershipProvider } from "../../contexts/MembershipContext";
 import { usePermissions } from "../../hooks/usePermissions";
 import { Unauthorized } from "../auth/RequirePermission";
+import { OfflineBanner } from "../mobile/OfflineBanner";
+import { SyncStatusBar } from "../mobile/SyncStatusBar";
+import { useOfflineQueue } from "../../hooks/useOfflineQueue";
 
 function MobileLayoutInner() {
   const { loading, can } = usePermissions();
+  const { queuePending, queueFailed, syncStatus, clearFailed } = useOfflineQueue();
 
   const nav = (
     <nav
@@ -30,6 +34,13 @@ function MobileLayoutInner() {
       </header>
 
       <main className="mobile-content">
+        <OfflineBanner />
+        <SyncStatusBar
+          queuePending={queuePending}
+          queueFailed={queueFailed}
+          syncStatus={syncStatus}
+          onClearFailed={() => void clearFailed()}
+        />
         {/* Show nothing while loading (avoids flash of restricted content).
             Deny mobile:access before rendering any child route. */}
         {!loading && !can("mobile:access") ? <Unauthorized /> : loading ? null : <Outlet />}

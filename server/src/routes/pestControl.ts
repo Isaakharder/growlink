@@ -1508,38 +1508,85 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
       // Production site area as formatted string
       const productionSiteArea = areaM2 != null ? `${areaM2.toFixed(1)} m²` : null;
 
-      const { error: h1Error } = await supabase.from("food_safety_h1_logs").insert({
-        organization_id:                 organizationId,
-        pest_job_id:                     id,
-        application_date:                applicationDate,
-        product_name:                    productName,
-        pcp_number:                      pcpNumber,
-        actual_quantity_used:            actualQtyUsed,
-        actual_quantity_unit:            actualQtyUnit,
-        rate_applied_per_unit:           rateAppliedPerUnit,
-        label_instructions_followed:     true,
-        area_quantity_treated_m2:        areaM2,
-        method_of_application:           methodOfApplication,
-        row_house_zones:                 rowHouseZones,
-        earliest_allowable_harvest_date: earliestHarvestDate,
-        phi_daa:                         phiDaa,
-        applicator_name:                 null,
-        // top-form prefills
-        operation_name:                  operationName,
-        current_crop:                    "Peppers",
-        previous_year_crops:             null,
-        variety:                         varietyName,
-        production_site_information:     rowHouseZones,
-        production_site_area:            productionSiteArea,
-        date_planted:                    datePlanted,
-        // bottom fields
-        confirmation_signature:          null,
-        confirmation_date:               null,
-        version_label:                   "Version 11.0",
-      });
+      // ── Determine which sheet this log belongs to ──────────────────────
+      // Find the most recently used sheet_group_id that has < 8 rows.
+      // If none exists the new log becomes its own sheet (sheet_group_id = its own id).
+      let targetSheetGroupId: string | null = null;
+      {
+        const { data: sheetLogs } = await supabase
+          .from("food_safety_h1_logs")
+          .select("sheet_group_id, created_at")
+          .eq("organization_id", organizationId)
+          .not("sheet_group_id", "is", null)
+          .order("created_at", { ascending: false });
+
+        // Count rows per sheet_group_id, preserving most-recent-first order
+        const seenOrder: string[] = [];
+        const counts: Record<string, number> = {};
+        for (const l of sheetLogs ?? []) {
+          const sgid = l.sheet_group_id as string | null;
+          if (!sgid) continue;
+          if (!seenOrder.includes(sgid)) seenOrder.push(sgid);
+          counts[sgid] = (counts[sgid] ?? 0) + 1;
+        }
+
+        // Sheet capacity = 8 rows (matches CanadaGAP H1 form)
+        const SHEET_CAPACITY = 8;
+        for (const sgid of seenOrder) {
+          if ((counts[sgid] ?? 0) < SHEET_CAPACITY) {
+            targetSheetGroupId = sgid;
+            break;
+          }
+        }
+      }
+
+      const { data: h1Row, error: h1Error } = await supabase
+        .from("food_safety_h1_logs")
+        .insert({
+          organization_id:                 organizationId,
+          pest_job_id:                     id,
+          sheet_group_id:                  targetSheetGroupId, // null → will be set to own id below
+          application_date:                applicationDate,
+          product_name:                    productName,
+          pcp_number:                      pcpNumber,
+          actual_quantity_used:            actualQtyUsed,
+          actual_quantity_unit:            actualQtyUnit,
+          rate_applied_per_unit:           rateAppliedPerUnit,
+          label_instructions_followed:     true,
+          area_quantity_treated_m2:        areaM2,
+          method_of_application:           methodOfApplication,
+          row_house_zones:                 rowHouseZones,
+          earliest_allowable_harvest_date: earliestHarvestDate,
+          phi_daa:                         phiDaa,
+          applicator_name:                 null,
+          // top-form prefills (written on first log; display reads from that log)
+          operation_name:                  operationName,
+          current_crop:                    "Peppers",
+          previous_year_crops:             null,
+          variety:                         varietyName,
+          production_site_information:     rowHouseZones,
+          production_site_area:            productionSiteArea,
+          date_planted:                    datePlanted,
+          // bottom fields
+          confirmation_signature:          null,
+          confirmation_date:               null,
+          version_label:                   "Version 11.0",
+        })
+        .select("id")
+        .single();
 
       if (h1Error) {
         console.error("[pest-complete] H1 log insert failed (non-blocking):", h1Error);
+      } else if (h1Row && !targetSheetGroupId) {
+        // New sheet: use the inserted log's own id as the sheet_group_id
+        const { error: sgErr } = await supabase
+          .from("food_safety_h1_logs")
+          .update({ sheet_group_id: h1Row.id })
+          .eq("id", h1Row.id)
+          .eq("organization_id", organizationId);
+        if (sgErr) {
+          console.error("[pest-complete] H1 sheet_group_id self-assignment failed (non-blocking):", sgErr);
+        }
       }
     }
   } catch (h1Err) {

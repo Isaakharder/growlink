@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { enqueue } from "../services/offlineQueue";
 
 type VarietyOption = {
   id: string;
@@ -66,6 +68,7 @@ type LocalSample = {
   stems_per_plant: number;
   total_plants: number;
   total_stems: number;
+  offline?: boolean;
 };
 
 type PersistedSample = {
@@ -220,6 +223,7 @@ function buildLinkedRowsByVariety(
 }
 
 export function MobileDailyYieldPage() {
+  const { isOnline } = useOnlineStatus();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -628,6 +632,16 @@ export function MobileDailyYieldPage() {
     setSavingCasesPerBin(true);
 
     try {
+      if (!isOnline) {
+        await enqueue({
+          module: "daily_yield",
+          url: SETTINGS_URL,
+          method: "PUT",
+          body: JSON.stringify({ cases_per_bin: parsedValue }),
+        });
+        return;
+      }
+
       const response = await apiFetch(SETTINGS_URL, {
         method: "PUT",
         body: JSON.stringify({ cases_per_bin: parsedValue })
@@ -692,27 +706,80 @@ export function MobileDailyYieldPage() {
     const sampleKg = (parsedPercent / 100) * kgPerFullBin;
     const sampleKgPerStem = sampleKg / row.total_stems;
 
+    const payload = {
+      variety_id: selectedVarietyId,
+      row_id: row.row_id,
+      phase_id: row.phase_id,
+      phase_name: row.phase_name,
+      row_label: row.label,
+      row_number: row.row_number,
+      percent_full: parsedPercent,
+      kg_per_full_bin: kgPerFullBin,
+      kg_per_case: kgPerCase,
+      calculated_sample_kg: sampleKg,
+      calculated_kg_per_stem: sampleKgPerStem,
+      sample_date: toSampleDateString(new Date()),
+      session_year: sessionYear,
+      session_week: sessionWeek
+    };
+
+    const localEntry: LocalSample = {
+      id: "",
+      row_id: row.row_id,
+      row_number: row.row_number,
+      phase_id: row.phase_id,
+      phase_name: row.phase_name,
+      row_label: row.label,
+      bin_fill_percent: parsedPercent,
+      sample_kg: sampleKg,
+      sample_kg_per_stem: sampleKgPerStem,
+      slab_count: row.slab_count,
+      plants_per_slab: row.plants_per_slab,
+      stems_per_plant: row.stems_per_plant,
+      total_plants: row.total_plants,
+      total_stems: row.total_stems
+    };
+
     setSavingSample(true);
 
     try {
+      if (!isOnline) {
+        const queued = await enqueue({
+          module: "daily_yield",
+          url: SAMPLES_URL,
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        const offlineId = queued.id;
+        setSamples((current) => [...current, { ...localEntry, id: offlineId, offline: true }]);
+        setAllWeekSamples((prev) => ({
+          ...prev,
+          [selectedVarietyId]: [
+            ...(prev[selectedVarietyId] ?? []),
+            {
+              id: offlineId,
+              row_id: localEntry.row_id,
+              row_number: localEntry.row_number,
+              phase_id: localEntry.phase_id,
+              phase_name: localEntry.phase_name,
+              row_label: localEntry.row_label,
+              percent_full: localEntry.bin_fill_percent,
+              calculated_sample_kg: localEntry.sample_kg,
+              calculated_kg_per_stem: localEntry.sample_kg_per_stem,
+              slab_count: localEntry.slab_count,
+              plants_per_slab: localEntry.plants_per_slab,
+              stems_per_plant: localEntry.stems_per_plant,
+              total_plants: localEntry.total_plants,
+              total_stems: localEntry.total_stems,
+            } satisfies PersistedSample
+          ]
+        }));
+        return;
+      }
+
       const response = await apiFetch(SAMPLES_URL, {
         method: "POST",
-        body: JSON.stringify({
-          variety_id: selectedVarietyId,
-          row_id: row.row_id,
-          phase_id: row.phase_id,
-          phase_name: row.phase_name,
-          row_label: row.label,
-          row_number: row.row_number,
-          percent_full: parsedPercent,
-          kg_per_full_bin: kgPerFullBin,
-          kg_per_case: kgPerCase,
-          calculated_sample_kg: sampleKg,
-          calculated_kg_per_stem: sampleKgPerStem,
-          sample_date: toSampleDateString(new Date()),
-          session_year: sessionYear,
-          session_week: sessionWeek
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -722,25 +789,7 @@ export function MobileDailyYieldPage() {
 
       const saved = (await response.json()) as PersistedSample;
 
-      setSamples((current) => [
-        ...current,
-        {
-          id: saved.id,
-          row_id: row.row_id,
-          row_number: row.row_number,
-          phase_id: row.phase_id,
-          phase_name: row.phase_name,
-          row_label: row.label,
-          bin_fill_percent: parsedPercent,
-          sample_kg: sampleKg,
-          sample_kg_per_stem: sampleKgPerStem,
-          slab_count: row.slab_count,
-          plants_per_slab: row.plants_per_slab,
-          stems_per_plant: row.stems_per_plant,
-          total_plants: row.total_plants,
-          total_stems: row.total_stems
-        }
-      ]);
+      setSamples((current) => [...current, { ...localEntry, id: saved.id }]);
 
       // Keep allWeekSamples in sync so color totals update immediately.
       setAllWeekSamples((prev) => ({
@@ -852,7 +901,7 @@ export function MobileDailyYieldPage() {
                 required
               />
             </label>
-            <button type="submit" disabled={savingCasesPerBin}>
+            <button type="submit" disabled={!isOnline || savingCasesPerBin}>
               {savingCasesPerBin ? "Saving..." : "Save"}
             </button>
           </form>
@@ -936,7 +985,7 @@ export function MobileDailyYieldPage() {
             type="button"
             className="secondary"
             onClick={resetSamples}
-            disabled={!selectedVarietyId || resettingSamples || samplesLoading}
+            disabled={!isOnline || !selectedVarietyId || resettingSamples || samplesLoading}
           >
             {resettingSamples ? "Resetting..." : "Reset samples"}
           </button>
@@ -952,6 +1001,9 @@ export function MobileDailyYieldPage() {
               <li key={sample.id}>
                 <div>
                   <strong>{sample.row_label}</strong>
+                  {sample.offline ? (
+                    <span className="offline-pending-badge">pending sync</span>
+                  ) : null}
                   <span>
                     {roundTo(sample.bin_fill_percent, 2)}% | {roundTo(sample.sample_kg, 3)} kg | {roundTo(sample.sample_kg_per_stem, 6)} kg/stem
                   </span>
@@ -960,7 +1012,7 @@ export function MobileDailyYieldPage() {
                   type="button"
                   className="sample-delete-btn"
                   onClick={() => deleteSample(sample.id)}
-                  disabled={deletingSampleId === sample.id}
+                  disabled={!isOnline || sample.offline === true || deletingSampleId === sample.id}
                   aria-label="Remove sample"
                 >
                   {deletingSampleId === sample.id ? "…" : "✕"}

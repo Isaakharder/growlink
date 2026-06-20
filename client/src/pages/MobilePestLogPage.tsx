@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { enqueue } from "../services/offlineQueue";
 
 // ── Snapshot types ────────────────────────────────────────────────────────────
 
@@ -178,6 +180,7 @@ function formatTime(iso: string): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MobilePestLogPage() {
+  const { isOnline } = useOnlineStatus();
   const [todos, setTodos] = useState<PestTodo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -328,18 +331,28 @@ export function MobilePestLogPage() {
 
   // ── Progress persistence ───────────────────────────────────────────────────
 
-  async function patchProgress(todoId: string, snap: ProgressSnapshot, showSaving = true) {
+  async function patchProgress(todoId: string, snap: ProgressSnapshot, showSaving = true): Promise<boolean> {
     if (showSaving) setSavingProgress(true);
     try {
-      const res = await apiFetch(`/api/pest/todos/${todoId}/progress`, {
-        method: "PATCH",
-        body: JSON.stringify({ progress_snapshot: snap })
-      });
+      const body = JSON.stringify({ progress_snapshot: snap });
+
+      if (!isOnline) {
+        await enqueue({ module: "pest", url: `/api/pest/todos/${todoId}/progress`, method: "PATCH", body });
+        setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap } : t)));
+        return true;
+      }
+
+      const res = await apiFetch(`/api/pest/todos/${todoId}/progress`, { method: "PATCH", body });
       if (res.ok) {
         setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap } : t)));
+        return true;
       }
+      const resBody = await res.json().catch(() => null) as { message?: string } | null;
+      setError(resBody?.message ?? "Failed to save progress. Please try again.");
+      return false;
     } catch {
-      // non-fatal
+      setError("Failed to save progress. Check your connection and try again.");
+      return false;
     } finally {
       if (showSaving) setSavingProgress(false);
     }
@@ -382,18 +395,28 @@ export function MobilePestLogPage() {
 
   // ── Valve-drench progress ──────────────────────────────────────────────────
 
-  async function patchValveDrenchProgress(todoId: string, snap: ValveDrenchSnapshot) {
+  async function patchValveDrenchProgress(todoId: string, snap: ValveDrenchSnapshot): Promise<boolean> {
     setSavingProgress(true);
     try {
-      const res = await apiFetch(`/api/pest/todos/${todoId}/progress`, {
-        method: "PATCH",
-        body: JSON.stringify({ progress_snapshot: snap })
-      });
+      const body = JSON.stringify({ progress_snapshot: snap });
+
+      if (!isOnline) {
+        await enqueue({ module: "pest", url: `/api/pest/todos/${todoId}/progress`, method: "PATCH", body });
+        setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap as unknown as Record<string, unknown> } : t)));
+        return true;
+      }
+
+      const res = await apiFetch(`/api/pest/todos/${todoId}/progress`, { method: "PATCH", body });
       if (res.ok) {
         setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, progress_snapshot: snap as unknown as Record<string, unknown> } : t)));
+        return true;
       }
+      const resBody = await res.json().catch(() => null) as { message?: string } | null;
+      setError(resBody?.message ?? "Failed to save progress. Please try again.");
+      return false;
     } catch {
-      // non-fatal
+      setError("Failed to save progress. Check your connection and try again.");
+      return false;
     } finally {
       setSavingProgress(false);
     }
@@ -406,6 +429,7 @@ export function MobilePestLogPage() {
 
     if (todo.status === "pending") markInProgress(todo.id);
 
+    const previousSnap = valveDrenchProgress;
     const now = new Date().toISOString();
     const newSnap: ValveDrenchSnapshot = {
       ...valveDrenchProgress,
@@ -414,7 +438,12 @@ export function MobilePestLogPage() {
       )
     };
     setValveDrenchProgress(newSnap);
-    await patchValveDrenchProgress(todoId, newSnap);
+    const ok = await patchValveDrenchProgress(todoId, newSnap);
+
+    if (!ok) {
+      setValveDrenchProgress(previousSnap);
+      return;
+    }
 
     if (newSnap.valves.every((v) => v.completed)) {
       if (window.confirm("All valves complete. Save drench record?")) {
@@ -469,9 +498,15 @@ export function MobilePestLogPage() {
   }
 
   function markInProgress(todoId: string) {
+    const body = JSON.stringify({ status: "in_progress" });
+    if (!isOnline) {
+      void enqueue({ module: "pest", url: `/api/pest/todos/${todoId}/status`, method: "PATCH", body });
+      setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, status: "in_progress" as TodoStatus } : t)));
+      return;
+    }
     void apiFetch(`/api/pest/todos/${todoId}/status`, {
       method: "PATCH",
-      body: JSON.stringify({ status: "in_progress" })
+      body,
     })
       .then((res) => {
         if (res.ok) {
@@ -559,8 +594,11 @@ export function MobilePestLogPage() {
     };
 
     if (todo.status === "pending") markInProgress(todo.id);
+    const previousProgress = progress;
     setProgress(newProgress);
-    void patchProgress(todo.id, newProgress);
+    void patchProgress(todo.id, newProgress).then((ok) => {
+      if (!ok) setProgress(previousProgress);
+    });
   }
 
   // ── Phase / row completion ─────────────────────────────────────────────────
@@ -652,13 +690,18 @@ export function MobilePestLogPage() {
       })
     };
 
+    const previousProgress = progress;
     setProgress(newProgress);
-    void patchProgress(todo.id, newProgress);
-
-    const phase = newProgress.phases[phaseIdx];
-    if (phase && phase.rows.length > 0 && phase.rows.every((r) => r.completed) && !phase.completed) {
-      confirmPhaseComplete(phaseIdx, newProgress, todo.id);
-    }
+    void patchProgress(todo.id, newProgress).then((ok) => {
+      if (!ok) {
+        setProgress(previousProgress);
+        return;
+      }
+      const phase = newProgress.phases[phaseIdx];
+      if (phase && phase.rows.length > 0 && phase.rows.every((r) => r.completed) && !phase.completed) {
+        confirmPhaseComplete(phaseIdx, newProgress, todo.id);
+      }
+    });
   }
 
   function applyCompleteSection() {
@@ -710,17 +753,22 @@ export function MobilePestLogPage() {
       })
     };
 
+    const previousProgress = progress;
     setProgress(newProgress);
     setShowCompleteSection(false);
     setSectionFrom("");
     setSectionTo("");
     setError(null);
-    void patchProgress(todo.id, newProgress);
-
-    const phase = newProgress.phases[selectedPhaseIdx];
-    if (phase && phase.rows.length > 0 && phase.rows.every((r) => r.completed) && !phase.completed) {
-      confirmPhaseComplete(selectedPhaseIdx, newProgress, todo.id);
-    }
+    void patchProgress(todo.id, newProgress).then((ok) => {
+      if (!ok) {
+        setProgress(previousProgress);
+        return;
+      }
+      const phase = newProgress.phases[selectedPhaseIdx];
+      if (phase && phase.rows.length > 0 && phase.rows.every((r) => r.completed) && !phase.completed) {
+        confirmPhaseComplete(selectedPhaseIdx, newProgress, todo.id);
+      }
+    });
   }
 
   // ── Derived values ─────────────────────────────────────────────────────────
@@ -839,6 +887,7 @@ export function MobilePestLogPage() {
                   <button
                     type="button"
                     className="mobile-action-button mobile-action-button--next"
+                    disabled={savingProgress}
                     onClick={startNewMix}
                   >
                     New Mix → Mix #{activeMix.mixNumber + 1}
@@ -860,6 +909,7 @@ export function MobilePestLogPage() {
                     <button
                       type="button"
                       className="mobile-action-button"
+                      disabled={savingProgress}
                       onClick={startNewMix}
                     >
                       Start New Mix #1
@@ -1042,6 +1092,7 @@ export function MobilePestLogPage() {
                     {!selectedPhase.completed ? (
                       <button
                         type="button"
+                        disabled={savingProgress}
                         style={{ marginTop: "0.65rem", width: "100%" }}
                         onClick={() => {
                           if (!selectedId) return;
@@ -1061,6 +1112,7 @@ export function MobilePestLogPage() {
                           key={row.rowId}
                           type="button"
                           className={`pest-row-btn${row.completed ? " pest-row-btn--done" : ""}`}
+                          disabled={savingProgress}
                           onClick={() => toggleRow(selectedPhaseIdx, rowIdx)}
                         >
                           <span className="pest-row-btn-check">{row.completed ? "✓" : ""}</span>
@@ -1115,7 +1167,7 @@ export function MobilePestLogPage() {
                             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.65rem" }}>
                               <button
                                 type="button"
-                                disabled={!sectionFrom || !sectionTo}
+                                disabled={!sectionFrom || !sectionTo || savingProgress}
                                 onClick={applyCompleteSection}
                                 style={{ flex: 1 }}
                               >
@@ -1164,7 +1216,7 @@ export function MobilePestLogPage() {
             <div style={{ marginTop: "1.25rem" }}>
               <button
                 type="button"
-                disabled={completing}
+                disabled={!isOnline || completing}
                 style={{ width: "100%" }}
                 onClick={() => void completeJob(selectedTodo.id)}
               >
