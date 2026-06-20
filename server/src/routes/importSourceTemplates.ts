@@ -1,8 +1,13 @@
+import { createHash } from "crypto";
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { requireAdminUser } from "../middleware/requireAdminUser";
 import { sendSafeError } from "../utils/safeError";
 import { parseCsvText, parseGenericCsvBuffer, type ColumnMappings } from "../utils/genericCsvParser";
+import {
+  parseWeatherStationCsv,
+  type WeatherStationMappings,
+} from "../utils/weatherStationCsvParser";
 
 const importSourceTemplatesRouter = Router();
 
@@ -36,7 +41,7 @@ importSourceTemplatesRouter.get(
     const [templateResult, pendingResult, sizesResult, orgResult] = await Promise.all([
       supabase
         .from("import_source_templates")
-        .select("id, name, file_type, column_mappings, created_at, updated_at")
+        .select("id, name, file_type, import_type, column_mappings, created_at, updated_at")
         .eq("upload_key_id", uploadKeyId)
         .maybeSingle(),
       supabase
@@ -129,6 +134,9 @@ importSourceTemplatesRouter.post(
     const body = req.body as Record<string, unknown>;
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const columnMappings = body.columnMappings;
+    const rawImportType = typeof body.importType === "string" ? body.importType : "yield_kg";
+    const importType: "yield_kg" | "weather_station" =
+      rawImportType === "weather_station" ? "weather_station" : "yield_kg";
 
     if (!name) {
       return res.status(400).json({ message: "Template name is required." });
@@ -138,8 +146,14 @@ importSourceTemplatesRouter.post(
     }
 
     const cm = columnMappings as Record<string, unknown>;
-    if (typeof cm.unique_key_column !== "string" || !cm.unique_key_column.trim()) {
-      return res.status(400).json({ message: "unique_key_column is required in columnMappings." });
+    if (importType === "yield_kg") {
+      if (typeof cm.unique_key_column !== "string" || !cm.unique_key_column.trim()) {
+        return res.status(400).json({ message: "unique_key_column is required in columnMappings." });
+      }
+    } else {
+      if (typeof cm.radiation_sum_key !== "string" || !cm.radiation_sum_key.trim()) {
+        return res.status(400).json({ message: "radiation_sum_key is required for weather_station templates." });
+      }
     }
 
     // Verify the upload key exists and get its organization.
@@ -164,12 +178,13 @@ importSourceTemplatesRouter.post(
           upload_key_id: uploadKeyId,
           name,
           file_type: "csv",
+          import_type: importType,
           column_mappings: columnMappings,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "organization_id,upload_key_id" }
       )
-      .select("id, name, column_mappings, created_at, updated_at")
+      .select("id, name, import_type, column_mappings, created_at, updated_at")
       .single();
 
     if (upsertError || !upserted) {
@@ -195,7 +210,7 @@ importSourceTemplatesRouter.post(
     // Load the template.
     const { data: template, error: templateError } = await supabase
       .from("import_source_templates")
-      .select("id, organization_id, column_mappings")
+      .select("id, organization_id, import_type, column_mappings")
       .eq("upload_key_id", uploadKeyId)
       .maybeSingle();
 
@@ -207,7 +222,7 @@ importSourceTemplatesRouter.post(
     }
 
     const organizationId = template.organization_id as string;
-    const columnMappings = template.column_mappings as ColumnMappings;
+    const templateImportType = (template.import_type as string | null) ?? "yield_kg";
 
     // Load all pending imports that need the template applied.
     const { data: pendingRows, error: pendingError } = await supabase
@@ -236,6 +251,76 @@ importSourceTemplatesRouter.post(
     let skipped = 0;
     let failed = 0;
 
+    // ── yield_kg apply path ───────────────────────────────────────────────────
+    if (templateImportType === "yield_kg") {
+      const columnMappings = template.column_mappings as ColumnMappings;
+
+      for (const row of rows) {
+        const csvText = typeof row.raw_payload?.csv_text === "string"
+          ? row.raw_payload.csv_text
+          : null;
+
+        if (!csvText) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          const parsed = parseGenericCsvBuffer(
+            Buffer.from(csvText, "utf-8"),
+            row.source_filename,
+            columnMappings
+          );
+
+          if (parsed.length === 0) {
+            skipped++;
+            continue;
+          }
+
+          // Use first parsed result per file (most generic CSVs have one lot per file;
+          // multi-lot CSVs are handled by the agent path which fans them into separate rows).
+          const p = parsed[0];
+
+          const { error: updateError } = await supabase
+            .from("agent_pending_imports")
+            .update({
+              lot_number: p.lotNumber,
+              variety_name: p.varietyName,
+              start_time: p.startTime,
+              iso_year: p.isoYear,
+              iso_week: p.isoWeek,
+              size_kg: p.sizeKg,
+              parsed_total_kg: p.totalKg,
+              warnings: p.warnings,
+              needs_template: false,
+            })
+            .eq("id", row.id)
+            .eq("organization_id", organizationId);
+
+          if (updateError) {
+            console.error("[import-templates apply] yield_kg update failed", { id: row.id, error: updateError.message });
+            failed++;
+          } else {
+            applied++;
+          }
+        } catch (err) {
+          console.error("[import-templates apply] yield_kg parse error", {
+            id: row.id,
+            filename: row.source_filename,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          failed++;
+        }
+      }
+
+      return res.json({ success: true, applied, skipped, failed });
+    }
+
+    // ── weather_station apply path ────────────────────────────────────────────
+    // Writes to climate_imports → climate_readings → daily_light_logs, exactly
+    // mirroring what the Windows Climate Agent does via POST /agent/climate-import.
+    const wsMappings = template.column_mappings as WeatherStationMappings;
+
     for (const row of rows) {
       const csvText = typeof row.raw_payload?.csv_text === "string"
         ? row.raw_payload.csv_text
@@ -247,45 +332,133 @@ importSourceTemplatesRouter.post(
       }
 
       try {
-        const parsed = parseGenericCsvBuffer(
+        const parsed = parseWeatherStationCsv(
           Buffer.from(csvText, "utf-8"),
           row.source_filename,
-          columnMappings
+          wsMappings
         );
 
-        if (parsed.length === 0) {
+        // Dedup: skip if this file hash is already in climate_imports.
+        const { data: existingImport } = await supabase
+          .from("climate_imports")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("file_hash", parsed.fileHash)
+          .maybeSingle();
+
+        if (existingImport) {
+          // Already imported — just clear the pending flag.
+          await supabase
+            .from("agent_pending_imports")
+            .update({ needs_template: false })
+            .eq("id", row.id)
+            .eq("organization_id", organizationId);
           skipped++;
           continue;
         }
 
-        // Use first parsed result per file (most generic CSVs have one lot per file;
-        // multi-lot CSVs are handled by the agent path which fans them into separate rows).
-        const p = parsed[0];
-
-        const { error: updateError } = await supabase
-          .from("agent_pending_imports")
-          .update({
-            lot_number: p.lotNumber,
-            variety_name: p.varietyName,
-            start_time: p.startTime,
-            iso_year: p.isoYear,
-            iso_week: p.isoWeek,
-            size_kg: p.sizeKg,
-            parsed_total_kg: p.totalKg,
-            warnings: p.warnings,
-            needs_template: false,
+        // Insert climate_imports record.
+        const { data: insertedImport, error: importInsertError } = await supabase
+          .from("climate_imports")
+          .insert({
+            organization_id: organizationId,
+            source_file: row.source_filename,
+            file_type: "weather_station",
+            export_timestamp: parsed.exportTimestamp,
+            file_hash: parsed.fileHash,
+            row_count: parsed.readings.length,
+            upload_key_label: null,
           })
+          .select("id")
+          .single();
+
+        if (importInsertError || !insertedImport) {
+          console.error("[import-templates apply] weather_station climate_imports insert failed", {
+            id: row.id,
+            error: importInsertError?.message,
+          });
+          failed++;
+          continue;
+        }
+
+        const importId = insertedImport.id as string;
+
+        // Insert climate_readings rows.
+        if (parsed.readings.length > 0) {
+          const readingRows = parsed.readings.map((r) => ({
+            organization_id: organizationId,
+            import_id: importId,
+            timestamp: parsed.exportTimestamp,
+            zone_label: r.zone_label,
+            metric_name: r.metric_name,
+            metric_value: r.metric_value,
+            unit: r.unit,
+            source_file: row.source_filename,
+          }));
+
+          const { error: readingsInsertError } = await supabase
+            .from("climate_readings")
+            .upsert(readingRows, {
+              onConflict: "organization_id,timestamp,zone_key,metric_name",
+              ignoreDuplicates: true,
+            });
+
+          if (readingsInsertError) {
+            console.error("[import-templates apply] weather_station climate_readings upsert failed", {
+              id: row.id,
+              error: readingsInsertError.message,
+            });
+            // Non-fatal: still mark as applied and sync daily light if possible.
+          }
+
+          // Sync daily_light_logs: sum radiation_sum readings across all stations.
+          const radiationReadings = parsed.readings.filter(
+            (r) => r.metric_name === "radiation_sum"
+          );
+          if (radiationReadings.length > 0) {
+            const totalRadiation = radiationReadings.reduce(
+              (sum, r) => sum + r.metric_value,
+              0
+            );
+            const logDate = parsed.exportTimestamp.slice(0, 10);
+            const { error: lightUpsertError } = await supabase
+              .from("daily_light_logs")
+              .upsert(
+                {
+                  organization_id: organizationId,
+                  log_date: logDate,
+                  joules_per_cm2: totalRadiation,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: "organization_id,log_date" }
+              );
+            if (lightUpsertError) {
+              console.error("[import-templates apply] weather_station daily_light_logs upsert failed", {
+                id: row.id,
+                error: lightUpsertError.message,
+              });
+            }
+          }
+        }
+
+        // Clear the pending flag on the agent_pending_imports row.
+        const { error: clearError } = await supabase
+          .from("agent_pending_imports")
+          .update({ needs_template: false })
           .eq("id", row.id)
           .eq("organization_id", organizationId);
 
-        if (updateError) {
-          console.error("[import-templates apply] update failed", { id: row.id, error: updateError.message });
+        if (clearError) {
+          console.error("[import-templates apply] weather_station pending clear failed", {
+            id: row.id,
+            error: clearError.message,
+          });
           failed++;
         } else {
           applied++;
         }
       } catch (err) {
-        console.error("[import-templates apply] parse error", {
+        console.error("[import-templates apply] weather_station parse error", {
           id: row.id,
           filename: row.source_filename,
           error: err instanceof Error ? err.message : String(err),

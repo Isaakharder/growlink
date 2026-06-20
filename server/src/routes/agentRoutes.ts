@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import multer from "multer";
 import { Request, Response, Router } from "express";
 import { supabase } from "../config/supabase";
@@ -10,6 +11,10 @@ import {
   extractCsvHeaders,
   type ColumnMappings,
 } from "../utils/genericCsvParser";
+import {
+  parseWeatherStationCsv,
+  type WeatherStationMappings,
+} from "../utils/weatherStationCsvParser";
 
 const agentRouter = Router();
 
@@ -60,6 +65,7 @@ agentRouter.post("/agent/ping", requireUploadKey, async (req: Request, res: Resp
 type FileResult =
   | { filename: string; status: "queued"; lotNumber: string }
   | { filename: string; status: "pending_template" }
+  | { filename: string; status: "imported"; importId: string }
   | {
       filename: string;
       status: "skipped";
@@ -115,11 +121,12 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
       // Look up the saved template for this upload key.
       const { data: templateRow } = await supabase
         .from("import_source_templates")
-        .select("column_mappings")
+        .select("column_mappings, import_type")
         .eq("upload_key_id", uploadKeyId)
         .maybeSingle();
 
       const columnMappings = templateRow?.column_mappings as ColumnMappings | null;
+      const templateImportType = (templateRow?.import_type as string | null) ?? "yield_kg";
       const results: FileResult[] = [];
 
       for (const file of uploadedFiles) {
@@ -187,7 +194,109 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           continue;
         }
 
-        // Template exists — parse and upsert normally.
+        // Template exists — dispatch by import type.
+
+        // ── weather_station: write directly to climate tables ─────────────────
+        if (templateImportType === "weather_station") {
+          const wsMappings = columnMappings as unknown as WeatherStationMappings;
+          try {
+            const parsed = parseWeatherStationCsv(file.buffer, file.originalname, wsMappings);
+
+            // Dedup against climate_imports.
+            const { data: existing } = await supabase
+              .from("climate_imports")
+              .select("id")
+              .eq("organization_id", organizationId)
+              .eq("file_hash", parsed.fileHash)
+              .maybeSingle();
+
+            if (existing) {
+              results.push({
+                filename: file.originalname,
+                status: "skipped",
+                reason: "already_imported",
+                lotNumber: parsed.exportTimestamp,
+              });
+              continue;
+            }
+
+            const { data: insertedImport, error: importInsertError } = await supabase
+              .from("climate_imports")
+              .insert({
+                organization_id: organizationId,
+                source_file: file.originalname,
+                file_type: "weather_station",
+                export_timestamp: parsed.exportTimestamp,
+                file_hash: parsed.fileHash,
+                row_count: parsed.readings.length,
+                upload_key_label: uploadKeyLabel,
+              })
+              .select("id")
+              .single();
+
+            if (importInsertError || !insertedImport) {
+              console.error("[agent/pdf-import] weather_station climate_imports insert failed", {
+                organizationId,
+                filename: file.originalname,
+                code: importInsertError?.code,
+                message: importInsertError?.message,
+              });
+              results.push({ filename: file.originalname, status: "error", reason: "Failed to record climate import." });
+              continue;
+            }
+
+            const importId = insertedImport.id as string;
+
+            if (parsed.readings.length > 0) {
+              const readingRows = parsed.readings.map((r) => ({
+                organization_id: organizationId,
+                import_id: importId,
+                timestamp: parsed.exportTimestamp,
+                zone_label: r.zone_label,
+                metric_name: r.metric_name,
+                metric_value: r.metric_value,
+                unit: r.unit,
+                source_file: file.originalname,
+              }));
+
+              await supabase
+                .from("climate_readings")
+                .upsert(readingRows, {
+                  onConflict: "organization_id,timestamp,zone_key,metric_name",
+                  ignoreDuplicates: true,
+                });
+
+              const radiationReadings = parsed.readings.filter(
+                (r) => r.metric_name === "radiation_sum"
+              );
+              if (radiationReadings.length > 0) {
+                const total = radiationReadings.reduce((s, r) => s + r.metric_value, 0);
+                await supabase
+                  .from("daily_light_logs")
+                  .upsert(
+                    {
+                      organization_id: organizationId,
+                      log_date: parsed.exportTimestamp.slice(0, 10),
+                      joules_per_cm2: total,
+                      updated_at: new Date().toISOString(),
+                    },
+                    { onConflict: "organization_id,log_date" }
+                  );
+              }
+            }
+
+            results.push({ filename: file.originalname, status: "imported", importId });
+          } catch (err) {
+            results.push({
+              filename: file.originalname,
+              status: "error",
+              reason: err instanceof Error ? err.message : "Failed to parse weather station CSV.",
+            });
+          }
+          continue;
+        }
+
+        // ── yield_kg: parse and upsert to agent_pending_imports ───────────────
         let parsedFiles: FlowMasterParseResult[];
         try {
           parsedFiles = parseGenericCsvBuffer(file.buffer, file.originalname, columnMappings);

@@ -15,18 +15,31 @@ type KeyInfo = {
   organizationName: string;
 };
 
-type ExistingTemplate = {
-  id: string;
-  name: string;
-  column_mappings: ColumnMappings;
-};
-
 type ColumnMappings = {
   unique_key_column: string;
   date_column?: string | null;
   variety_column?: string | null;
   kg_total_column?: string | null;
   size_columns?: Record<string, string>;
+};
+
+type WeatherStationMappings = {
+  station_name_key?: string | null;
+  radiation_sum_key?: string | null;
+  radiation_intensity_key?: string | null;
+  temperature_key?: string | null;
+  rh_key?: string | null;
+  rain_intensity_key?: string | null;
+  barometric_pressure_key?: string | null;
+};
+
+type ImportType = "yield_kg" | "weather_station";
+
+type ExistingTemplate = {
+  id: string;
+  name: string;
+  import_type: ImportType;
+  column_mappings: ColumnMappings | WeatherStationMappings;
 };
 
 type CsvPreview = {
@@ -63,12 +76,30 @@ export function ImportTemplateMappingPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // ── Shared state ────────────────────────────────────────────────────────────
+
+  const [importType, setImportType] = useState<ImportType>("yield_kg");
+  const [templateName, setTemplateName] = useState("");
+
+  // ── yield_kg state ──────────────────────────────────────────────────────────
+
   const [uniqueKeyCol, setUniqueKeyCol] = useState<string>(NONE);
   const [dateCol, setDateCol] = useState<string>(NONE);
   const [varietyCol, setVarietyCol] = useState<string>(NONE);
   const [totalKgCol, setTotalKgCol] = useState<string>(NONE);
   const [sizeColMap, setSizeColMap] = useState<Record<string, string>>({});
-  const [templateName, setTemplateName] = useState("");
+
+  // ── weather_station state ────────────────────────────────────────────────────
+
+  const [wsStationNameKey, setWsStationNameKey] = useState<string>(NONE);
+  const [wsRadiationSumKey, setWsRadiationSumKey] = useState<string>(NONE);
+  const [wsRadiationIntensityKey, setWsRadiationIntensityKey] = useState<string>(NONE);
+  const [wsTemperatureKey, setWsTemperatureKey] = useState<string>(NONE);
+  const [wsRhKey, setWsRhKey] = useState<string>(NONE);
+  const [wsRainIntensityKey, setWsRainIntensityKey] = useState<string>(NONE);
+  const [wsBarometricPressureKey, setWsBarometricPressureKey] = useState<string>(NONE);
+
+  // ── Status state ─────────────────────────────────────────────────────────────
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -98,14 +129,29 @@ export function ImportTemplateMappingPage() {
       const data = body as PageData;
       setPageData(data);
 
-      const cm = data.template?.column_mappings;
-      if (cm) {
-        setTemplateName(data.template?.name ?? "");
-        setUniqueKeyCol(cm.unique_key_column ?? NONE);
-        setDateCol(cm.date_column ?? NONE);
-        setVarietyCol(cm.variety_column ?? NONE);
-        setTotalKgCol(cm.kg_total_column ?? NONE);
-        setSizeColMap(cm.size_columns ?? {});
+      const tpl = data.template;
+      if (tpl) {
+        setTemplateName(tpl.name);
+        const it: ImportType = tpl.import_type === "weather_station" ? "weather_station" : "yield_kg";
+        setImportType(it);
+
+        if (it === "weather_station") {
+          const wm = tpl.column_mappings as WeatherStationMappings;
+          setWsStationNameKey(wm.station_name_key ?? NONE);
+          setWsRadiationSumKey(wm.radiation_sum_key ?? NONE);
+          setWsRadiationIntensityKey(wm.radiation_intensity_key ?? NONE);
+          setWsTemperatureKey(wm.temperature_key ?? NONE);
+          setWsRhKey(wm.rh_key ?? NONE);
+          setWsRainIntensityKey(wm.rain_intensity_key ?? NONE);
+          setWsBarometricPressureKey(wm.barometric_pressure_key ?? NONE);
+        } else {
+          const cm = tpl.column_mappings as ColumnMappings;
+          setUniqueKeyCol(cm.unique_key_column ?? NONE);
+          setDateCol(cm.date_column ?? NONE);
+          setVarietyCol(cm.variety_column ?? NONE);
+          setTotalKgCol(cm.kg_total_column ?? NONE);
+          setSizeColMap(cm.size_columns ?? {});
+        }
       } else {
         setTemplateName(`${data.key.label} Import`);
       }
@@ -119,13 +165,30 @@ export function ImportTemplateMappingPage() {
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const headers = useMemo(() => pageData?.csvPreview?.headers ?? [], [pageData]);
+  const csvRows = useMemo(() => pageData?.csvPreview?.rows ?? [], [pageData]);
 
+  // For yield_kg: column-header-based options.
   const headerOptions = useMemo(
     () => [{ value: NONE, label: "— not mapped —" }, ...headers.map((h) => ({ value: h, label: h }))],
     [headers]
   );
 
-  const canSave = uniqueKeyCol !== NONE && templateName.trim().length > 0;
+  // For weather_station: first-column values of each row are the "row keys" (metric labels).
+  const rowKeyOptions = useMemo(() => {
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    const push = (v: string) => {
+      const k = v.trim();
+      if (k && !seen.has(k)) { seen.add(k); keys.push(k); }
+    };
+    if (headers.length >= 1) push(headers[0]);
+    for (const row of csvRows) { if (row.length >= 1) push(row[0]); }
+    return [{ value: NONE, label: "— not mapped —" }, ...keys.map((k) => ({ value: k, label: k }))];
+  }, [headers, csvRows]);
+
+  const canSave =
+    templateName.trim().length > 0 &&
+    (importType === "yield_kg" ? uniqueKeyCol !== NONE : wsRadiationSumKey !== NONE);
 
   // ── Save ────────────────────────────────────────────────────────────────────
 
@@ -137,23 +200,36 @@ export function ImportTemplateMappingPage() {
     setSaveError(null);
     setSaveSuccess(false);
 
-    const cleanedSizeColumns: Record<string, string> = {};
-    for (const [sizeName, colName] of Object.entries(sizeColMap)) {
-      if (colName && colName !== NONE) cleanedSizeColumns[sizeName] = colName;
-    }
+    let columnMappings: ColumnMappings | WeatherStationMappings;
 
-    const columnMappings: ColumnMappings = {
-      unique_key_column: uniqueKeyCol,
-      date_column: dateCol || null,
-      variety_column: varietyCol || null,
-      kg_total_column: totalKgCol || null,
-      size_columns: Object.keys(cleanedSizeColumns).length > 0 ? cleanedSizeColumns : undefined,
-    };
+    if (importType === "weather_station") {
+      const wm: WeatherStationMappings = {};
+      if (wsStationNameKey && wsStationNameKey !== NONE)         wm.station_name_key          = wsStationNameKey;
+      if (wsRadiationSumKey && wsRadiationSumKey !== NONE)       wm.radiation_sum_key         = wsRadiationSumKey;
+      if (wsRadiationIntensityKey && wsRadiationIntensityKey !== NONE) wm.radiation_intensity_key = wsRadiationIntensityKey;
+      if (wsTemperatureKey && wsTemperatureKey !== NONE)         wm.temperature_key           = wsTemperatureKey;
+      if (wsRhKey && wsRhKey !== NONE)                           wm.rh_key                    = wsRhKey;
+      if (wsRainIntensityKey && wsRainIntensityKey !== NONE)     wm.rain_intensity_key        = wsRainIntensityKey;
+      if (wsBarometricPressureKey && wsBarometricPressureKey !== NONE) wm.barometric_pressure_key = wsBarometricPressureKey;
+      columnMappings = wm;
+    } else {
+      const cleanedSizeColumns: Record<string, string> = {};
+      for (const [sizeName, colName] of Object.entries(sizeColMap)) {
+        if (colName && colName !== NONE) cleanedSizeColumns[sizeName] = colName;
+      }
+      columnMappings = {
+        unique_key_column: uniqueKeyCol,
+        date_column: dateCol || null,
+        variety_column: varietyCol || null,
+        kg_total_column: totalKgCol || null,
+        size_columns: Object.keys(cleanedSizeColumns).length > 0 ? cleanedSizeColumns : undefined,
+      };
+    }
 
     try {
       const res = await apiFetch(`/api/admin/import-templates/by-key/${uploadKeyId}`, {
         method: "POST",
-        body: JSON.stringify({ name: templateName.trim(), columnMappings }),
+        body: JSON.stringify({ name: templateName.trim(), columnMappings, importType }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -240,27 +316,60 @@ export function ImportTemplateMappingPage() {
         <h2 style={h2Style}>CSV Preview{previewFilename ? ` — ${previewFilename}` : ""}</h2>
         {csvPreview && csvPreview.headers.length > 0 ? (
           <>
-            <p style={mutedStyle}>First {csvPreview.rows.length} data rows. Use the column headers to set up the mapping below.</p>
-            <div style={{ overflowX: "auto", maxHeight: 260, overflowY: "auto" }}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    {csvPreview.headers.map((h) => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {csvPreview.rows.map((row, ri) => (
-                    <tr key={ri}>
-                      {csvPreview.headers.map((_, ci) => (
-                        <td key={ci} style={tdStyle}>{row[ci] ?? ""}</td>
+            {importType === "weather_station" ? (
+              <>
+                <p style={mutedStyle}>
+                  Key/value format — {csvPreview.rows.length + 1} rows. Select which row labels to import below.
+                </p>
+                <div style={{ overflowX: "auto", maxHeight: 260, overflowY: "auto" }}>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Label (row key)</th>
+                        <th style={thStyle}>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* Header row is also data for key/value files */}
+                      <tr>
+                        <td style={tdStyle}>{csvPreview.headers[0] ?? ""}</td>
+                        <td style={tdStyle}>{csvPreview.headers[1] ?? ""}</td>
+                      </tr>
+                      {csvPreview.rows.map((row, ri) => (
+                        <tr key={ri}>
+                          <td style={tdStyle}>{row[0] ?? ""}</td>
+                          <td style={tdStyle}>{row[1] ?? ""}</td>
+                        </tr>
                       ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <>
+                <p style={mutedStyle}>First {csvPreview.rows.length} data rows. Use the column headers to set up the mapping below.</p>
+                <div style={{ overflowX: "auto", maxHeight: 260, overflowY: "auto" }}>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        {csvPreview.headers.map((h) => (
+                          <th key={h} style={thStyle}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {csvPreview.rows.map((row, ri) => (
+                        <tr key={ri}>
+                          {csvPreview.headers.map((_, ci) => (
+                            <td key={ci} style={tdStyle}>{row[ci] ?? ""}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </>
         ) : (
           <p style={mutedStyle}>No CSV preview yet. Upload a file from Computer B first, then return here to configure the mapping.</p>
@@ -270,13 +379,11 @@ export function ImportTemplateMappingPage() {
       {/* Mapping Form */}
       <section style={sectionStyle}>
         <h2 style={h2Style}>Column Mapping</h2>
-        <p style={mutedStyle}>
-          Assign CSV columns to GrowLink fields. Only <strong>Unique Key</strong> is required.
-          Unassigned fields are ignored during import.
-        </p>
 
         <form onSubmit={handleSave}>
           <div style={formGrid}>
+
+            {/* Template name */}
             <div style={fieldRow}>
               <label style={labelStyle}>Template name <span style={reqStar}>*</span></label>
               <input
@@ -288,48 +395,130 @@ export function ImportTemplateMappingPage() {
               />
             </div>
 
+            {/* Import type selector */}
             <div style={fieldRow}>
               <label style={labelStyle}>
-                Unique Key <span style={reqStar}>*</span>
-                <span style={fieldHint}> — identifies each record (e.g. lot number, batch ID)</span>
+                Import type <span style={reqStar}>*</span>
+                <span style={fieldHint}> — what this CSV contains</span>
               </label>
-              <ColSelect value={uniqueKeyCol} options={headerOptions} onChange={setUniqueKeyCol} />
+              <select
+                value={importType}
+                onChange={(e) => {
+                  setImportType(e.target.value as ImportType);
+                  setSaveSuccess(false);
+                }}
+                style={selectStyle}
+              >
+                <option value="yield_kg">Yield KG (lot / packline export)</option>
+                <option value="weather_station">Climate Weather Station</option>
+              </select>
             </div>
 
-            <div style={fieldRow}>
-              <label style={labelStyle}>
-                Date
-                <span style={fieldHint}> — used to calculate ISO year and week</span>
-              </label>
-              <ColSelect value={dateCol} options={headerOptions} onChange={setDateCol} />
-            </div>
-
-            <div style={fieldRow}>
-              <label style={labelStyle}>Variety</label>
-              <ColSelect value={varietyCol} options={headerOptions} onChange={setVarietyCol} />
-            </div>
-
-            <div style={fieldRow}>
-              <label style={labelStyle}>Total KG</label>
-              <ColSelect value={totalKgCol} options={headerOptions} onChange={setTotalKgCol} />
-            </div>
-
-            {yieldSizes.length > 0 && (
+            {/* ── yield_kg fields ───────────────────────────────────────────── */}
+            {importType === "yield_kg" && (
               <>
-                <div style={{ ...fieldRow, borderTop: "1px solid var(--border)", paddingTop: "0.75rem", marginTop: "0.25rem" }}>
-                  <p style={{ ...labelStyle, fontWeight: 600, marginBottom: 0 }}>Size KG columns</p>
-                  <p style={mutedStyle}>Map each active yield size to its CSV column.</p>
+                <p style={mutedStyle}>
+                  Assign CSV columns to GrowLink fields. Only <strong>Unique Key</strong> is required.
+                </p>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>
+                    Unique Key <span style={reqStar}>*</span>
+                    <span style={fieldHint}> — identifies each record (e.g. lot number, batch ID)</span>
+                  </label>
+                  <ColSelect value={uniqueKeyCol} options={headerOptions} onChange={setUniqueKeyCol} />
                 </div>
-                {yieldSizes.map((size) => (
-                  <div key={size.id} style={fieldRow}>
-                    <label style={labelStyle}>KG — {size.name}</label>
-                    <ColSelect
-                      value={sizeColMap[size.name] ?? NONE}
-                      options={headerOptions}
-                      onChange={(val) => setSizeColMap((prev) => ({ ...prev, [size.name]: val }))}
-                    />
-                  </div>
-                ))}
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>
+                    Date
+                    <span style={fieldHint}> — used to calculate ISO year and week</span>
+                  </label>
+                  <ColSelect value={dateCol} options={headerOptions} onChange={setDateCol} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>Variety</label>
+                  <ColSelect value={varietyCol} options={headerOptions} onChange={setVarietyCol} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>Total KG</label>
+                  <ColSelect value={totalKgCol} options={headerOptions} onChange={setTotalKgCol} />
+                </div>
+
+                {yieldSizes.length > 0 && (
+                  <>
+                    <div style={{ ...fieldRow, borderTop: "1px solid var(--border)", paddingTop: "0.75rem", marginTop: "0.25rem" }}>
+                      <p style={{ ...labelStyle, fontWeight: 600, marginBottom: 0 }}>Size KG columns</p>
+                      <p style={mutedStyle}>Map each active yield size to its CSV column.</p>
+                    </div>
+                    {yieldSizes.map((size) => (
+                      <div key={size.id} style={fieldRow}>
+                        <label style={labelStyle}>KG — {size.name}</label>
+                        <ColSelect
+                          value={sizeColMap[size.name] ?? NONE}
+                          options={headerOptions}
+                          onChange={(val) => setSizeColMap((prev) => ({ ...prev, [size.name]: val }))}
+                        />
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
+            )}
+
+            {/* ── weather_station fields ────────────────────────────────────── */}
+            {importType === "weather_station" && (
+              <>
+                <p style={mutedStyle}>
+                  Select which row labels from the key/value CSV correspond to each climate metric.
+                  The timestamp is read automatically from the filename (<code>*_YYYYMMDD_HHMMSS.csv</code>).
+                  Imported radiation sum is visible on the Environment → Climate tab.
+                </p>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>
+                    Station name row
+                    <span style={fieldHint}> — row label whose value is the station name (used as zone label)</span>
+                  </label>
+                  <ColSelect value={wsStationNameKey} options={rowKeyOptions} onChange={setWsStationNameKey} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>
+                    Radiation Sum J/cm² <span style={reqStar}>*</span>
+                    <span style={fieldHint}> — daily light integral (required)</span>
+                  </label>
+                  <ColSelect value={wsRadiationSumKey} options={rowKeyOptions} onChange={setWsRadiationSumKey} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>
+                    Radiation Intensity W/m²
+                  </label>
+                  <ColSelect value={wsRadiationIntensityKey} options={rowKeyOptions} onChange={setWsRadiationIntensityKey} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>Outside Temperature °C</label>
+                  <ColSelect value={wsTemperatureKey} options={rowKeyOptions} onChange={setWsTemperatureKey} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>Relative Humidity %</label>
+                  <ColSelect value={wsRhKey} options={rowKeyOptions} onChange={setWsRhKey} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>Rain Intensity mm/h</label>
+                  <ColSelect value={wsRainIntensityKey} options={rowKeyOptions} onChange={setWsRainIntensityKey} />
+                </div>
+
+                <div style={fieldRow}>
+                  <label style={labelStyle}>Barometric Pressure hPa</label>
+                  <ColSelect value={wsBarometricPressureKey} options={rowKeyOptions} onChange={setWsBarometricPressureKey} />
+                </div>
               </>
             )}
           </div>
