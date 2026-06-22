@@ -95,7 +95,7 @@ app.use(
     },
     allowedHeaders: ["Authorization", "Content-Type", "X-Upload-Key"],
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    credentials: false,
+    credentials: true,
   })
 );
 
