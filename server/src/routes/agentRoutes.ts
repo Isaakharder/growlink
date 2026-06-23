@@ -118,15 +118,41 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
 
     // ── generic_csv path ──────────────────────────────────────────────────────
     if (dataSourceType === "generic_csv") {
+      console.log("[agent/pdf-import] generic_csv entry", {
+        organizationId,
+        uploadKeyId,
+        uploadKeyLabel,
+        fileCount: uploadedFiles.length,
+        filenames: uploadedFiles.map((f) => f.originalname),
+      });
+
       // Look up the saved template for this upload key.
-      const { data: templateRow } = await supabase
+      const { data: templateRow, error: templateError } = await supabase
         .from("import_source_templates")
         .select("column_mappings, import_type")
         .eq("upload_key_id", uploadKeyId)
         .maybeSingle();
 
+      if (templateError) {
+        console.error("[agent/pdf-import] template lookup failed — migration 0065 may not be applied", {
+          organizationId,
+          uploadKeyId,
+          code: templateError.code,
+          message: templateError.message,
+        });
+      }
+
       const columnMappings = templateRow?.column_mappings as ColumnMappings | null;
       const templateImportType = (templateRow?.import_type as string | null) ?? "yield_kg";
+
+      console.log("[agent/pdf-import] template resolved", {
+        organizationId,
+        uploadKeyId,
+        templateFound: templateRow !== null,
+        templateImportType,
+        hasMappings: !!columnMappings,
+      });
+
       const results: FileResult[] = [];
 
       for (const file of uploadedFiles) {
@@ -146,7 +172,14 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
         }
 
         if (!columnMappings) {
-          // No template yet — store raw CSV so admin can configure the mapping.
+          // No template yet (or template query failed) — store raw CSV so admin can configure.
+          console.warn("[agent/pdf-import] no columnMappings — routing to needs_template", {
+            organizationId,
+            uploadKeyId,
+            filename: file.originalname,
+            templateFound: templateRow !== null,
+            templateImportType,
+          });
           let headers: string[] = [];
           try {
             headers = extractCsvHeaders(file.buffer);
@@ -202,6 +235,17 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           try {
             const parsed = parseWeatherStationCsv(file.buffer, file.originalname, wsMappings);
 
+            console.log("[agent/pdf-import] weather_station parsed", {
+              organizationId,
+              filename: file.originalname,
+              exportTimestamp: parsed.exportTimestamp,
+              logDate: parsed.exportTimestamp.slice(0, 10),
+              stationName: parsed.stationName,
+              fileHash: parsed.fileHash,
+              readingCount: parsed.readings.length,
+              readings: parsed.readings.map((r) => ({ metric: r.metric_name, value: r.metric_value, unit: r.unit })),
+            });
+
             // Dedup against climate_imports.
             const { data: existing } = await supabase
               .from("climate_imports")
@@ -211,6 +255,12 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
               .maybeSingle();
 
             if (existing) {
+              console.log("[agent/pdf-import] weather_station skipped — already imported", {
+                organizationId,
+                filename: file.originalname,
+                exportTimestamp: parsed.exportTimestamp,
+                existingImportId: existing.id,
+              });
               results.push({
                 filename: file.originalname,
                 status: "skipped",
@@ -233,6 +283,13 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
               })
               .select("id")
               .single();
+
+            console.log("[agent/pdf-import] climate_imports insert", {
+              organizationId,
+              filename: file.originalname,
+              insertedId: insertedImport?.id ?? null,
+              error: importInsertError ? { code: importInsertError.code, message: importInsertError.message } : null,
+            });
 
             if (importInsertError || !insertedImport) {
               console.error("[agent/pdf-import] weather_station climate_imports insert failed", {
@@ -266,6 +323,13 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
                   ignoreDuplicates: true,
                 });
 
+              console.log("[agent/pdf-import] climate_readings upsert", {
+                organizationId,
+                filename: file.originalname,
+                rowCount: readingRows.length,
+                error: readingsError ? { code: readingsError.code, message: readingsError.message } : null,
+              });
+
               if (readingsError) {
                 console.error("[agent/pdf-import] weather_station climate_readings upsert failed", {
                   organizationId,
@@ -294,6 +358,14 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
                     { onConflict: "organization_id,log_date" }
                   );
 
+                console.log("[agent/pdf-import] daily_light_logs upsert", {
+                  organizationId,
+                  filename: file.originalname,
+                  logDate: parsed.exportTimestamp.slice(0, 10),
+                  joulesPerCm2: total,
+                  error: dllError ? { code: dllError.code, message: dllError.message } : null,
+                });
+
                 if (dllError) {
                   console.error("[agent/pdf-import] weather_station daily_light_logs upsert failed", {
                     organizationId,
@@ -303,6 +375,13 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
                   });
                 }
               }
+            } else {
+              console.warn("[agent/pdf-import] weather_station: 0 readings parsed — check column_mappings configuration", {
+                organizationId,
+                filename: file.originalname,
+                exportTimestamp: parsed.exportTimestamp,
+                mappingKeys: Object.keys(wsMappings).filter((k) => !!(wsMappings as Record<string, unknown>)[k]),
+              });
             }
 
             results.push({ filename: file.originalname, status: "imported", importId });
