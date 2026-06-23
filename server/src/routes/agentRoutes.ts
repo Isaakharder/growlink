@@ -259,19 +259,30 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
                 source_file: file.originalname,
               }));
 
-              await supabase
+              const { error: readingsError } = await supabase
                 .from("climate_readings")
                 .upsert(readingRows, {
                   onConflict: "organization_id,timestamp,zone_key,metric_name",
                   ignoreDuplicates: true,
                 });
 
+              if (readingsError) {
+                console.error("[agent/pdf-import] weather_station climate_readings upsert failed", {
+                  organizationId,
+                  filename: file.originalname,
+                  code: readingsError.code,
+                  message: readingsError.message,
+                });
+                results.push({ filename: file.originalname, status: "error", reason: "Failed to write climate readings." });
+                continue;
+              }
+
               const radiationReadings = parsed.readings.filter(
                 (r) => r.metric_name === "radiation_sum"
               );
               if (radiationReadings.length > 0) {
                 const total = radiationReadings.reduce((s, r) => s + r.metric_value, 0);
-                await supabase
+                const { error: dllError } = await supabase
                   .from("daily_light_logs")
                   .upsert(
                     {
@@ -282,6 +293,15 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
                     },
                     { onConflict: "organization_id,log_date" }
                   );
+
+                if (dllError) {
+                  console.error("[agent/pdf-import] weather_station daily_light_logs upsert failed", {
+                    organizationId,
+                    filename: file.originalname,
+                    code: dllError.code,
+                    message: dllError.message,
+                  });
+                }
               }
             }
 
