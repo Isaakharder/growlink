@@ -74,6 +74,10 @@ const strictLimiter = rateLimit({
 
 const app = express();
 
+// Railway (and most cloud providers) sit behind a reverse proxy.
+// This must be set before any middleware that reads req.ip (rate limiter, etc.).
+app.set("trust proxy", 1);
+
 app.use(
   cors({
     origin(requestOrigin, callback) {

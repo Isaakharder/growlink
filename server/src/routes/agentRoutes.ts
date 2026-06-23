@@ -80,6 +80,18 @@ type FileResult =
 //   generic_csv → template-driven CSV parser; if no template is saved yet,
 //                 stores raw CSV and marks as needs_template=true
 agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Response) => {
+  // Absolute-earliest log — fires before multer, before any branching.
+  console.log("[agent/pdf-import] route hit", {
+    method: req.method,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    organizationId: req.organizationId,
+    uploadKeyId: req.uploadKeyId,
+    dataSourceType: req.dataSourceType,
+    fileCount: Array.isArray(req.files) ? req.files.length : "(pre-multer)",
+    contentType: req.headers["content-type"],
+  });
+
   upload.array("files", MAX_FILES_PER_REQUEST)(req, res, async (uploadError) => {
     if (uploadError) {
       if (uploadError instanceof multer.MulterError) {
@@ -139,6 +151,10 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           uploadKeyId,
           code: templateError.code,
           message: templateError.message,
+        });
+        return res.status(500).json({
+          message: "Failed to load import template. Check that migration 0065 has been applied.",
+          detail: templateError.message,
         });
       }
 
