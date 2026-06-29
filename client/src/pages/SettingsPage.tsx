@@ -58,6 +58,8 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "greenhouse_setup:edit", label: "Greenhouse Setup — Edit" },
       { key: "cases:view",            label: "Cases — View" },
       { key: "cases:edit",            label: "Cases — Edit" },
+      { key: "payroll:view",          label: "Payroll — View" },
+      { key: "payroll:edit",          label: "Payroll — Edit" },
     ],
   },
   {
@@ -68,6 +70,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "mobile:irrigation",   label: "Mobile — Irrigation" },
       { key: "mobile:pest",         label: "Mobile — Pest" },
       { key: "mobile:quality",      label: "Mobile — Quality" },
+      { key: "mobile:payroll",      label: "Mobile — Payroll" },
     ],
   },
   {

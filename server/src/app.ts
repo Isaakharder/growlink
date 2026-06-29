@@ -32,6 +32,7 @@ import { varietiesRouter } from "./routes/varieties";
 import { yieldEntriesRouter } from "./routes/yieldEntries";
 import { yieldProjectionsRouter } from "./routes/yieldProjections";
 import { yieldSizesRouter } from "./routes/yieldSizes";
+import { payrollRouter } from "./routes/payroll";
 
 const DEV_ORIGINS = [
   "http://localhost:5173",
@@ -144,5 +145,6 @@ app.use("/api", mobileIrrigationLogRouter);
 app.use("/api", dailyLightRouter);
 app.use("/api", climateReadingsRouter);
 app.use("/api", importHistorySettingsRouter);
+app.use("/api", payrollRouter);
 
 export { app };

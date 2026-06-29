@@ -31,6 +31,8 @@ import { NoAccessPage } from "../pages/NoAccessPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
+import { PayrollPage } from "../pages/PayrollPage";
+import { MobilePayrollPage } from "../pages/MobilePayrollPage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -213,6 +215,16 @@ export const appRouter = createBrowserRouter([
           {
             path: "admin/import-templates/:uploadKeyId",
             element: <ImportTemplateMappingPage />
+          },
+
+          // Payroll — requires payroll:view
+          {
+            path: "payroll",
+            element: (
+              <RequirePermission permission="payroll:view">
+                <PayrollPage />
+              </RequirePermission>
+            )
           }
         ]
       }
@@ -260,6 +272,14 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="mobile:quality">
                 <MobileQualityCheckPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "payroll",
+            element: (
+              <RequirePermission permission="mobile:payroll">
+                <MobilePayrollPage />
               </RequirePermission>
             )
           }

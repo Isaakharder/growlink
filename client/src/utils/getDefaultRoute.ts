@@ -12,6 +12,8 @@ const DESKTOP_PERMISSIONS = [
   "greenhouse_setup:edit",
   "cases:view",
   "cases:edit",
+  "payroll:view",
+  "payroll:edit",
 ];
 
 // Mobile permission keys — any one of these means the user has mobile access.
@@ -22,6 +24,7 @@ const MOBILE_PERMISSIONS = [
   "mobile:irrigation",
   "mobile:pest",
   "mobile:quality",
+  "mobile:payroll",
 ];
 
 /**

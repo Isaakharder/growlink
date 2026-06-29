@@ -215,4 +215,71 @@ adminUploadKeysRouter.post(
   }
 );
 
+adminUploadKeysRouter.delete(
+  "/admin/upload-keys/:id",
+  requireAdminUser,
+  async (req: Request, res: Response) => {
+    const keyId = req.params.id;
+
+    if (typeof keyId !== "string" || keyId.trim().length === 0) {
+      return res.status(400).json({ message: "Upload key id is required." });
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from("organization_upload_keys")
+      .select("id, status, label")
+      .eq("id", keyId.trim())
+      .maybeSingle();
+
+    if (existingError) {
+      return sendSafeError(
+        res, 500,
+        "Failed to load upload key.",
+        "Upload key delete lookup error:",
+        existingError
+      );
+    }
+
+    if (!existing) {
+      return res.status(404).json({ message: "Upload key not found." });
+    }
+
+    if (existing.status === "active") {
+      return res.status(400).json({ message: "Cannot delete an active upload key. Revoke it first." });
+    }
+
+    const { error: templateDeleteError } = await supabase
+      .from("import_source_templates")
+      .delete()
+      .eq("upload_key_id", existing.id);
+
+    if (templateDeleteError) {
+      return sendSafeError(
+        res, 500,
+        "Failed to remove import template.",
+        "Upload key template delete error:",
+        templateDeleteError
+      );
+    }
+
+    const { error: deleteError } = await supabase
+      .from("organization_upload_keys")
+      .delete()
+      .eq("id", existing.id);
+
+    if (deleteError) {
+      return sendSafeError(
+        res, 500,
+        "Failed to delete upload key.",
+        "Upload key delete error:",
+        deleteError
+      );
+    }
+
+    console.log(`Admin upload key deleted: key_id=${existing.id} label="${existing.label}"`);
+
+    return res.json({ success: true, id: existing.id });
+  }
+);
+
 export { adminUploadKeysRouter };

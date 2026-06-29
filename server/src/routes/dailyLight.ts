@@ -26,7 +26,7 @@ router.get("/daily-light", canAccess, async (req, res) => {
 
   const { data, error } = await supabase
     .from("daily_light_logs")
-    .select("id, log_date, joules_per_cm2, notes, created_at, updated_at")
+    .select("id, log_date, joules_per_cm2, notes, source, created_at, updated_at")
     .eq("organization_id", orgId)
     .gte("log_date", sinceStr)
     .order("log_date", { ascending: false });
@@ -66,11 +66,12 @@ router.post("/daily-light", canAccess, async (req, res) => {
         log_date: rawDate,
         joules_per_cm2: joules,
         notes,
+        source: "manual",
         updated_at: new Date().toISOString()
       },
       { onConflict: "organization_id,log_date" }
     )
-    .select("id, log_date, joules_per_cm2, notes, created_at, updated_at")
+    .select("id, log_date, joules_per_cm2, notes, source, created_at, updated_at")
     .single();
 
   if (error) {

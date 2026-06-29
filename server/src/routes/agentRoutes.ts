@@ -369,6 +369,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
                       organization_id: organizationId,
                       log_date: parsed.exportTimestamp.slice(0, 10),
                       joules_per_cm2: total,
+                      source: "climate_agent",
                       updated_at: new Date().toISOString(),
                     },
                     { onConflict: "organization_id,log_date" }

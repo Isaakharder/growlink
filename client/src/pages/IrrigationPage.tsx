@@ -68,6 +68,7 @@ type DailyLightLog = {
   log_date: string;
   joules_per_cm2: number;
   notes: string | null;
+  source: string;
   created_at: string;
   updated_at: string;
 };
@@ -1429,6 +1430,7 @@ export function IrrigationPage() {
                     <tr>
                       <th>Date</th>
                       <th>Joules/cm²</th>
+                      <th>Source</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -1437,6 +1439,15 @@ export function IrrigationPage() {
                       <tr key={log.id}>
                         <td>{formatLogDate(log.log_date)}</td>
                         <td>{roundTo(log.joules_per_cm2, 1)}</td>
+                        <td>
+                          {log.source === "climate_agent" ? (
+                            <span className="irrigation-reading-pill" style={{ background: "#eef4ff", borderColor: "#b8d0f7", color: "#1a4a8f" }}>
+                              Climate Agent
+                            </span>
+                          ) : (
+                            <span className="irrigation-reading-pill">Manual</span>
+                          )}
+                        </td>
                         <td>
                           <button
                             type="button"

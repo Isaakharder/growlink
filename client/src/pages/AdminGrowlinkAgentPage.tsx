@@ -109,6 +109,11 @@ export function AdminGrowlinkAgentPage() {
   const [climateSummary, setClimateSummary] = useState<ClimateImportSummary | null>(null);
   const [climateSummaryLoading, setClimateSummaryLoading] = useState(true);
   const [climateSummaryError, setClimateSummaryError] = useState<string | null>(null);
+  const [hideRevoked, setHideRevoked] = useState(true);
+  const [selectedKeyIds, setSelectedKeyIds] = useState<Set<string>>(new Set());
+  const [keyDeleteConfirm, setKeyDeleteConfirm] = useState<{ ids: string[] } | null>(null);
+  const [keyDeleteBusy, setKeyDeleteBusy] = useState(false);
+  const [keyDeleteResult, setKeyDeleteResult] = useState<string | null>(null);
 
   const agentHealth = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -164,6 +169,18 @@ export function AdminGrowlinkAgentPage() {
   const allImportRunsSelected =
     importRuns.length > 0 && selectedImportRunIds.size === importRuns.length;
 
+  const displayedKeyRows = useMemo(
+    () => (hideRevoked ? keyRows.filter((k) => k.status === "active") : keyRows),
+    [keyRows, hideRevoked]
+  );
+  const revokedKeyCount = keyRows.length - agentHealth.activeKeys;
+  const visibleRevokedRows = displayedKeyRows.filter((k) => k.status === "revoked");
+  const selectedRevokedIds = Array.from(selectedKeyIds).filter((id) =>
+    keyRows.some((k) => k.id === id && k.status === "revoked")
+  );
+  const allVisibleRevokedSelected =
+    visibleRevokedRows.length > 0 && visibleRevokedRows.every((k) => selectedKeyIds.has(k.id));
+
   useEffect(() => {
     void loadOrganizations();
     void loadKeys();
@@ -197,7 +214,16 @@ export function AdminGrowlinkAgentPage() {
         setManagementError("Failed to load upload keys.");
         return;
       }
-      setKeyRows(Array.isArray(body.keys) ? body.keys : []);
+      const newKeys = Array.isArray(body.keys) ? body.keys : [];
+      setKeyRows(newKeys);
+      setSelectedKeyIds((prev) => {
+        const validIds = new Set(newKeys.map((k) => k.id));
+        const next = new Set<string>();
+        for (const id of prev) {
+          if (validIds.has(id)) next.add(id);
+        }
+        return next;
+      });
       setManagementError(null);
     } catch {
       setManagementError("Network error while loading upload keys.");
@@ -323,6 +349,63 @@ export function AdminGrowlinkAgentPage() {
       setManagementError("Network error while revoking upload key.");
     } finally {
       setRevokeBusyId(null);
+    }
+  }
+
+  function toggleKeySelection(id: string) {
+    setSelectedKeyIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllRevokedKeys() {
+    setSelectedKeyIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleRevokedSelected) {
+        for (const k of visibleRevokedRows) next.delete(k.id);
+      } else {
+        for (const k of visibleRevokedRows) next.add(k.id);
+      }
+      return next;
+    });
+  }
+
+  function handleDeleteKeys(ids: string[]) {
+    if (ids.length === 0 || keyDeleteBusy) return;
+    setKeyDeleteConfirm({ ids });
+  }
+
+  async function executeDeleteKeys(ids: string[]) {
+    setKeyDeleteBusy(true);
+    setManagementError(null);
+    setKeyDeleteResult(null);
+    let deletedCount = 0;
+    const errors: string[] = [];
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await apiFetch(`/api/admin/upload-keys/${id}`, { method: "DELETE" });
+          const body = (await res.json().catch(() => ({}))) as { message?: string };
+          if (!res.ok) {
+            errors.push(getResponseMessage(body, "Failed to delete upload key."));
+          } else {
+            deletedCount++;
+          }
+        } catch {
+          errors.push("Network error deleting upload key.");
+        }
+      })
+    );
+    setKeyDeleteBusy(false);
+    if (errors.length > 0) {
+      setManagementError(errors[0]);
+    }
+    if (deletedCount > 0) {
+      setKeyDeleteResult(`Permanently deleted ${deletedCount} upload key${deletedCount === 1 ? "" : "s"}.`);
+      await loadKeys();
     }
   }
 
@@ -575,18 +658,63 @@ export function AdminGrowlinkAgentPage() {
         )}
 
         {managementError && <p style={errorBannerStyle}>{managementError}</p>}
+        {keyDeleteResult && <p style={successBannerStyle}>{keyDeleteResult}</p>}
 
         <div style={cardStyle}>
-          <h3 style={subheadingStyle}>Existing Keys</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.65rem", flexWrap: "wrap", gap: "0.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
+              <h3 style={subheadingStyle}>Existing Keys</h3>
+              {!keysLoading && keyRows.length > 0 && (
+                <>
+                  <span style={activeBadgeStyle}>Active: {agentHealth.activeKeys}</span>
+                  <span style={revokedBadgeStyle}>Revoked: {revokedKeyCount}</span>
+                </>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
+              {selectedRevokedIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteKeys(selectedRevokedIds)}
+                  disabled={keyDeleteBusy}
+                  style={smallDangerButtonStyle}
+                >
+                  {keyDeleteBusy ? "Deleting..." : `Delete selected (${selectedRevokedIds.length})`}
+                </button>
+              )}
+              <label style={hideRevokedLabelStyle}>
+                <input
+                  type="checkbox"
+                  checked={hideRevoked}
+                  onChange={(e) => setHideRevoked(e.target.checked)}
+                />
+                Hide revoked
+              </label>
+            </div>
+          </div>
           {keysLoading ? (
             <p style={mutedTextStyle}>Loading keys...</p>
-          ) : keyRows.length === 0 ? (
-            <p style={mutedTextStyle}>No upload keys created yet.</p>
+          ) : displayedKeyRows.length === 0 ? (
+            <p style={mutedTextStyle}>
+              {keyRows.length === 0
+                ? "No upload keys created yet."
+                : "No active keys. Uncheck “Hide revoked” to see all keys."}
+            </p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={tableStyle}>
                 <thead>
                   <tr>
+                    <th style={tableHeaderStyle}>
+                      {visibleRevokedRows.length > 0 && (
+                        <input
+                          type="checkbox"
+                          aria-label="Select all revoked keys"
+                          checked={allVisibleRevokedSelected}
+                          onChange={toggleSelectAllRevokedKeys}
+                        />
+                      )}
+                    </th>
                     <th style={tableHeaderStyle}>Label</th>
                     <th style={tableHeaderStyle}>Organization</th>
                     <th style={tableHeaderStyle}>Status</th>
@@ -597,8 +725,18 @@ export function AdminGrowlinkAgentPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {keyRows.map((row) => (
+                  {displayedKeyRows.map((row) => (
                     <tr key={row.id}>
+                      <td style={tableCellStyle}>
+                        {row.status === "revoked" && (
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${row.label}`}
+                            checked={selectedKeyIds.has(row.id)}
+                            onChange={() => toggleKeySelection(row.id)}
+                          />
+                        )}
+                      </td>
                       <td style={tableCellStyle}>{row.label}</td>
                       <td style={tableCellStyle}>{row.organizationName}</td>
                       <td style={tableCellStyle}>
@@ -614,28 +752,35 @@ export function AdminGrowlinkAgentPage() {
                       <td style={tableCellStyle}>{formatDateTime(row.createdAt)}</td>
                       <td style={tableCellStyle}>{formatDateTime(row.lastUsedAt)}</td>
                       <td style={tableCellStyle}>
-                        <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
-                          {row.dataSourceType === "generic_csv" && (
-                            <Link
-                              to={`/admin/import-templates/${row.id}`}
-                              style={row.hasTemplate ? configuredLinkStyle : configureLinkStyle}
+                        {row.status === "active" ? (
+                          <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+                            {row.dataSourceType === "generic_csv" && (
+                              <Link
+                                to={`/admin/import-templates/${row.id}`}
+                                style={row.hasTemplate ? configuredLinkStyle : configureLinkStyle}
+                              >
+                                {row.hasTemplate ? "Edit mapping" : "Configure import"}
+                              </Link>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleRevokeKey(row.id)}
+                              disabled={revokeBusyId === row.id}
+                              style={smallDangerButtonStyle}
                             >
-                              {row.hasTemplate ? "Edit mapping" : "Configure import"}
-                            </Link>
-                          )}
+                              {revokeBusyId === row.id ? "Revoking..." : "Revoke"}
+                            </button>
+                          </div>
+                        ) : (
                           <button
                             type="button"
-                            onClick={() => void handleRevokeKey(row.id)}
-                            disabled={row.status === "revoked" || revokeBusyId === row.id}
+                            onClick={() => handleDeleteKeys([row.id])}
+                            disabled={keyDeleteBusy}
                             style={smallDangerButtonStyle}
                           >
-                            {row.status === "revoked"
-                              ? "Revoked"
-                              : revokeBusyId === row.id
-                                ? "Revoking..."
-                                : "Revoke"}
+                            Delete
                           </button>
-                        </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -913,6 +1058,34 @@ export function AdminGrowlinkAgentPage() {
           </div>
         )}
       </section>
+
+      {keyDeleteConfirm && (
+        <div style={modalOverlayStyle}>
+          <div style={modalPanelStyle}>
+            <h3 style={modalTitleStyle}>
+              Permanently delete {keyDeleteConfirm.ids.length} upload key{keyDeleteConfirm.ids.length === 1 ? "" : "s"}?
+            </h3>
+            <p style={modalBodyStyle}>This cannot be undone.</p>
+            <p style={modalBodyStyle}>Related import templates will also be removed. Historical import records are kept.</p>
+            <div style={modalActionsStyle}>
+              <button type="button" onClick={() => setKeyDeleteConfirm(null)} style={secondaryButtonStyle}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = keyDeleteConfirm.ids;
+                  setKeyDeleteConfirm(null);
+                  void executeDeleteKeys(ids);
+                }}
+                style={modalDangerButtonStyle}
+              >
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {importDeleteConfirm && (
         <div style={modalOverlayStyle}>
@@ -1209,6 +1382,16 @@ const configuredLinkStyle: CSSProperties = {
   borderRadius: 5,
   background: "#eef4ff",
   whiteSpace: "nowrap"
+};
+
+const hideRevokedLabelStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.35rem",
+  fontSize: "0.8rem",
+  cursor: "pointer",
+  userSelect: "none",
+  color: "var(--text-muted)"
 };
 
 const modalOverlayStyle: CSSProperties = {
