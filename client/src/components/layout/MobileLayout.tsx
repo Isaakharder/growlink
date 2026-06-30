@@ -6,8 +6,17 @@ import { OfflineBanner } from "../mobile/OfflineBanner";
 import { SyncStatusBar } from "../mobile/SyncStatusBar";
 import { useOfflineQueue } from "../../hooks/useOfflineQueue";
 
+const MOBILE_PERMISSIONS = [
+  "mobile:access",
+  "mobile:daily_yield",
+  "mobile:irrigation",
+  "mobile:pest",
+  "mobile:quality",
+  "mobile:payroll"
+] as const;
+
 function MobileLayoutInner() {
-  const { loading, can } = usePermissions();
+  const { loading, canAny } = usePermissions();
   const { queuePending, queueFailed, syncStatus, clearFailed } = useOfflineQueue();
 
   const nav = (
@@ -42,8 +51,8 @@ function MobileLayoutInner() {
           onClearFailed={() => void clearFailed()}
         />
         {/* Show nothing while loading (avoids flash of restricted content).
-            Deny mobile:access before rendering any child route. */}
-        {!loading && !can("mobile:access") ? <Unauthorized /> : loading ? null : <Outlet />}
+            Deny access unless the user has mobile:access or any mobile feature permission. */}
+        {!loading && !canAny([...MOBILE_PERMISSIONS]) ? <Unauthorized /> : loading ? null : <Outlet />}
       </main>
 
       {nav}

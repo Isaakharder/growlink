@@ -45,7 +45,9 @@
       "PowerShell(cd C:\\\\GrowLink\\\\client; npx tsc --noEmit 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
       "Bash(node_modules/.bin/tsc --noEmit)",
       "PowerShell(cd C:\\\\GrowLink\\\\server; npx tsc --noEmit 2>&1 | Where-Object { $_ -notmatch \"^npm\" })",
-      "PowerShell(cd C:\\\\GrowLink\\\\client; npx tsc --noEmit 2>&1 | Where-Object { $_ -notmatch \"^npm\" })"
+      "PowerShell(cd C:\\\\GrowLink\\\\client; npx tsc --noEmit 2>&1 | Where-Object { $_ -notmatch \"^npm\" })",
+      "Bash(xargs grep -l \"permission\\\\|PermissionGate\")",
+      "Bash(xargs grep -l \"varieties\\\\|rows\\\\|daily.*yield\")"
     ]
   }
 }

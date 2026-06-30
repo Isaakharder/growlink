@@ -10,34 +10,24 @@ type VarietyOption = {
   color: string | null;
 };
 
-type GreenhouseGroup = {
-  id: string;
-  type: string;
-  name: string;
-};
-
-type GreenhouseSetupRow = {
-  id: string;
-  group_id: string;
+type MobileOptionsRow = {
+  row_id: string;
   row_number: number;
+  phase_id: string;
+  phase_name: string;
+  variety_id: string;
+  variety_name: string;
   slab_count: number;
   plants_per_slab: number;
   stems_per_plant: number;
-  total_stems?: number;
+  total_plants: number;
+  total_stems: number;
 };
 
-type GreenhouseVarietyAssignment = {
-  id: string;
-  group_id: string;
-  variety_id: string;
-  start_row: number;
-  end_row: number;
-};
-
-type GreenhouseSetupResponse = {
-  groups: GreenhouseGroup[];
-  rows: GreenhouseSetupRow[];
-  varietyAssignments: GreenhouseVarietyAssignment[];
+type MobileOptionsResponse = {
+  varieties: VarietyOption[];
+  rows: MobileOptionsRow[];
+  casesPerBin: number;
 };
 
 type LinkedRow = {
@@ -104,8 +94,7 @@ type PhaseProjection = {
   canShowCases: boolean;
 };
 
-const VARIETIES_URL = "/api/varieties";
-const GREENHOUSE_URL = "/api/greenhouse-setup";
+const OPTIONS_URL = "/api/mobile/daily-yield/options";
 const SETTINGS_URL = "/api/mobile/daily-yield/settings";
 const SAMPLES_URL = "/api/mobile/daily-yield/samples";
 const MINIMUM_SAMPLE_COUNT = 4;
@@ -136,83 +125,26 @@ function toSampleDateString(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function getRowTotalStems(row: GreenhouseSetupRow): number {
-  const explicitTotal =
-    typeof row.total_stems === "number"
-      ? row.total_stems
-      : NaN;
-
-  if (Number.isFinite(explicitTotal) && explicitTotal > 0) {
-    return explicitTotal;
-  }
-
-  const slabCount = Number(row.slab_count);
-  const plantsPerSlab = Number(row.plants_per_slab);
-  const stemsPerPlant = Number(row.stems_per_plant);
-
-  if (
-    !Number.isFinite(slabCount) ||
-    !Number.isFinite(plantsPerSlab) ||
-    !Number.isFinite(stemsPerPlant)
-  ) {
-    return 0;
-  }
-
-  return slabCount * plantsPerSlab * stemsPerPlant;
-}
-
-function buildLinkedRowsByVariety(
-  groups: GreenhouseGroup[],
-  rows: GreenhouseSetupRow[],
-  assignments: GreenhouseVarietyAssignment[]
-): Record<string, LinkedRow[]> {
-  const groupNameById = new Map(groups.map((group) => [group.id, group.name]));
-  const rowsByGroupId = new Map<string, GreenhouseSetupRow[]>();
+function buildLinkedRowsByVariety(rows: MobileOptionsRow[]): Record<string, LinkedRow[]> {
+  const linkedByVariety: Record<string, LinkedRow[]> = {};
 
   for (const row of rows) {
-    const currentRows = rowsByGroupId.get(row.group_id) ?? [];
-    currentRows.push(row);
-    rowsByGroupId.set(row.group_id, currentRows);
-  }
+    const mapped: LinkedRow = {
+      row_id: row.row_id,
+      row_number: row.row_number,
+      phase_id: row.phase_id,
+      phase_name: row.phase_name,
+      label: `${row.phase_name} — Row ${row.row_number}`,
+      slab_count: row.slab_count,
+      plants_per_slab: row.plants_per_slab,
+      stems_per_plant: row.stems_per_plant,
+      total_plants: row.total_plants,
+      total_stems: row.total_stems
+    };
 
-  const linkedByVariety: Record<string, LinkedRow[]> = {};
-  const seen = new Set<string>();
-
-  for (const assignment of assignments) {
-    const groupRows = rowsByGroupId.get(assignment.group_id) ?? [];
-
-    for (const row of groupRows) {
-      if (row.row_number < assignment.start_row || row.row_number > assignment.end_row) {
-        continue;
-      }
-
-      const dedupeKey = `${assignment.variety_id}:${row.id}`;
-      if (seen.has(dedupeKey)) {
-        continue;
-      }
-      seen.add(dedupeKey);
-
-      const phaseName = groupNameById.get(row.group_id) ?? "Unknown";
-      const totalPlants = row.slab_count * row.plants_per_slab;
-      const totalStems = getRowTotalStems(row);
-
-      const mapped: LinkedRow = {
-        row_id: row.id,
-        row_number: row.row_number,
-        phase_id: row.group_id,
-        phase_name: phaseName,
-        label: `${phaseName} — Row ${row.row_number}`,
-        slab_count: row.slab_count,
-        plants_per_slab: row.plants_per_slab,
-        stems_per_plant: row.stems_per_plant,
-        total_plants: totalPlants,
-        total_stems: totalStems
-      };
-
-      const current = linkedByVariety[assignment.variety_id] ?? [];
-      current.push(mapped);
-      linkedByVariety[assignment.variety_id] = current;
-    }
+    const current = linkedByVariety[row.variety_id] ?? [];
+    current.push(mapped);
+    linkedByVariety[row.variety_id] = current;
   }
 
   for (const [varietyId, linkedRows] of Object.entries(linkedByVariety)) {
@@ -448,22 +380,16 @@ export function MobileDailyYieldPage() {
       setError(null);
 
       try {
-        const [varietiesRes, greenhouseRes, settingsRes] = await Promise.all([
-          apiFetch(VARIETIES_URL),
-          apiFetch(GREENHOUSE_URL),
+        const [optionsRes, settingsRes] = await Promise.all([
+          apiFetch(OPTIONS_URL),
           apiFetch(SETTINGS_URL)
         ]);
 
-        if (!varietiesRes.ok) {
-          throw new Error(`Failed to load varieties (${varietiesRes.status})`);
+        if (!optionsRes.ok) {
+          throw new Error(`Failed to load daily yield options (${optionsRes.status})`);
         }
 
-        if (!greenhouseRes.ok) {
-          throw new Error(`Failed to load greenhouse setup (${greenhouseRes.status})`);
-        }
-
-        const allVarieties = (await varietiesRes.json()) as VarietyOption[];
-        const greenhouseData = (await greenhouseRes.json()) as GreenhouseSetupResponse;
+        const optionsData = (await optionsRes.json()) as MobileOptionsResponse;
         const settingsData = settingsRes.ok
           ? ((await settingsRes.json()) as {
               cases_per_bin?: number;
@@ -483,18 +409,15 @@ export function MobileDailyYieldPage() {
             ? Number(settingsData.kg_per_case)
             : 0;
 
-        const activeVarieties = allVarieties.filter((variety) => variety.status === "active");
-        const linked = buildLinkedRowsByVariety(
-          greenhouseData.groups ?? [],
-          greenhouseData.rows ?? [],
-          greenhouseData.varietyAssignments ?? []
-        );
+        const linked = buildLinkedRowsByVariety(optionsData.rows ?? []);
 
-        setVarieties(activeVarieties);
+        setVarieties(optionsData.varieties ?? []);
         setLinkedRowsByVarietyId(linked);
         setCasesPerBinDraft(String(settingsData.cases_per_bin ?? 38));
         setKgPerFullBin(resolvedKgPerFullBin);
         setKgPerCase(resolvedKgPerCase);
+
+        const activeVarieties = optionsData.varieties ?? [];
 
         setSelectedVarietyId((current) => {
           if (current && activeVarieties.some((variety) => variety.id === current)) {

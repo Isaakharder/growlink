@@ -12,6 +12,11 @@ type RowRecord = {
   stems_per_plant: number;
 };
 
+type GroupRecord = {
+  id: string;
+  name: string;
+};
+
 type AssignmentRecord = {
   variety_id: string;
   group_id: string;
@@ -216,7 +221,7 @@ async function getCurrentBinSettings(organizationId: string): Promise<BinSetting
 }
 
 async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
-  const [varietiesResult, assignmentsResult, rowsResult] = await Promise.all([
+  const [varietiesResult, assignmentsResult, rowsResult, groupsResult] = await Promise.all([
     supabase
       .from("varieties")
       .select("id, name, color, status")
@@ -231,7 +236,11 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
       .from("greenhouse_rows")
       .select("id, group_id, row_number, slab_count, plants_per_slab, stems_per_plant")
       .eq("organization_id", organizationId)
-      .order("row_number", { ascending: true })
+      .order("row_number", { ascending: true }),
+    supabase
+      .from("greenhouse_groups")
+      .select("id, name")
+      .eq("organization_id", organizationId)
   ]);
 
   if (varietiesResult.error) {
@@ -249,6 +258,11 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
     throw new Error("Failed to load greenhouse rows.");
   }
 
+  if (groupsResult.error) {
+    console.error("Greenhouse groups fetch error:", groupsResult.error);
+    throw new Error("Failed to load greenhouse groups.");
+  }
+
   const varieties = varietiesResult.data ?? [];
   const activeVarietyIds = new Set(varieties.map((variety) => variety.id));
   const assignments = (assignmentsResult.data ?? []).filter((assignment) =>
@@ -262,6 +276,11 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
     rowsByGroupId.set(row.group_id, groupRows);
   }
 
+  const groupNameById = new Map<string, string>();
+  for (const group of (groupsResult.data ?? []) as GroupRecord[]) {
+    groupNameById.set(group.id, group.name);
+  }
+
   const varietyNameById = new Map<string, string>();
   for (const variety of varieties) {
     varietyNameById.set(variety.id, variety.name);
@@ -270,6 +289,8 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
   const linkedRows: Array<{
     row_id: string;
     row_number: number;
+    phase_id: string;
+    phase_name: string;
     variety_id: string;
     variety_name: string;
     slab_count: number;
@@ -304,6 +325,8 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
       linkedRows.push({
         row_id: row.id,
         row_number: row.row_number,
+        phase_id: row.group_id,
+        phase_name: groupNameById.get(row.group_id) ?? "Unknown",
         variety_id: assignment.variety_id,
         variety_name: varietyNameById.get(assignment.variety_id) ?? "Unknown variety",
         slab_count: slabCount,
