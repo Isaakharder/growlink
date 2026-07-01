@@ -65,13 +65,14 @@ function todayLocalStr(): string {
   return new Date().toLocaleDateString("en-CA");
 }
 
-// Returns the Monday of the current week in YYYY-MM-DD (browser local time).
-function mondayLocalStr(): string {
-  const d = new Date();
-  const day = d.getDay(); // 0 = Sun
-  const diff = day === 0 ? 6 : day - 1;
-  d.setDate(d.getDate() - diff);
-  return d.toLocaleDateString("en-CA");
+// Adds (or subtracts) whole days from a YYYY-MM-DD string, using UTC math so
+// the result never shifts across a DST boundary in the browser's local zone.
+function addDaysStr(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return dateStr;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + delta);
+  return date.toISOString().slice(0, 10);
 }
 
 // Converts a UTC ISO timestamp to { date: "YYYY-MM-DD", time: "HH:MM" } in a
@@ -345,8 +346,13 @@ export function PayrollPage() {
   const [logs, setLogs] = useState<TimeLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
   const [logsError, setLogsError] = useState<string | null>(null);
-  const [startDate, setStartDate] = useState(mondayLocalStr);
+  const [startDate, setStartDate] = useState(todayLocalStr);
   const [endDate, setEndDate] = useState(todayLocalStr);
+
+  // ── delete confirmation ───────────────────────────────────────────────────────
+  const [deleteTarget, setDeleteTarget] = useState<TimeLog | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // ── edit modal ────────────────────────────────────────────────────────────────
   const [selectedLog, setSelectedLog] = useState<TimeLog | null>(null);
@@ -575,6 +581,55 @@ export function PayrollPage() {
       setEditError("Network error. Please try again.");
     } finally {
       setEditSaving(false);
+    }
+  }
+
+  // ── day navigation ───────────────────────────────────────────────────────────
+  // Arrows always collapse the view to a single day, regardless of any range
+  // the user had selected — the default view is one day at a time.
+  function goToDay(delta: number) {
+    const next = addDaysStr(startDate || todayLocalStr(), delta);
+    setStartDate(next);
+    setEndDate(next);
+  }
+
+  const isSingleDay = startDate === endDate;
+
+  // ── duplicate start detection ─────────────────────────────────────────────────
+  // Flags employees who have more than one log on the same local calendar day
+  // (e.g. an accidental double clock-in), keyed by employeeId + local day.
+  const duplicateStartKeys = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const log of logs) {
+      const dayKey = getLocalDateKey(log.clockedInAt, settings.timezone);
+      const key = `${log.employeeId}|${dayKey}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return new Set(
+      [...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key)
+    );
+  }, [logs, settings.timezone]);
+
+  // ── delete time log ───────────────────────────────────────────────────────────
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await apiFetch(`/api/payroll/time-logs/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        setDeleteError(getResponseMessage(body, "Failed to delete time log."));
+        return;
+      }
+      setDeleteTarget(null);
+      void loadLogs();
+    } catch {
+      setDeleteError("Network error. Please try again.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -867,6 +922,27 @@ export function PayrollPage() {
 
         {/* Filter bar */}
         <div style={filterBarStyle}>
+          <div style={dayNavStyle}>
+            <button
+              type="button"
+              onClick={() => goToDay(-1)}
+              style={dayNavBtnStyle}
+              aria-label="Previous day"
+            >
+              ‹
+            </button>
+            <div style={dayNavLabelStyle}>
+              {isSingleDay ? fmtDayLabel(startDate) : `${fmtDayLabel(startDate)} – ${fmtDayLabel(endDate)}`}
+            </div>
+            <button
+              type="button"
+              onClick={() => goToDay(1)}
+              style={dayNavBtnStyle}
+              aria-label="Next day"
+            >
+              ›
+            </button>
+          </div>
           <div style={filterFieldStyle}>
             <label htmlFor="log-start" style={filterLabelStyle}>
               Start Date
@@ -920,7 +996,7 @@ export function PayrollPage() {
             <p style={{ margin: 0, padding: "0.9rem", ...mutedStyle }}>Loading time logs…</p>
           ) : logs.length === 0 ? (
             <p style={{ margin: 0, padding: "0.9rem", ...mutedStyle }}>
-              No time logs for this date range.
+              {isSingleDay ? `No time logs for ${fmtDayLabel(startDate)}.` : "No time logs for this date range."}
             </p>
           ) : (
             <table style={{ ...tableStyle, minWidth: 860 }}>
@@ -935,10 +1011,14 @@ export function PayrollPage() {
                   <th style={{ ...thStyle, textAlign: "right" }}>Raw Hrs</th>
                   <th style={{ ...thStyle, textAlign: "right" }}>Pay Hrs</th>
                   <th style={thStyle}>Status</th>
+                  <th style={thStyle}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {logs.map((log) => (
+                {logs.map((log) => {
+                  const dayKey = getLocalDateKey(log.clockedInAt, settings.timezone);
+                  const isDuplicateStart = duplicateStartKeys.has(`${log.employeeId}|${dayKey}`);
+                  return (
                   <tr
                     key={log.id}
                     onClick={() => openEditModal(log)}
@@ -946,7 +1026,12 @@ export function PayrollPage() {
                     title="Click to edit"
                   >
                     <td style={tdStyle}>
-                      <span>{log.employeeName}</span>
+                      <span
+                        style={isDuplicateStart ? duplicateNameStyle : undefined}
+                        title={isDuplicateStart ? "Multiple starts for this employee on this day" : undefined}
+                      >
+                        {log.employeeName}
+                      </span>
                       {log.editedAt && (
                         <span
                           style={editedBadgeStyle}
@@ -980,8 +1065,21 @@ export function PayrollPage() {
                         {log.status === "completed" ? "Completed" : "In Progress"}
                       </span>
                     </td>
+                    <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteTarget(log);
+                          setDeleteError(null);
+                        }}
+                        style={dangerSmallBtnStyle}
+                      >
+                        Delete
+                      </button>
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               {/* Totals */}
               <tfoot>
@@ -1020,7 +1118,7 @@ export function PayrollPage() {
                   >
                     {totals.totalPayroll.toFixed(2)} h
                   </td>
-                  <td style={{ ...tdStyle, borderBottom: "none", paddingTop: "0.6rem" }} />
+                  <td colSpan={2} style={{ ...tdStyle, borderBottom: "none", paddingTop: "0.6rem" }} />
                 </tr>
                 <tr>
                   <td
@@ -1048,7 +1146,7 @@ export function PayrollPage() {
                   >
                     {totals.totalBreak.toFixed(2)} h
                   </td>
-                  <td colSpan={2} style={{ ...tdStyle, borderBottom: "none" }} />
+                  <td colSpan={3} style={{ ...tdStyle, borderBottom: "none" }} />
                 </tr>
               </tfoot>
             </table>
@@ -1151,6 +1249,58 @@ export function PayrollPage() {
                 style={primaryBtnStyle}
               >
                 {editSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Confirmation Modal ─────────────────────────────────────── */}
+      {deleteTarget && (
+        <div
+          style={modalOverlayStyle}
+          onClick={() => !deleting && setDeleteTarget(null)}
+        >
+          <div
+            style={{ ...modalStyle, width: "min(380px, 95vw)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={modalHeaderStyle}>
+              <h3 style={modalTitleStyle}>Delete Time Log?</h3>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                style={modalCloseStyle}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ ...mutedStyle, marginBottom: "1rem" }}>
+              This will permanently delete the time log for{" "}
+              <strong>{deleteTarget.employeeName}</strong> starting{" "}
+              {fmtDateTime(deleteTarget.clockedInAt, settings.timezone)}. This cannot be undone.
+            </p>
+
+            {deleteError && <p style={errorStyle}>{deleteError}</p>}
+
+            <div style={modalFooterStyle}>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                style={smallSecBtnStyle}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteConfirm()}
+                disabled={deleting}
+                style={dangerBtnStyle}
+              >
+                {deleting ? "Deleting…" : "Yes, Delete"}
               </button>
             </div>
           </div>
@@ -1269,6 +1419,22 @@ const smallSecBtnStyle: CSSProperties = {
   fontWeight: 500,
 };
 
+const dangerSmallBtnStyle: CSSProperties = {
+  ...smallSecBtnStyle,
+  color: "#c0392b",
+  borderColor: "#f5c6c6",
+};
+
+const dangerBtnStyle: CSSProperties = {
+  ...primaryBtnStyle,
+  background: "#c0392b",
+};
+
+const duplicateNameStyle: CSSProperties = {
+  color: "#c0392b",
+  fontWeight: 700,
+};
+
 const filterBarStyle: CSSProperties = {
   display: "flex",
   alignItems: "flex-end",
@@ -1297,6 +1463,35 @@ const dateInputStyle: CSSProperties = {
   color: "var(--text)",
   background: "var(--surface-soft)",
   outline: "none",
+};
+
+const dayNavStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+};
+
+const dayNavBtnStyle: CSSProperties = {
+  width: 32,
+  height: 32,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "var(--surface)",
+  color: "var(--text)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: "1.1rem",
+  lineHeight: 1,
+};
+
+const dayNavLabelStyle: CSSProperties = {
+  fontSize: "0.95rem",
+  fontWeight: 600,
+  color: "var(--text)",
+  minWidth: 160,
+  textAlign: "center",
 };
 
 const filterActionsStyle: CSSProperties = {

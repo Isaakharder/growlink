@@ -538,6 +538,43 @@ payrollRouter.patch(
   }
 );
 
+// DELETE /api/payroll/time-logs/:id
+// Manager deletes a time log entry (e.g. an accidental duplicate clock-in).
+payrollRouter.delete(
+  "/payroll/time-logs/:id",
+  requirePermission("payroll:edit"),
+  async (req, res) => {
+    const { organizationId } = req;
+    const { id } = req.params;
+
+    const { data: existing, error: findError } = await supabase
+      .from("payroll_time_logs")
+      .select("id")
+      .eq("id", id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+
+    if (findError) {
+      return sendSafeError(res, 500, "Failed to find time log.", "payroll time-log DELETE find:", findError);
+    }
+    if (!existing) {
+      return res.status(404).json({ message: "Time log not found." });
+    }
+
+    const { error } = await supabase
+      .from("payroll_time_logs")
+      .delete()
+      .eq("id", id)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      return sendSafeError(res, 500, "Failed to delete time log.", "payroll time-log DELETE:", error);
+    }
+
+    return res.status(204).send();
+  }
+);
+
 // POST /api/payroll/clock-in
 // Mobile: tap "Start Work" for an employee.
 payrollRouter.post(
