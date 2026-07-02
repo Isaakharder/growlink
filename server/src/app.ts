@@ -7,6 +7,8 @@ import { adminDocklinkIntegrationsRouter } from "./routes/adminDocklinkIntegrati
 import { adminOrganizationsRouter } from "./routes/adminOrganizations";
 import { adminFlowMasterImportRunsRouter } from "./routes/adminFlowMasterImportRuns";
 import { adminUploadKeysRouter } from "./routes/adminUploadKeys";
+import { adminIntegrationKeysRouter } from "./routes/adminIntegrationKeys";
+import { croplinkIntegrationRouter } from "./routes/croplinkIntegration";
 import { importSourceTemplatesRouter } from "./routes/importSourceTemplates";
 import { adminClimateImportsRouter } from "./routes/adminClimateImports";
 import { agentPendingImportsRouter } from "./routes/agentPendingImports";
@@ -98,7 +100,7 @@ app.use(
         callback(null, false);
       }
     },
-    allowedHeaders: ["Authorization", "Content-Type", "X-Upload-Key"],
+    allowedHeaders: ["Authorization", "Content-Type", "X-Upload-Key", "X-Integration-Key"],
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
   })
@@ -119,6 +121,8 @@ app.use("/api", adminDocklinkIntegrationsRouter);
 app.use("/api", adminOrganizationsRouter);
 app.use("/api", adminFlowMasterImportRunsRouter);
 app.use("/api", adminUploadKeysRouter);
+app.use("/api", adminIntegrationKeysRouter);
+app.use("/api", croplinkIntegrationRouter);
 app.use("/api", importSourceTemplatesRouter);
 app.use("/api", adminClimateImportsRouter);
 app.use("/api", agentRouter);

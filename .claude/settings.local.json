@@ -47,7 +47,25 @@
       "PowerShell(cd C:\\\\GrowLink\\\\server; npx tsc --noEmit 2>&1 | Where-Object { $_ -notmatch \"^npm\" })",
       "PowerShell(cd C:\\\\GrowLink\\\\client; npx tsc --noEmit 2>&1 | Where-Object { $_ -notmatch \"^npm\" })",
       "Bash(xargs grep -l \"permission\\\\|PermissionGate\")",
-      "Bash(xargs grep -l \"varieties\\\\|rows\\\\|daily.*yield\")"
+      "Bash(xargs grep -l \"varieties\\\\|rows\\\\|daily.*yield\")",
+      "Bash(xargs grep -l \"confirm\\\\|Confirm\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8080/api/health)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -X DELETE http://localhost:8080/api/payroll/time-logs/00000000-0000-0000-0000-000000000000)",
+      "Bash(tail -n 40 /c/Users/Isaak/AppData/Local/Temp/claude/c--GrowLink/24b800f1-631f-4204-9d02-4b2b68b154c8/scratchpad/server.log)",
+      "Read(//c/Users/Isaak/AppData/Local/Temp/claude/c--GrowLink/24b800f1-631f-4204-9d02-4b2b68b154c8/scratchpad/**)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" http://localhost:8080/api/integrations/croplink/varieties)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" http://localhost:8080/api/integrations/croplink/harvest-actuals)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -H \"X-Integration-Key: not-a-real-key\" http://localhost:8080/api/integrations/croplink/varieties)",
+      "Bash(tail -n 15 /c/Users/Isaak/AppData/Local/Temp/claude/c--GrowLink/24b800f1-631f-4204-9d02-4b2b68b154c8/scratchpad/server.log)",
+      "Bash(powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '\\\\''*tsx watch src/index.ts*'\\\\'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }')",
+      "Bash(curl -s -o /dev/null -w \"post-kill status: %{http_code}\\\\n\" http://localhost:8080/api/health --max-time 2)",
+      "Bash(curl -s -o /dev/null -w \"status: %{http_code}\\\\n\" http://localhost:8080/api/health --max-time 2)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //PID 12884 //F //T)"
     ]
   }
 }

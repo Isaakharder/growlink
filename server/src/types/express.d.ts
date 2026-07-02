@@ -8,6 +8,8 @@ declare global {
       uploadKeyLabel?: string;
       uploadKeyId?: string;
       dataSourceType?: string;
+      integrationKeyId?: string;
+      integrationName?: string;
     }
   }
 }

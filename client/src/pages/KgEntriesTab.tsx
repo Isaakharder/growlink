@@ -74,12 +74,15 @@ type CsvSizeEntry = {
 };
 
 type PdfPreviewFileSuccess = {
+  id?: string;
   filename: string;
   success: true;
   lotNumber: string | null;
   alreadyImported: boolean;
   skipped: boolean;
   variety: string | null;
+  overrideVarietyId?: string | null;
+  isOverridden?: boolean;
   matchedVariety: {
     found: boolean;
     varietyId: string | null;
@@ -127,6 +130,7 @@ type GroupedPdfPreviewCard = {
   isoYear: number | null;
   sourceFiles: string[];
   sourceReadings: Array<{
+    id: string | null;
     filename: string;
     lotNumber: string | null;
     startDate: string | null;
@@ -135,6 +139,8 @@ type GroupedPdfPreviewCard = {
     computedTotalKg: number;
     skipped: boolean;
     skipReason: string | null;
+    originalVarietyName: string | null;
+    isOverridden: boolean;
   }>;
   totalKg: number;
   averageFruitWeightG: number | null;
@@ -267,6 +273,10 @@ export function KgEntriesTab() {
   const [pdfCardImportErrors, setPdfCardImportErrors] = useState<Record<string, string>>({});
   const [pendingWeeks, setPendingWeeks] = useState<PendingAgentWeek[]>([]);
   const [csvIgnoredLabels, setCsvIgnoredLabels] = useState<string[]>([]);
+  const [reassigningReadingId, setReassigningReadingId] = useState<string | null>(null);
+  const [reassignTargetVarietyId, setReassignTargetVarietyId] = useState<string>("");
+  const [reassignSavingId, setReassignSavingId] = useState<string | null>(null);
+  const [reassignErrors, setReassignErrors] = useState<Record<string, string>>({});
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<YieldEntryFormState>({
@@ -929,6 +939,7 @@ export function KgEntriesTab() {
             : null;
 
       const sourceReading = {
+        id: file.id ?? null,
         filename: file.filename,
         lotNumber: file.lotNumber,
         startDate: file.startDate,
@@ -936,7 +947,9 @@ export function KgEntriesTab() {
         printedTotalKg: file.totalKg,
         computedTotalKg,
         skipped: file.skipped,
-        skipReason
+        skipReason,
+        originalVarietyName: file.variety,
+        isOverridden: file.isOverridden ?? false
       };
 
       const fileCsvSizes = file.csvSizes ?? [];
@@ -1262,6 +1275,50 @@ export function KgEntriesTab() {
     setPdfImportStatus(null);
 
     await importGroupedCard(group, group.duplicateFound ? "append" : "create");
+  }
+
+  async function handleReassignSave(readingId: string, varietyId: string) {
+    setReassignErrors((current) => {
+      const next = { ...current };
+      delete next[readingId];
+      return next;
+    });
+    setReassignSavingId(readingId);
+
+    try {
+      const response = await apiFetch(`${PENDING_IMPORTS_URL}/${readingId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ varietyId: varietyId || null })
+      });
+
+      if (!response.ok) {
+        let message = `Reassign failed (${response.status})`;
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) {
+            message = body.message;
+          }
+        } catch {
+          // Ignore non-JSON body.
+        }
+        throw new Error(message);
+      }
+
+      const body = (await response.json()) as { success: true; file: PdfPreviewFileSuccess };
+
+      setPdfPreviewFiles((current) =>
+        current.map((file) => (file.success && file.id === readingId ? body.file : file))
+      );
+      setReassigningReadingId(null);
+      setReassignTargetVarietyId("");
+    } catch (error) {
+      setReassignErrors((current) => ({
+        ...current,
+        [readingId]: error instanceof Error ? error.message : "Reassign failed."
+      }));
+    } finally {
+      setReassignSavingId(null);
+    }
   }
 
   async function handleImportAllCards() {
@@ -1661,24 +1718,104 @@ export function KgEntriesTab() {
                     <div className="pdf-preview-size-section">
                       <h4>Source Readings</h4>
                       <ul className="pdf-source-readings-list">
-                        {group.sourceReadings.map((reading) => (
-                          <li
-                            key={`${group.key}-${reading.filename}`}
-                            className={reading.skipped ? "pdf-source-reading-skipped" : undefined}
-                          >
-                            {reading.filename}
-                            {reading.lotNumber ? ` · Lot ${reading.lotNumber}` : " · Lot missing"}
-                            {reading.startTime
-                              ? ` · ${reading.startTime}`
-                              : reading.startDate
-                                ? ` · ${reading.startDate}`
-                                : ""}
-                            {` · ${Math.round(reading.computedTotalKg).toLocaleString("en-US")} kg`}
-                            {reading.skipped
-                              ? ` · Skipped${reading.skipReason ? ` (${reading.skipReason})` : ""}`
-                              : ""}
-                          </li>
-                        ))}
+                        {group.sourceReadings.map((reading) => {
+                          const readingKey = reading.id ?? `${group.key}-${reading.filename}`;
+                          const isReassigning = reassigningReadingId === readingKey;
+
+                          return (
+                            <li
+                              key={readingKey}
+                              className={reading.skipped ? "pdf-source-reading-skipped" : undefined}
+                            >
+                              <div className="pdf-source-reading-row">
+                                <span>
+                                  {reading.filename}
+                                  {reading.lotNumber ? ` · Lot ${reading.lotNumber}` : " · Lot missing"}
+                                  {reading.startTime
+                                    ? ` · ${reading.startTime}`
+                                    : reading.startDate
+                                      ? ` · ${reading.startDate}`
+                                      : ""}
+                                  {` · ${Math.round(reading.computedTotalKg).toLocaleString("en-US")} kg`}
+                                  {reading.skipped
+                                    ? ` · Skipped${reading.skipReason ? ` (${reading.skipReason})` : ""}`
+                                    : ""}
+                                </span>
+
+                                {reading.id && !isReassigning && (
+                                  <button
+                                    type="button"
+                                    className="pdf-source-reading-reassign-button"
+                                    onClick={() => {
+                                      setReassigningReadingId(readingKey);
+                                      setReassignTargetVarietyId(group.matchedVarietyId ?? "");
+                                    }}
+                                  >
+                                    Reassign
+                                  </button>
+                                )}
+                              </div>
+
+                              {reading.isOverridden && !isReassigning && (
+                                <p className="pdf-source-reading-override-note">
+                                  Original PDF variety: {reading.originalVarietyName ?? "Unknown"} → Assigned to:{" "}
+                                  {group.varietyName}
+                                </p>
+                              )}
+
+                              {isReassigning && reading.id && (
+                                <div className="pdf-source-reading-reassign-form">
+                                  <select
+                                    value={reassignTargetVarietyId}
+                                    onChange={(event) => setReassignTargetVarietyId(event.target.value)}
+                                  >
+                                    <option value="">Select a variety…</option>
+                                    {varieties.map((variety) => (
+                                      <option key={variety.id} value={variety.id}>
+                                        {variety.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      !reassignTargetVarietyId || reassignSavingId === readingKey
+                                    }
+                                    onClick={() =>
+                                      void handleReassignSave(reading.id as string, reassignTargetVarietyId)
+                                    }
+                                  >
+                                    {reassignSavingId === readingKey ? "Saving..." : "Save"}
+                                  </button>
+                                  {reading.isOverridden && (
+                                    <button
+                                      type="button"
+                                      disabled={reassignSavingId === readingKey}
+                                      onClick={() => void handleReassignSave(reading.id as string, "")}
+                                    >
+                                      Reset to PDF variety
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReassigningReadingId(null);
+                                      setReassignTargetVarietyId("");
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              )}
+
+                              {reassignErrors[readingKey] && (
+                                <p className="pdf-source-reading-override-error">
+                                  {reassignErrors[readingKey]}
+                                </p>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                     </div>
 

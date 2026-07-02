@@ -1431,6 +1431,67 @@ body {
   opacity: 0.85;
 }
 
+.pdf-source-reading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pdf-source-reading-reassign-button {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pdf-source-reading-reassign-button:hover {
+  border-color: var(--accent, #4a7c59);
+}
+
+.pdf-source-reading-override-note {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  font-style: italic;
+  color: #6c5b43;
+}
+
+.pdf-source-reading-override-error {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  color: #a33d3d;
+}
+
+.pdf-source-reading-reassign-form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.3rem 0 0.4rem;
+}
+
+.pdf-source-reading-reassign-form select {
+  font-size: 0.74rem;
+  padding: 0.12rem 0.3rem;
+}
+
+.pdf-source-reading-reassign-form button {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #fff;
+  cursor: pointer;
+}
+
+.pdf-source-reading-reassign-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .pdf-preview-card-footer {
   margin-top: 0;
   padding-top: 0.34rem;

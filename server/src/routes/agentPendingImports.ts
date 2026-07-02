@@ -9,6 +9,9 @@ const agentPendingImportsRouter = Router();
 const canView = requireAnyPermission(["yield:view", "yield:edit"]);
 const canEdit = requirePermission("yield:edit");
 
+const PENDING_IMPORT_COLUMNS =
+  "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes, raw_payload, needs_template, data_source_type, override_variety_id";
+
 type PendingImportRow = {
   id: string;
   lot_number: string | null;
@@ -25,6 +28,7 @@ type PendingImportRow = {
   raw_payload: Record<string, unknown> | null;
   needs_template: boolean;
   data_source_type: string;
+  override_variety_id: string | null;
 };
 
 type ActiveVariety = { id: string; name: string };
@@ -40,6 +44,8 @@ type PdfPreviewSuccess = {
   alreadyImported: boolean;
   skipped: boolean;
   variety: string | null;
+  overrideVarietyId: string | null;
+  isOverridden: boolean;
   matchedVariety: {
     found: boolean;
     varietyId: string | null;
@@ -67,6 +73,233 @@ type PdfPreviewSuccess = {
   csvHeaders: string[];
 };
 
+type BuildPreviewContext = {
+  activeVarietyByName: Map<string, ActiveVariety>;
+  activeVarietyById: Map<string, ActiveVariety>;
+  activeYieldSizeNameByCanonical: Map<string, string>;
+  existingEntryKeySet: Set<string>;
+  alreadyImportedLots: Set<string>;
+};
+
+type BuildContextResult =
+  | { ok: true; ctx: BuildPreviewContext }
+  | { ok: false; error: string };
+
+// Shared by GET (batch) and PATCH (single row) so both resolve variety
+// matching, size mapping and duplicate-week detection identically —
+// including preferring override_variety_id over the raw parsed variety_name.
+function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfPreviewSuccess {
+  const warnings: string[] = Array.isArray(row.warnings)
+    ? (row.warnings as string[]).filter((w) => typeof w === "string")
+    : [];
+
+  const alreadyImported = row.lot_number !== null && ctx.alreadyImportedLots.has(row.lot_number);
+  const skipped = alreadyImported;
+
+  if (alreadyImported) {
+    warnings.push(`Lot ${row.lot_number} was already imported and will be skipped.`);
+  }
+
+  const isOverridden = row.override_variety_id !== null;
+  const overrideVariety = row.override_variety_id
+    ? ctx.activeVarietyById.get(row.override_variety_id) ?? null
+    : null;
+  const nameMatchedVariety =
+    row.variety_name !== null ? ctx.activeVarietyByName.get(row.variety_name) ?? null : null;
+  const matchedVariety = overrideVariety ?? nameMatchedVariety;
+
+  if (isOverridden && !overrideVariety) {
+    warnings.push("Overridden variety is no longer active. Reassign again.");
+  } else if (!isOverridden && row.variety_name && !matchedVariety) {
+    warnings.push(
+      `Variety not found: ${row.variety_name}. Add or rename variety before importing.`
+    );
+  }
+
+  // Normalise size_kg from JSONB — values may be strings when deserialised from numeric
+  const rawSizeKg = row.size_kg ?? {};
+  const sizeBreakdown: Record<string, number> = {};
+  for (const [sizeName, rawKg] of Object.entries(rawSizeKg)) {
+    const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
+    if (Number.isFinite(kg) && kg >= 0) {
+      sizeBreakdown[sizeName] = kg;
+    }
+  }
+
+  const unknownSizeSet = new Set<string>(
+    Array.isArray(row.unknown_sizes)
+      ? (row.unknown_sizes as unknown[]).filter((s): s is string => typeof s === "string")
+      : []
+  );
+
+  const mapped: Array<{ pdfSize: string; growlinkSize: string }> = [];
+
+  for (const sizeName of Object.keys(sizeBreakdown)) {
+    const canonical = canonicalizeSizeName(sizeName);
+    const activeSizeName = ctx.activeYieldSizeNameByCanonical.get(canonical);
+    if (activeSizeName) {
+      mapped.push({ pdfSize: sizeName, growlinkSize: activeSizeName });
+    } else {
+      unknownSizeSet.add(sizeName);
+      warnings.push(
+        `New size found: ${sizeName}. Add this size in GrowLink before importing.`
+      );
+    }
+  }
+
+  const unknownSizes = Array.from(unknownSizeSet);
+
+  const duplicateKey =
+    matchedVariety && row.iso_year !== null && row.iso_week !== null
+      ? `${matchedVariety.id}::${row.iso_year}::${row.iso_week}`
+      : null;
+
+  const hasExistingWeeklyData =
+    duplicateKey !== null && ctx.existingEntryKeySet.has(duplicateKey);
+
+  if (hasExistingWeeklyData && matchedVariety) {
+    warnings.push("Existing weekly data found. Import will add these PDF totals to the week.");
+  }
+
+  // Extract csvSizes stored in raw_payload at upload time.
+  const rawCsvSizes = row.raw_payload?.csvSizes;
+  const csvSizes: CsvSizeEntry[] = Array.isArray(rawCsvSizes)
+    ? (rawCsvSizes as unknown[]).filter(
+        (e): e is CsvSizeEntry =>
+          e !== null &&
+          typeof e === "object" &&
+          typeof (e as CsvSizeEntry).rawLabel === "string" &&
+          typeof (e as CsvSizeEntry).kg === "number"
+      )
+    : [];
+
+  const rawCsvHeaders = row.raw_payload?.csv_headers;
+  const csvHeaders: string[] = Array.isArray(rawCsvHeaders)
+    ? (rawCsvHeaders as unknown[]).filter((h): h is string => typeof h === "string")
+    : [];
+
+  return {
+    id: row.id,
+    filename: row.source_filename,
+    success: true,
+    lotNumber: row.lot_number,
+    alreadyImported,
+    skipped,
+    variety: row.variety_name,
+    overrideVarietyId: row.override_variety_id,
+    isOverridden,
+    matchedVariety: {
+      found: Boolean(matchedVariety),
+      varietyId: matchedVariety?.id ?? null,
+      varietyName: matchedVariety?.name ?? null
+    },
+    startTime: row.start_time,
+    startDate: row.start_time?.slice(0, 10) ?? null,
+    isoWeek: row.iso_week,
+    isoYear: row.iso_year,
+    totalKg: row.parsed_total_kg,
+    averageFruitWeightG: row.average_fruit_weight_g,
+    sizeBreakdown,
+    sizeMappingStatus: {
+      mappedCount: mapped.length,
+      unmappedCount: unknownSizes.length,
+      mapped,
+      unmapped: unknownSizes
+    },
+    duplicateStatus: { found: hasExistingWeeklyData },
+    unknownSizes,
+    warnings: Array.from(new Set(warnings)),
+    csvSizes,
+    needsTemplate: row.needs_template,
+    dataSourceType: row.data_source_type,
+    csvHeaders,
+  };
+}
+
+// Loads the org-scoped lookup maps buildPreviewFile needs. lotNumbers scopes
+// the yield_import_runs "already imported" check — pass every lot for a
+// batch (GET) or just the one row's lot for a single-row rebuild (PATCH).
+async function loadBuildContext(
+  organizationId: string,
+  lotNumbers: string[]
+): Promise<BuildContextResult> {
+  const [varietiesResult, yieldSizesResult, yieldEntriesResult, importRunsResult] =
+    await Promise.all([
+      supabase
+        .from("varieties")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .eq("status", "active"),
+      supabase
+        .from("yield_sizes")
+        .select("name")
+        .eq("organization_id", organizationId)
+        .eq("status", "active"),
+      supabase
+        .from("yield_entries")
+        .select("variety_id, year, week")
+        .eq("organization_id", organizationId),
+      lotNumbers.length > 0
+        ? supabase
+            .from("yield_import_runs")
+            .select("lot_number")
+            .eq("organization_id", organizationId)
+            .in("lot_number", lotNumbers)
+        : Promise.resolve({ data: [] as ExistingImportRun[], error: null })
+    ]);
+
+  if (varietiesResult.error) {
+    return { ok: false, error: "Failed to load varieties." };
+  }
+  if (yieldSizesResult.error) {
+    return { ok: false, error: "Failed to load yield sizes." };
+  }
+  if (yieldEntriesResult.error) {
+    return { ok: false, error: "Failed to load yield entries." };
+  }
+  if (importRunsResult.error) {
+    return { ok: false, error: "Failed to load import history." };
+  }
+
+  const activeVarieties = (varietiesResult.data ?? []) as ActiveVariety[];
+  const activeYieldSizes = (yieldSizesResult.data ?? []) as ActiveYieldSize[];
+  const existingYieldEntries = (yieldEntriesResult.data ?? []) as ExistingYieldEntry[];
+  const existingImportRuns = (importRunsResult.data ?? []) as ExistingImportRun[];
+
+  const activeVarietyByName = new Map<string, ActiveVariety>();
+  const activeVarietyById = new Map<string, ActiveVariety>();
+  for (const v of activeVarieties) {
+    activeVarietyByName.set(v.name, v);
+    activeVarietyById.set(v.id, v);
+  }
+
+  const activeYieldSizeNameByCanonical = new Map<string, string>();
+  for (const s of activeYieldSizes) {
+    activeYieldSizeNameByCanonical.set(canonicalizeSizeName(s.name), s.name);
+  }
+
+  const existingEntryKeySet = new Set<string>();
+  for (const entry of existingYieldEntries) {
+    existingEntryKeySet.add(`${entry.variety_id}::${entry.year}::${entry.week}`);
+  }
+
+  const alreadyImportedLots = new Set<string>();
+  for (const run of existingImportRuns) {
+    alreadyImportedLots.add(run.lot_number);
+  }
+
+  return {
+    ok: true,
+    ctx: {
+      activeVarietyByName,
+      activeVarietyById,
+      activeYieldSizeNameByCanonical,
+      existingEntryKeySet,
+      alreadyImportedLots
+    }
+  };
+}
+
 // GET /api/agent-pending-imports[?isoYear=YYYY&isoWeek=WW]
 // Returns all pending agent imports for the org in PdfPreviewFileSuccess shape
 // so the client can call setPdfPreviewFiles(body.files) unchanged.
@@ -83,9 +316,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
 
   let pendingQuery = supabase
     .from("agent_pending_imports")
-    .select(
-      "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes, raw_payload, needs_template, data_source_type"
-    )
+    .select(PENDING_IMPORT_COLUMNS)
     .eq("organization_id", organizationId)
     .order("uploaded_at", { ascending: false });
 
@@ -108,7 +339,7 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
     return res.status(500).json({ message: "Failed to load pending imports." });
   }
 
-  const rows = (pendingRows ?? []) as PendingImportRow[];
+  const rows = (pendingRows ?? []) as unknown as PendingImportRow[];
 
   if (rows.length === 0) {
     return res.json({ success: true, count: 0, files: [] });
@@ -116,185 +347,12 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
 
   const lotNumbers = rows.map((r) => r.lot_number).filter((n): n is string => n !== null);
 
-  const [varietiesResult, yieldSizesResult, yieldEntriesResult, importRunsResult] =
-    await Promise.all([
-      supabase
-        .from("varieties")
-        .select("id, name")
-        .eq("organization_id", organizationId)
-        .eq("status", "active"),
-      supabase
-        .from("yield_sizes")
-        .select("name")
-        .eq("organization_id", organizationId)
-        .eq("status", "active"),
-      supabase
-        .from("yield_entries")
-        .select("variety_id, year, week")
-        .eq("organization_id", organizationId),
-      supabase
-        .from("yield_import_runs")
-        .select("lot_number")
-        .eq("organization_id", organizationId)
-        .in("lot_number", lotNumbers)
-    ]);
-
-  if (varietiesResult.error) {
-    return res.status(500).json({ message: "Failed to load varieties." });
-  }
-  if (yieldSizesResult.error) {
-    return res.status(500).json({ message: "Failed to load yield sizes." });
-  }
-  if (yieldEntriesResult.error) {
-    return res.status(500).json({ message: "Failed to load yield entries." });
-  }
-  if (importRunsResult.error) {
-    return res.status(500).json({ message: "Failed to load import history." });
+  const contextResult = await loadBuildContext(organizationId, lotNumbers);
+  if (!contextResult.ok) {
+    return res.status(500).json({ message: contextResult.error });
   }
 
-  const activeVarieties = (varietiesResult.data ?? []) as ActiveVariety[];
-  const activeYieldSizes = (yieldSizesResult.data ?? []) as ActiveYieldSize[];
-  const existingYieldEntries = (yieldEntriesResult.data ?? []) as ExistingYieldEntry[];
-  const existingImportRuns = (importRunsResult.data ?? []) as ExistingImportRun[];
-
-  const activeVarietyByName = new Map<string, ActiveVariety>();
-  for (const v of activeVarieties) {
-    activeVarietyByName.set(v.name, v);
-  }
-
-  const activeYieldSizeNameByCanonical = new Map<string, string>();
-  for (const s of activeYieldSizes) {
-    activeYieldSizeNameByCanonical.set(canonicalizeSizeName(s.name), s.name);
-  }
-
-  const existingEntryKeySet = new Set<string>();
-  for (const entry of existingYieldEntries) {
-    existingEntryKeySet.add(`${entry.variety_id}::${entry.year}::${entry.week}`);
-  }
-
-  const alreadyImportedLots = new Set<string>();
-  for (const run of existingImportRuns) {
-    alreadyImportedLots.add(run.lot_number);
-  }
-
-  const files: PdfPreviewSuccess[] = rows.map((row) => {
-    const warnings: string[] = Array.isArray(row.warnings)
-      ? (row.warnings as string[]).filter((w) => typeof w === "string")
-      : [];
-
-    const alreadyImported = row.lot_number !== null && alreadyImportedLots.has(row.lot_number);
-    const skipped = alreadyImported;
-
-    if (alreadyImported) {
-      warnings.push(`Lot ${row.lot_number} was already imported and will be skipped.`);
-    }
-
-    const matchedVariety =
-      row.variety_name !== null ? (activeVarietyByName.get(row.variety_name) ?? null) : null;
-
-    if (row.variety_name && !matchedVariety) {
-      warnings.push(
-        `Variety not found: ${row.variety_name}. Add or rename variety before importing.`
-      );
-    }
-
-    // Normalise size_kg from JSONB — values may be strings when deserialised from numeric
-    const rawSizeKg = row.size_kg ?? {};
-    const sizeBreakdown: Record<string, number> = {};
-    for (const [sizeName, rawKg] of Object.entries(rawSizeKg)) {
-      const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
-      if (Number.isFinite(kg) && kg >= 0) {
-        sizeBreakdown[sizeName] = kg;
-      }
-    }
-
-    const unknownSizeSet = new Set<string>(
-      Array.isArray(row.unknown_sizes)
-        ? (row.unknown_sizes as unknown[]).filter((s): s is string => typeof s === "string")
-        : []
-    );
-
-    const mapped: Array<{ pdfSize: string; growlinkSize: string }> = [];
-
-    for (const sizeName of Object.keys(sizeBreakdown)) {
-      const canonical = canonicalizeSizeName(sizeName);
-      const activeSizeName = activeYieldSizeNameByCanonical.get(canonical);
-      if (activeSizeName) {
-        mapped.push({ pdfSize: sizeName, growlinkSize: activeSizeName });
-      } else {
-        unknownSizeSet.add(sizeName);
-        warnings.push(
-          `New size found: ${sizeName}. Add this size in GrowLink before importing.`
-        );
-      }
-    }
-
-    const unknownSizes = Array.from(unknownSizeSet);
-
-    const duplicateKey =
-      matchedVariety && row.iso_year !== null && row.iso_week !== null
-        ? `${matchedVariety.id}::${row.iso_year}::${row.iso_week}`
-        : null;
-
-    const hasExistingWeeklyData =
-      duplicateKey !== null && existingEntryKeySet.has(duplicateKey);
-
-    if (hasExistingWeeklyData && matchedVariety) {
-      warnings.push("Existing weekly data found. Import will add these PDF totals to the week.");
-    }
-
-    // Extract csvSizes stored in raw_payload at upload time.
-    const rawCsvSizes = row.raw_payload?.csvSizes;
-    const csvSizes: CsvSizeEntry[] = Array.isArray(rawCsvSizes)
-      ? (rawCsvSizes as unknown[]).filter(
-          (e): e is CsvSizeEntry =>
-            e !== null &&
-            typeof e === "object" &&
-            typeof (e as CsvSizeEntry).rawLabel === "string" &&
-            typeof (e as CsvSizeEntry).kg === "number"
-        )
-      : [];
-
-    const rawCsvHeaders = row.raw_payload?.csv_headers;
-    const csvHeaders: string[] = Array.isArray(rawCsvHeaders)
-      ? (rawCsvHeaders as unknown[]).filter((h): h is string => typeof h === "string")
-      : [];
-
-    return {
-      id: row.id,
-      filename: row.source_filename,
-      success: true,
-      lotNumber: row.lot_number,
-      alreadyImported,
-      skipped,
-      variety: row.variety_name,
-      matchedVariety: {
-        found: Boolean(matchedVariety),
-        varietyId: matchedVariety?.id ?? null,
-        varietyName: matchedVariety?.name ?? null
-      },
-      startTime: row.start_time,
-      startDate: row.start_time?.slice(0, 10) ?? null,
-      isoWeek: row.iso_week,
-      isoYear: row.iso_year,
-      totalKg: row.parsed_total_kg,
-      averageFruitWeightG: row.average_fruit_weight_g,
-      sizeBreakdown,
-      sizeMappingStatus: {
-        mappedCount: mapped.length,
-        unmappedCount: unknownSizes.length,
-        mapped,
-        unmapped: unknownSizes
-      },
-      duplicateStatus: { found: hasExistingWeeklyData },
-      unknownSizes,
-      warnings: Array.from(new Set(warnings)),
-      csvSizes,
-      needsTemplate: row.needs_template,
-      dataSourceType: row.data_source_type,
-      csvHeaders,
-    };
-  });
+  const files: PdfPreviewSuccess[] = rows.map((row) => buildPreviewFile(row, contextResult.ctx));
 
   const count = files.filter((f) => !f.alreadyImported).length;
 
@@ -328,6 +386,87 @@ agentPendingImportsRouter.get("/agent-pending-imports", canView, async (req, res
     : files;
 
   return res.json({ success: true, count, weeks, files: filteredFiles });
+});
+
+// PATCH /api/agent-pending-imports/:id
+// Sets or clears a manual variety override for a single pending reading —
+// used when a warehouse operator forgot to change the variety on the
+// FlowMaster computer, so the PDF parsed correctly but under the wrong name.
+// Body: { varietyId: string | null }. null/omitted clears the override and
+// reverts to the PDF-parsed name match. Returns the row rebuilt the same way
+// GET does, so the client can splice it back into pdfPreviewFiles and let the
+// existing grouping/aggregation logic recompute totals for both cards.
+agentPendingImportsRouter.patch("/agent-pending-imports/:id", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+
+  const rawVarietyId = (req.body as Record<string, unknown> | undefined)?.varietyId;
+  let varietyId: string | null;
+
+  if (rawVarietyId === null || rawVarietyId === undefined || rawVarietyId === "") {
+    varietyId = null;
+  } else if (typeof rawVarietyId === "string") {
+    varietyId = rawVarietyId.trim();
+  } else {
+    return res.status(400).json({ message: "varietyId must be a string or null." });
+  }
+
+  if (varietyId) {
+    const { data: targetVariety, error: varietyError } = await supabase
+      .from("varieties")
+      .select("id")
+      .eq("id", varietyId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+
+    if (varietyError) {
+      console.error("[agent-pending-imports] override variety lookup failed:", {
+        organizationId,
+        varietyId,
+        code: varietyError.code,
+        message: varietyError.message
+      });
+      return res.status(500).json({ message: "Failed to validate target variety." });
+    }
+
+    if (!targetVariety) {
+      return res.status(400).json({
+        message: "Target variety does not belong to this organization."
+      });
+    }
+  }
+
+  const { data: updatedRow, error: updateError } = await supabase
+    .from("agent_pending_imports")
+    .update({ override_variety_id: varietyId })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select(PENDING_IMPORT_COLUMNS)
+    .maybeSingle();
+
+  if (updateError) {
+    console.error("[agent-pending-imports] override update failed:", {
+      id,
+      organizationId,
+      code: updateError.code,
+      message: updateError.message
+    });
+    return res.status(500).json({ message: "Failed to reassign this reading." });
+  }
+
+  if (!updatedRow) {
+    return res.status(404).json({ message: "Pending import not found." });
+  }
+
+  const row = updatedRow as unknown as PendingImportRow;
+  const lotNumbers = row.lot_number ? [row.lot_number] : [];
+
+  const contextResult = await loadBuildContext(organizationId, lotNumbers);
+  if (!contextResult.ok) {
+    return res.status(500).json({ message: contextResult.error });
+  }
+
+  return res.json({ success: true, file: buildPreviewFile(row, contextResult.ctx) });
 });
 
 // DELETE /api/agent-pending-imports/:id
