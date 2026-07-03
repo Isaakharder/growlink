@@ -23,6 +23,7 @@ import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
 import { AdminDocklinkIntegrationsPage } from "../pages/AdminDocklinkIntegrationsPage";
 import { AdminGrowlinkAgentPage } from "../pages/AdminGrowlinkAgentPage";
+import { AdminIntegrationsPage } from "../pages/AdminIntegrationsPage";
 import { ImportTemplateMappingPage } from "../pages/ImportTemplateMappingPage";
 import { AdminOrganizationsPage } from "../pages/AdminOrganizationsPage";
 import { PlatformCustomersPage } from "../pages/PlatformCustomersPage";
@@ -211,6 +212,10 @@ export const appRouter = createBrowserRouter([
           {
             path: "admin/growlink-agent",
             element: <AdminGrowlinkAgentPage />
+          },
+          {
+            path: "admin/integrations",
+            element: <AdminIntegrationsPage />
           },
           {
             path: "admin/import-templates/:uploadKeyId",

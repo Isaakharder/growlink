@@ -65,7 +65,13 @@
       "Bash(curl -s -o /dev/null -w \"post-kill status: %{http_code}\\\\n\" http://localhost:8080/api/health --max-time 2)",
       "Bash(curl -s -o /dev/null -w \"status: %{http_code}\\\\n\" http://localhost:8080/api/health --max-time 2)",
       "Bash(netstat -ano)",
-      "Bash(taskkill //PID 12884 //F //T)"
+      "Bash(taskkill //PID 12884 //F //T)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -H \"X-Integration-Key: probe\" http://localhost:8080/api/integrations/croplink/varieties)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" http://localhost:8080/api/admin/integration-keys)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X POST -H \"Content-Type: application/json\" -d '{\"organizationId\":\"x\",\"label\":\"y\",\"integrationName\":\"croplink\"}' http://localhost:8080/api/admin/integration-keys)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X POST http://localhost:8080/api/admin/integration-keys/00000000-0000-0000-0000-000000000000/revoke)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X DELETE http://localhost:8080/api/admin/integration-keys/00000000-0000-0000-0000-000000000000)",
+      "Bash(taskkill //PID 18472 //F //T)"
     ]
   }
 }

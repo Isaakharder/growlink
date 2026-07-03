@@ -237,6 +237,13 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             >
               GrowLink Agent
             </NavLink>
+            <NavLink
+              to="/admin/integrations"
+              onClick={onCloseMobile}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              Integrations
+            </NavLink>
           </div>
         )}
 
