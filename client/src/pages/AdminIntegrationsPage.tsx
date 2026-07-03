@@ -16,7 +16,7 @@ const INTEGRATIONS: IntegrationDefinition[] = [
   {
     id: "croplink",
     name: "CropLink",
-    description: "Read-only harvest actuals and variety data consumed by CropLink.",
+    description: "Synchronizes harvest actuals and varieties with CropLink.",
     status: "available"
   },
   {
@@ -72,7 +72,7 @@ type GenerateDialogState = {
 };
 
 type IntegrationConfigStatus = "not-configured" | "active" | "revoked";
-type IntegrationHealthLevel = "healthy" | "stale" | "never-used" | "offline";
+type IntegrationHealthLevel = "healthy" | "stale" | "never-used" | "not-configured" | "connection-error";
 
 type IntegrationHealth = {
   configStatus: IntegrationConfigStatus;
@@ -91,9 +91,12 @@ type TestResult = {
 const HEALTHY_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 // Health is derived entirely from key status + last_used_at — no new schema,
-// no new backend endpoint. "Offline / Not Configured" deliberately covers
-// both the zero-keys case and the all-revoked case: from CropLink's
-// perspective those are indistinguishable (no active key = no access).
+// no new backend endpoint. "not-configured" covers both the zero-keys case
+// and the all-revoked case: from CropLink's perspective those are
+// indistinguishable (no active key = no access), and neither one means
+// something is broken, so it's deliberately not an alarming label.
+// "connection-error" is reserved for a future real sync/connection check —
+// nothing below produces it yet.
 function computeIntegrationHealth(keys: IntegrationKeyRow[]): IntegrationHealth {
   const activeKeys = keys.filter((k) => k.status === "active");
   const totalCount = keys.length;
@@ -111,7 +114,7 @@ function computeIntegrationHealth(keys: IntegrationKeyRow[]): IntegrationHealth 
 
   let health: IntegrationHealthLevel;
   if (activeCount === 0) {
-    health = "offline";
+    health = "not-configured";
   } else if (!lastUsedAt) {
     health = "never-used";
   } else {
@@ -132,7 +135,8 @@ const HEALTH_LABEL: Record<IntegrationHealthLevel, string> = {
   healthy: "Healthy",
   stale: "Stale",
   "never-used": "Never Used",
-  offline: "Offline / Not Configured"
+  "not-configured": "Not Configured",
+  "connection-error": "Connection Error"
 };
 
 function getResponseMessage(body: unknown, fallback: string): string {
@@ -948,7 +952,8 @@ const HEALTH_BADGE_STYLE: Record<IntegrationHealthLevel, CSSProperties> = {
   healthy: activeBadgeStyle,
   stale: staleBadgeStyle,
   "never-used": notConfiguredBadgeStyle,
-  offline: revokedBadgeStyle
+  "not-configured": notConfiguredBadgeStyle,
+  "connection-error": revokedBadgeStyle
 };
 
 const healthSectionStyle: CSSProperties = {
