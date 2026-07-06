@@ -2,6 +2,11 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
+import {
+  ROUNDING_MODES,
+  RoundingMode,
+  computeShift,
+} from "../utils/payrollRounding";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -9,7 +14,11 @@ type PayrollSettings = {
   id: string;
   organization_id: string;
   work_day_start: string;
-  rounding_interval_minutes: number;
+  start_rounding_mode: RoundingMode;
+  start_rounding_interval_minutes: number;
+  end_rounding_mode: RoundingMode;
+  end_rounding_interval_minutes: number;
+  snap_early_clock_in_to_start: boolean;
   break_deduction_minutes: number;
   timezone: string;
 };
@@ -31,69 +40,18 @@ type TimeLogRow = {
   edit_note: string | null;
 };
 
-// ── rounding helpers ──────────────────────────────────────────────────────────
+// ── settings defaults ─────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS = {
   work_day_start: "07:00",
-  rounding_interval_minutes: 15,
+  start_rounding_mode: "up",
+  start_rounding_interval_minutes: 15,
+  end_rounding_mode: "down",
+  end_rounding_interval_minutes: 15,
+  snap_early_clock_in_to_start: true,
   break_deduction_minutes: 0,
   timezone: "America/Toronto",
 } as const;
-
-function parseWorkDayStartMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number);
-  return (h ?? 0) * 60 + (m ?? 0);
-}
-
-// Returns how many minutes past midnight the timestamp is in the org's local timezone.
-// Uses Intl.DateTimeFormat so no extra packages are needed.
-// The % 24 guards against implementations that return "24" for midnight.
-function getLocalMinutes(date: Date, timezone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-    timeZone: timezone,
-  }).formatToParts(date);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  return hour * 60 + minute;
-}
-
-// Shifts a UTC timestamp by the difference between target and actual local minutes.
-// This avoids needing to know the UTC offset explicitly: both the original and
-// rounded times share the same offset (DST transitions during a shift are an
-// accepted edge case in all standard payroll software).
-function shiftToLocalMinutes(date: Date, timezone: string, targetLocalMinutes: number): Date {
-  const currentLocalMinutes = getLocalMinutes(date, timezone);
-  const deltaMs = (targetLocalMinutes - currentLocalMinutes) * 60_000;
-  return new Date(date.getTime() + deltaMs);
-}
-
-// Clock-in rounding rules:
-//   <= work_day_start → snapped to work_day_start (early birds get credited from start)
-//   >  work_day_start → rounded UP to next interval past start
-function applyClockInRounding(clockIn: Date, settings: PayrollSettings): Date {
-  const startMins = parseWorkDayStartMinutes(settings.work_day_start);
-  const localMins = getLocalMinutes(clockIn, settings.timezone);
-
-  if (localMins <= startMins) {
-    return shiftToLocalMinutes(clockIn, settings.timezone, startMins);
-  }
-
-  const interval = settings.rounding_interval_minutes;
-  const minutesLate = localMins - startMins;
-  const roundedLate = Math.ceil(minutesLate / interval) * interval;
-  return shiftToLocalMinutes(clockIn, settings.timezone, startMins + roundedLate);
-}
-
-// Clock-out rounds DOWN to the last complete rounding interval in local time.
-function applyClockOutRounding(clockOut: Date, settings: PayrollSettings): Date {
-  const interval = settings.rounding_interval_minutes;
-  const localMins = getLocalMinutes(clockOut, settings.timezone);
-  const roundedMins = Math.floor(localMins / interval) * interval;
-  return shiftToLocalMinutes(clockOut, settings.timezone, roundedMins);
-}
 
 // Converts a local YYYY-MM-DD date string to UTC start/end boundaries in the
 // given IANA timezone. Uses an iterative probe so it is correct for all
@@ -139,48 +97,6 @@ function localDateToUTCRange(
   throw new Error(`Could not resolve local date bounds for ${dateStr} in ${timezone}`);
 }
 
-type ShiftResult = {
-  roundedIn: string;
-  roundedOut: string | null;
-  rawHours: number | null;
-  breakDeductionMinutes: number;
-  totalHours: number | null;
-  status: "in_progress" | "completed";
-};
-
-function computeShift(
-  clockIn: Date,
-  clockOut: Date | null,
-  settings: PayrollSettings
-): ShiftResult {
-  const rIn = applyClockInRounding(clockIn, settings);
-
-  if (!clockOut) {
-    return {
-      roundedIn: rIn.toISOString(),
-      roundedOut: null,
-      rawHours: null,
-      breakDeductionMinutes: 0,
-      totalHours: null,
-      status: "in_progress",
-    };
-  }
-
-  const rOut = applyClockOutRounding(clockOut, settings);
-  const grossMinutes = (rOut.getTime() - rIn.getTime()) / 60_000;
-  const breakMins    = settings.break_deduction_minutes;
-  const netMinutes   = Math.max(0, grossMinutes - breakMins);
-
-  return {
-    roundedIn: rIn.toISOString(),
-    roundedOut: rOut.toISOString(),
-    rawHours: Math.round((grossMinutes / 60) * 100) / 100,
-    breakDeductionMinutes: breakMins,
-    totalHours: Math.round((netMinutes / 60) * 100) / 100,
-    status: "completed",
-  };
-}
-
 // ── router ────────────────────────────────────────────────────────────────────
 
 export const payrollRouter = Router();
@@ -219,10 +135,30 @@ payrollRouter.put(
       return res.status(400).json({ message: "work_day_start must be HH:MM (e.g. 07:00)." });
     }
 
-    const roundingInterval = Number(body.rounding_interval_minutes);
-    if (!Number.isInteger(roundingInterval) || roundingInterval < 1) {
-      return res.status(400).json({ message: "rounding_interval_minutes must be a positive integer." });
+    const startRoundingMode = body.start_rounding_mode as RoundingMode;
+    if (!ROUNDING_MODES.includes(startRoundingMode)) {
+      return res.status(400).json({ message: `start_rounding_mode must be one of: ${ROUNDING_MODES.join(", ")}.` });
     }
+
+    const startRoundingInterval = Number(body.start_rounding_interval_minutes);
+    if (!Number.isInteger(startRoundingInterval) || startRoundingInterval < 1) {
+      return res.status(400).json({ message: "start_rounding_interval_minutes must be a positive integer." });
+    }
+
+    const endRoundingMode = body.end_rounding_mode as RoundingMode;
+    if (!ROUNDING_MODES.includes(endRoundingMode)) {
+      return res.status(400).json({ message: `end_rounding_mode must be one of: ${ROUNDING_MODES.join(", ")}.` });
+    }
+
+    const endRoundingInterval = Number(body.end_rounding_interval_minutes);
+    if (!Number.isInteger(endRoundingInterval) || endRoundingInterval < 1) {
+      return res.status(400).json({ message: "end_rounding_interval_minutes must be a positive integer." });
+    }
+
+    if (typeof body.snap_early_clock_in_to_start !== "boolean") {
+      return res.status(400).json({ message: "snap_early_clock_in_to_start must be true or false." });
+    }
+    const snapEarlyClockInToStart = body.snap_early_clock_in_to_start;
 
     const breakDeduction = Number(body.break_deduction_minutes);
     if (!Number.isInteger(breakDeduction) || breakDeduction < 0) {
@@ -246,7 +182,11 @@ payrollRouter.put(
         {
           organization_id: organizationId,
           work_day_start: workDayStart,
-          rounding_interval_minutes: roundingInterval,
+          start_rounding_mode: startRoundingMode,
+          start_rounding_interval_minutes: startRoundingInterval,
+          end_rounding_mode: endRoundingMode,
+          end_rounding_interval_minutes: endRoundingInterval,
+          snap_early_clock_in_to_start: snapEarlyClockInToStart,
           break_deduction_minutes: breakDeduction,
           timezone,
           updated_at: new Date().toISOString(),
@@ -455,6 +395,8 @@ payrollRouter.get(
         roundedOut: computed.roundedOut,
         rawHours: computed.rawHours,
         breakDeductionMinutes: computed.breakDeductionMinutes,
+        grossMinutes: computed.grossMinutes,
+        payableMinutes: computed.payableMinutes,
         totalHours: computed.totalHours,
         status: computed.status,
         editedAt: log.edited_at ?? null,

@@ -11,6 +11,17 @@ type Employee = {
   activeShiftId: string | null;
 };
 
+type RoundingMode = "none" | "nearest" | "up" | "down";
+
+const ROUNDING_MODES: { value: RoundingMode; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "nearest", label: "Nearest" },
+  { value: "up", label: "Up" },
+  { value: "down", label: "Down" },
+];
+
+const ROUNDING_INTERVALS = [5, 6, 10, 12, 15, 20, 30];
+
 type TimeLog = {
   id: string;
   employeeId: string;
@@ -21,6 +32,8 @@ type TimeLog = {
   roundedOut: string | null;
   rawHours: number | null;
   breakDeductionMinutes: number;
+  grossMinutes: number | null;
+  payableMinutes: number | null;
   totalHours: number | null;
   status: "in_progress" | "completed";
   editedAt: string | null;
@@ -29,10 +42,20 @@ type TimeLog = {
 
 type PayrollSettings = {
   work_day_start: string;
-  rounding_interval_minutes: number;
+  start_rounding_mode: RoundingMode;
+  start_rounding_interval_minutes: number;
+  end_rounding_mode: RoundingMode;
+  end_rounding_interval_minutes: number;
+  snap_early_clock_in_to_start: boolean;
   break_deduction_minutes: number;
   timezone: string;
 };
+
+// Converts a whole minute count to 2-decimal hours for display only. Never
+// sum values already passed through this — sum minutes first, convert once.
+function minutesToDisplayHours(minutes: number): number {
+  return Math.round((minutes / 60) * 100) / 100;
+}
 
 // ── module-level helpers ──────────────────────────────────────────────────────
 
@@ -201,57 +224,63 @@ function buildPrintHTML({ logs, settings, startDate, endDate }: PrintParams): st
   const days = generateDays(startDate, endDate);
   const isWide = days.length > 7;
 
-  // Index payroll hours by employee × local calendar day.
+  // Index payable minutes by employee × local calendar day. Minutes are
+  // integers, so summing across days/employees never compounds rounding
+  // drift — hours are derived once, only for display, below.
   const empNames = new Map<string, string>(); // empId → name
-  const empDayHours = new Map<string, Map<string, number>>(); // empId → dayKey → payroll h
+  const empDayMinutes = new Map<string, Map<string, number>>(); // empId → dayKey → payable minutes
 
   for (const log of logs) {
-    if (log.totalHours === null) continue; // in-progress: no payroll hours yet
+    if (log.payableMinutes === null) continue; // in-progress: no payroll hours yet
     empNames.set(log.employeeId, log.employeeName);
     // Use clockedInAt in org timezone to determine which local day the shift belongs to.
     const dayKey = getLocalDateKey(log.clockedInAt, tz);
-    if (!empDayHours.has(log.employeeId)) empDayHours.set(log.employeeId, new Map());
-    const m = empDayHours.get(log.employeeId)!;
-    m.set(dayKey, (m.get(dayKey) ?? 0) + log.totalHours);
+    if (!empDayMinutes.has(log.employeeId)) empDayMinutes.set(log.employeeId, new Map());
+    const m = empDayMinutes.get(log.employeeId)!;
+    m.set(dayKey, (m.get(dayKey) ?? 0) + log.payableMinutes);
   }
 
   // Employees sorted alphabetically.
   const sortedEmps = [...empNames.entries()].sort((a, b) => a[1].localeCompare(b[1]));
 
-  // Column totals (all employees for each day).
-  const dayTotals = new Map<string, number>();
-  for (const dayMap of empDayHours.values()) {
-    for (const [day, h] of dayMap) {
-      dayTotals.set(day, (dayTotals.get(day) ?? 0) + h);
+  // Column totals (all employees for each day), still in minutes.
+  const dayTotalMinutes = new Map<string, number>();
+  for (const dayMap of empDayMinutes.values()) {
+    for (const [day, mins] of dayMap) {
+      dayTotalMinutes.set(day, (dayTotalMinutes.get(day) ?? 0) + mins);
     }
   }
-  const grandTotal = [...dayTotals.values()].reduce((s, h) => s + h, 0);
+  const grandTotalMinutes = [...dayTotalMinutes.values()].reduce((s, mins) => s + mins, 0);
 
   const headerCells = days.map((d) => `<th>${escapeHtml(fmtDayLabel(d))}</th>`).join("");
 
   const bodyRows = sortedEmps
     .map(([empId, empName]) => {
-      const dayMap = empDayHours.get(empId) ?? new Map<string, number>();
-      let rowTotal = 0;
+      const dayMap = empDayMinutes.get(empId) ?? new Map<string, number>();
+      let rowTotalMinutes = 0;
       const cells = days.map((day) => {
-        const h = dayMap.get(day) ?? 0;
-        rowTotal += h;
+        const mins = dayMap.get(day) ?? 0;
+        rowTotalMinutes += mins;
+        const h = minutesToDisplayHours(mins);
         return `<td class="num">${h > 0 ? h.toFixed(2) : ""}</td>`;
       });
+      const rowTotalHours = minutesToDisplayHours(rowTotalMinutes);
       return `<tr>
       <td class="name">${escapeHtml(empName)}</td>
       ${cells.join("")}
-      <td class="num total-cell">${rowTotal > 0 ? rowTotal.toFixed(2) : ""}</td>
+      <td class="num total-cell">${rowTotalHours > 0 ? rowTotalHours.toFixed(2) : ""}</td>
     </tr>`;
     })
     .join("");
 
   const totalCells = days
     .map((day) => {
-      const h = dayTotals.get(day) ?? 0;
+      const h = minutesToDisplayHours(dayTotalMinutes.get(day) ?? 0);
       return `<td class="num">${h > 0 ? h.toFixed(2) : ""}</td>`;
     })
     .join("");
+
+  const grandTotalHours = minutesToDisplayHours(grandTotalMinutes);
 
   const fontSize = isWide ? "10px" : "12px";
   const thFontSize = isWide ? "9px" : "11px";
@@ -311,7 +340,7 @@ function buildPrintHTML({ logs, settings, startDate, endDate }: PrintParams): st
     <tr class="totals-row">
       <td>Total</td>
       ${totalCells}
-      <td class="num total-cell">${grandTotal > 0 ? grandTotal.toFixed(2) : ""}</td>
+      <td class="num total-cell">${grandTotalHours > 0 ? grandTotalHours.toFixed(2) : ""}</td>
     </tr>
   </tbody>
 </table>
@@ -325,7 +354,11 @@ export function PayrollPage() {
   // ── settings ────────────────────────────────────────────────────────────────
   const [settings, setSettings] = useState<PayrollSettings>({
     work_day_start: "07:00",
-    rounding_interval_minutes: 15,
+    start_rounding_mode: "up",
+    start_rounding_interval_minutes: 15,
+    end_rounding_mode: "down",
+    end_rounding_interval_minutes: 15,
+    snap_early_clock_in_to_start: true,
     break_deduction_minutes: 0,
     timezone: "America/Toronto",
   });
@@ -388,7 +421,11 @@ export function PayrollPage() {
       }
       setSettings({
         work_day_start: body.work_day_start ?? "07:00",
-        rounding_interval_minutes: body.rounding_interval_minutes ?? 15,
+        start_rounding_mode: body.start_rounding_mode ?? "up",
+        start_rounding_interval_minutes: body.start_rounding_interval_minutes ?? 15,
+        end_rounding_mode: body.end_rounding_mode ?? "down",
+        end_rounding_interval_minutes: body.end_rounding_interval_minutes ?? 15,
+        snap_early_clock_in_to_start: body.snap_early_clock_in_to_start ?? true,
         break_deduction_minutes: body.break_deduction_minutes ?? 0,
         timezone: body.timezone ?? "America/Toronto",
       });
@@ -456,7 +493,14 @@ export function PayrollPage() {
       }
       setSettings({
         work_day_start: body.work_day_start ?? settings.work_day_start,
-        rounding_interval_minutes: body.rounding_interval_minutes ?? settings.rounding_interval_minutes,
+        start_rounding_mode: body.start_rounding_mode ?? settings.start_rounding_mode,
+        start_rounding_interval_minutes:
+          body.start_rounding_interval_minutes ?? settings.start_rounding_interval_minutes,
+        end_rounding_mode: body.end_rounding_mode ?? settings.end_rounding_mode,
+        end_rounding_interval_minutes:
+          body.end_rounding_interval_minutes ?? settings.end_rounding_interval_minutes,
+        snap_early_clock_in_to_start:
+          body.snap_early_clock_in_to_start ?? settings.snap_early_clock_in_to_start,
         break_deduction_minutes: body.break_deduction_minutes ?? settings.break_deduction_minutes,
         timezone: body.timezone ?? settings.timezone,
       });
@@ -636,10 +680,17 @@ export function PayrollPage() {
   // ── totals ───────────────────────────────────────────────────────────────────
   const totals = useMemo(() => {
     const completed = logs.filter((l) => l.status === "completed");
-    const totalRaw = completed.reduce((s, l) => s + (l.rawHours ?? 0), 0);
-    const totalBreak = completed.reduce((s, l) => s + l.breakDeductionMinutes / 60, 0);
-    const totalPayroll = completed.reduce((s, l) => s + (l.totalHours ?? 0), 0);
-    return { totalRaw, totalBreak, totalPayroll, completedCount: completed.length };
+    // Sum whole payable/gross minutes first, convert to hours once at the
+    // end — summing already-rounded per-shift hours compounds drift.
+    const totalGrossMinutes = completed.reduce((s, l) => s + (l.grossMinutes ?? 0), 0);
+    const totalBreakMinutes = completed.reduce((s, l) => s + l.breakDeductionMinutes, 0);
+    const totalPayableMinutes = completed.reduce((s, l) => s + (l.payableMinutes ?? 0), 0);
+    return {
+      totalRaw: minutesToDisplayHours(totalGrossMinutes),
+      totalBreak: minutesToDisplayHours(totalBreakMinutes),
+      totalPayroll: minutesToDisplayHours(totalPayableMinutes),
+      completedCount: completed.length,
+    };
   }, [logs]);
 
   // ── export CSV ───────────────────────────────────────────────────────────────
@@ -727,32 +778,100 @@ export function PayrollPage() {
                 style={{ ...inputStyle, width: "auto" }}
               />
               <p style={hintStyle}>
-                Employees who clock in before this time are credited from this time. Late arrivals round up.
+                Used by the "snap early clock-in" rule below.
               </p>
             </div>
 
             <div style={fieldRowStyle}>
-              <label htmlFor="pay-interval" style={labelStyle}>
-                Rounding Interval (minutes)
+              <label style={{ ...labelStyle, display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <input
+                  type="checkbox"
+                  checked={settings.snap_early_clock_in_to_start}
+                  onChange={(e) =>
+                    setSettings((s) => ({ ...s, snap_early_clock_in_to_start: e.target.checked }))
+                  }
+                />
+                Snap Early Clock-Ins to Work Day Start
               </label>
-              <select
-                id="pay-interval"
-                value={settings.rounding_interval_minutes}
-                onChange={(e) =>
-                  setSettings((s) => ({
-                    ...s,
-                    rounding_interval_minutes: Number(e.target.value),
-                  }))
-                }
-                style={{ ...inputStyle, width: "auto" }}
-              >
-                {[5, 6, 10, 12, 15, 20, 30].map((n) => (
-                  <option key={n} value={n}>
-                    {n} minutes
-                  </option>
-                ))}
-              </select>
-              <p style={hintStyle}>Late clock-ins round up; early clock-outs round down.</p>
+              <p style={hintStyle}>
+                When enabled, employees who clock in at or before the Work Day Start Time are credited
+                from that time instead of having Start Time Rounding applied.
+              </p>
+            </div>
+
+            <div style={fieldRowStyle}>
+              <label style={labelStyle}>Start Time Rounding</label>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <select
+                  aria-label="Start rounding mode"
+                  value={settings.start_rounding_mode}
+                  onChange={(e) =>
+                    setSettings((s) => ({ ...s, start_rounding_mode: e.target.value as RoundingMode }))
+                  }
+                  style={{ ...inputStyle, width: "auto" }}
+                >
+                  {ROUNDING_MODES.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Start rounding interval"
+                  value={settings.start_rounding_interval_minutes}
+                  disabled={settings.start_rounding_mode === "none"}
+                  onChange={(e) =>
+                    setSettings((s) => ({ ...s, start_rounding_interval_minutes: Number(e.target.value) }))
+                  }
+                  style={{ ...inputStyle, width: "auto" }}
+                >
+                  {ROUNDING_INTERVALS.map((n) => (
+                    <option key={n} value={n}>
+                      {n} minutes
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p style={hintStyle}>
+                Applied to clock-ins after the Work Day Start Time (or to all clock-ins if snapping is
+                disabled above).
+              </p>
+            </div>
+
+            <div style={fieldRowStyle}>
+              <label style={labelStyle}>End Time Rounding</label>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <select
+                  aria-label="End rounding mode"
+                  value={settings.end_rounding_mode}
+                  onChange={(e) =>
+                    setSettings((s) => ({ ...s, end_rounding_mode: e.target.value as RoundingMode }))
+                  }
+                  style={{ ...inputStyle, width: "auto" }}
+                >
+                  {ROUNDING_MODES.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="End rounding interval"
+                  value={settings.end_rounding_interval_minutes}
+                  disabled={settings.end_rounding_mode === "none"}
+                  onChange={(e) =>
+                    setSettings((s) => ({ ...s, end_rounding_interval_minutes: Number(e.target.value) }))
+                  }
+                  style={{ ...inputStyle, width: "auto" }}
+                >
+                  {ROUNDING_INTERVALS.map((n) => (
+                    <option key={n} value={n}>
+                      {n} minutes
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p style={hintStyle}>Applied to every clock-out.</p>
             </div>
 
             <div style={fieldRowStyle}>

@@ -71,7 +71,9 @@
       "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X POST -H \"Content-Type: application/json\" -d '{\"organizationId\":\"x\",\"label\":\"y\",\"integrationName\":\"croplink\"}' http://localhost:8080/api/admin/integration-keys)",
       "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X POST http://localhost:8080/api/admin/integration-keys/00000000-0000-0000-0000-000000000000/revoke)",
       "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" -X DELETE http://localhost:8080/api/admin/integration-keys/00000000-0000-0000-0000-000000000000)",
-      "Bash(taskkill //PID 18472 //F //T)"
+      "Bash(taskkill //PID 18472 //F //T)",
+      "Bash(node --require tsx/cjs --test src/utils/__tests__/payrollRounding.test.ts)",
+      "Bash(node --require tsx/cjs --test src/utils/__tests__/*.test.ts)"
     ]
   }
 }
