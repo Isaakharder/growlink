@@ -14,6 +14,9 @@ const DESKTOP_PERMISSIONS = [
   "cases:edit",
   "payroll:view",
   "payroll:edit",
+  "food_safety:view",
+  "food_safety:manage_departments",
+  "food_safety:manage_locations",
 ];
 
 // Mobile permission keys — any one of these means the user has mobile access.

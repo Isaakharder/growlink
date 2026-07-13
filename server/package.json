@@ -7,7 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test:pdf": "node --require tsx/cjs --test src/utils/__tests__/flowMasterPdfParser.test.ts"
+    "test:pdf": "node --require tsx/cjs --test src/utils/__tests__/flowMasterPdfParser.test.ts",
+    "test:food-safety": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/services/__tests__/orgScopedTable.test.ts src/routes/foodSafety/__tests__/validation.test.ts src/routes/foodSafety/__tests__/permissions.test.ts",
+    "test:food-safety-db": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/__tests__/dbIntegration.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

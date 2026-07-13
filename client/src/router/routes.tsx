@@ -34,6 +34,9 @@ import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
 import { PayrollPage } from "../pages/PayrollPage";
 import { MobilePayrollPage } from "../pages/MobilePayrollPage";
+import { FoodSafetyDashboardPage } from "../pages/foodSafety/DashboardPage";
+import { FoodSafetyDepartmentsPage } from "../pages/foodSafety/DepartmentsPage";
+import { FoodSafetyLocationsPage } from "../pages/foodSafety/LocationsPage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -228,6 +231,32 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="payroll:view">
                 <PayrollPage />
+              </RequirePermission>
+            )
+          },
+
+          // Food Safety — requires food_safety:view
+          {
+            path: "food-safety",
+            element: (
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetyDashboardPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "food-safety/departments",
+            element: (
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetyDepartmentsPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "food-safety/locations",
+            element: (
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetyLocationsPage />
               </RequirePermission>
             )
           }

@@ -19,6 +19,7 @@ import { climateImportRouter } from "./routes/climateImportRoutes";
 import { greenhouseSetupRouter } from "./routes/greenhouseSetup";
 import { pestControlRouter } from "./routes/pestControl";
 import { h1Router } from "./routes/foodSafetyH1";
+import { foodSafetyRouter } from "./routes/foodSafety";
 import { qualityRouter } from "./routes/quality";
 import { healthRouter } from "./routes/health";
 import { integrationsRouter } from "./routes/integrations";
@@ -150,5 +151,6 @@ app.use("/api", dailyLightRouter);
 app.use("/api", climateReadingsRouter);
 app.use("/api", importHistorySettingsRouter);
 app.use("/api", payrollRouter);
+app.use("/api", foodSafetyRouter);
 
 export { app };

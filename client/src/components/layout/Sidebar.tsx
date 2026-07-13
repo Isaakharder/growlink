@@ -59,6 +59,16 @@ const navItems: NavItem[] = [
   { type: "link", label: "Payroll", to: "/payroll", permission: "payroll:view" },
   {
     type: "group",
+    label: "Food Safety",
+    base: "/food-safety",
+    children: [
+      { label: "Dashboard",          to: "/food-safety",             permission: "food_safety:view" },
+      { label: "Departments",        to: "/food-safety/departments",  permission: "food_safety:view" },
+      { label: "Locations & Assets", to: "/food-safety/locations",    permission: "food_safety:view" },
+    ],
+  },
+  {
+    type: "group",
     label: "Setup",
     base: "/setup",
     children: [
