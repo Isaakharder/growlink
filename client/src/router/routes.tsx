@@ -4,6 +4,7 @@ import { MobileLayout } from "../components/layout/MobileLayout";
 import { PagePlaceholder } from "../components/layout/PagePlaceholder";
 import { RequireAuth } from "../components/auth/RequireAuth";
 import { RequirePermission } from "../components/auth/RequirePermission";
+import { RequireAnyPermission } from "../components/auth/RequireAnyPermission";
 import { DashboardPage } from "../pages/DashboardPage";
 import { GreenhouseSetupPage } from "../pages/GreenhouseSetupPage";
 import { IrrigationPage } from "../pages/IrrigationPage";
@@ -37,6 +38,9 @@ import { MobilePayrollPage } from "../pages/MobilePayrollPage";
 import { FoodSafetyDashboardPage } from "../pages/foodSafety/DashboardPage";
 import { FoodSafetyDepartmentsPage } from "../pages/foodSafety/DepartmentsPage";
 import { FoodSafetyLocationsPage } from "../pages/foodSafety/LocationsPage";
+import { FoodSafetyTemplatesPage } from "../pages/foodSafety/TemplatesPage";
+import { FoodSafetyTemplateEditorPage } from "../pages/foodSafety/TemplateEditorPage";
+import { FoodSafetyTemplateVersionHistoryPage } from "../pages/foodSafety/TemplateVersionHistoryPage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -235,29 +239,62 @@ export const appRouter = createBrowserRouter([
             )
           },
 
-          // Food Safety — requires food_safety:view
+          // Food Safety — dashboard is reachable with any Food Safety
+          // permission (including the narrower manage_* keys, which each
+          // include their own read access on the backend).
           {
             path: "food-safety",
             element: (
-              <RequirePermission permission="food_safety:view">
+              <RequireAnyPermission
+                permissions={[
+                  "food_safety:view",
+                  "food_safety:manage_departments",
+                  "food_safety:manage_locations",
+                  "food_safety:manage_templates"
+                ]}
+              >
                 <FoodSafetyDashboardPage />
-              </RequirePermission>
+              </RequireAnyPermission>
             )
           },
           {
             path: "food-safety/departments",
             element: (
-              <RequirePermission permission="food_safety:view">
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_departments"]}>
                 <FoodSafetyDepartmentsPage />
-              </RequirePermission>
+              </RequireAnyPermission>
             )
           },
           {
             path: "food-safety/locations",
             element: (
-              <RequirePermission permission="food_safety:view">
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_locations"]}>
                 <FoodSafetyLocationsPage />
-              </RequirePermission>
+              </RequireAnyPermission>
+            )
+          },
+          {
+            path: "food-safety/templates",
+            element: (
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_templates"]}>
+                <FoodSafetyTemplatesPage />
+              </RequireAnyPermission>
+            )
+          },
+          {
+            path: "food-safety/templates/:templateId/edit",
+            element: (
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_templates"]}>
+                <FoodSafetyTemplateEditorPage />
+              </RequireAnyPermission>
+            )
+          },
+          {
+            path: "food-safety/templates/:templateId/versions",
+            element: (
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_templates"]}>
+                <FoodSafetyTemplateVersionHistoryPage />
+              </RequireAnyPermission>
             )
           }
         ]

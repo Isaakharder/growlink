@@ -1,58 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { Request, Response } from "express";
-import { supabase } from "../../../config/supabase";
 import { requireAnyPermission, requirePermission } from "../../../middleware/requirePermission";
+import { fakeReqRes, stubMembership } from "./testHelpers";
 
 // Exercises the existing, unmodified requirePermission/requireAnyPermission
-// middleware (server/src/middleware/requirePermission.ts) against the new
-// food_safety:* keys, by stubbing supabase.from("memberships") for the
-// duration of each test via node:test's built-in mock support. No database
-// connection or migration is required — memberships already exists.
-
-type MembershipRow = { role: string; permissions?: Record<string, boolean> };
-
-function stubMembership(t: import("node:test").TestContext, row: MembershipRow | null) {
-  const fakeFrom = ((table: string) => {
-    if (table !== "memberships") {
-      throw new Error(`Unexpected table in test stub: ${table}`);
-    }
-    return {
-      select() {
-        return this;
-      },
-      eq() {
-        return this;
-      },
-      maybeSingle() {
-        return Promise.resolve({ data: row, error: null });
-      }
-    };
-  }) as unknown as typeof supabase.from;
-
-  t.mock.method(supabase, "from", fakeFrom);
-}
-
-function fakeReqRes(userId: string, organizationId: string) {
-  const req = { userId, organizationId } as Request;
-  let statusCode: number | null = null;
-  let body: unknown = null;
-  const res = {
-    status(code: number) {
-      statusCode = code;
-      return this;
-    },
-    json(payload: unknown) {
-      body = payload;
-      return this;
-    }
-  } as unknown as Response;
-  let nextCalled = false;
-  const next = () => {
-    nextCalled = true;
-  };
-  return { req, res, next, getResult: () => ({ statusCode, body, nextCalled }) };
-}
+// middleware (server/src/middleware/requirePermission.ts) against the
+// food_safety:view / manage_departments / manage_locations keys, by
+// stubbing supabase.from("memberships") for the duration of each test via
+// node:test's built-in mock support. No database connection or migration is
+// required — memberships already exists. See templatePermissions.test.ts
+// for the equivalent coverage of food_safety:manage_templates.
 
 test("owner bypasses food_safety:manage_departments", async (t) => {
   stubMembership(t, { role: "owner" });

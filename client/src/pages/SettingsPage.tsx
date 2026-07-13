@@ -63,6 +63,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "food_safety:view",               label: "Food Safety — View" },
       { key: "food_safety:manage_departments", label: "Food Safety — Manage Departments" },
       { key: "food_safety:manage_locations",   label: "Food Safety — Manage Locations & Assets" },
+      { key: "food_safety:manage_templates",    label: "Food Safety — Manage Form Templates" },
     ],
   },
   {
