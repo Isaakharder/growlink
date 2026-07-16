@@ -1065,7 +1065,15 @@ body {
 
 .week-day-entry {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.week-day-entry-main {
+  display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .week-day-variety {
@@ -1080,6 +1088,13 @@ body {
 .week-day-kg {
   font-size: 0.7rem;
   color: var(--text-muted);
+}
+
+.week-day-afw {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .week-day-empty {
@@ -1121,6 +1136,60 @@ body {
 .pending-agent-week-card:hover {
   background: #fdf0de;
   border-color: #e8c896;
+}
+
+/* ── Pack History ──────────────────────────────────────────────────────── */
+
+.pack-history-controls-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pack-history-jump-form {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pack-history-jump-form input[type="date"] {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.pack-history-week-card {
+  margin-top: 1rem;
+}
+
+.pack-history-week-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pack-history-week-header h2 {
+  margin: 0;
+}
+
+.pack-history-week-total {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.pack-history-load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.25rem;
 }
 
 .yield-entry-pdf-preview {

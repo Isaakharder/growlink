@@ -180,7 +180,7 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
   const { data, error } = await supabase
     .from("yield_entries")
     .select(
-      "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg)"
+      "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg, average_fruit_weight_g)"
     )
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
@@ -204,13 +204,15 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
       packed_date?: string | null;
       size_kg?: Record<string, unknown> | null;
       total_kg?: number | null;
+      average_fruit_weight_g?: number | null;
     }> | null;
 
     const daily_breakdowns = (rawBreakdowns ?? []).map((b) => ({
       id: b.id ?? "",
       packed_date: b.packed_date ?? null,
       size_kg: (b.size_kg ?? {}) as Record<string, number>,
-      total_kg: Number(b.total_kg ?? 0)
+      total_kg: Number(b.total_kg ?? 0),
+      average_fruit_weight_g: b.average_fruit_weight_g ?? null
     }));
 
     const { varieties, yield_entry_daily_breakdown, ...rest } = entry;
@@ -298,7 +300,8 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
           yield_entry_id: existing.id,
           packed_date: payload.packed_date,
           size_kg: payload.size_kg,
-          total_kg: incomingTotal
+          total_kg: incomingTotal,
+          average_fruit_weight_g: payload.average_fruit_weight_g
         });
 
       if (breakdownError) {
@@ -331,7 +334,8 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
         yield_entry_id: data.id,
         packed_date: payload.packed_date,
         size_kg: payload.size_kg,
-        total_kg: totals.total_kg
+        total_kg: totals.total_kg,
+        average_fruit_weight_g: payload.average_fruit_weight_g
       });
 
     if (breakdownError) {
@@ -387,7 +391,8 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
         yield_entry_id: id,
         packed_date: payload.packed_date,
         size_kg: payload.size_kg,
-        total_kg: totals.total_kg
+        total_kg: totals.total_kg,
+        average_fruit_weight_g: payload.average_fruit_weight_g
       });
 
     if (breakdownError) {

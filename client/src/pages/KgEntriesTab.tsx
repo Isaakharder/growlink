@@ -314,42 +314,6 @@ export function KgEntriesTab() {
     return totalKg / selectedVariety.case_kg;
   }, [selectedVariety, totalKg]);
 
-  const weekSummaryDays = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const sunday = new Date(today);
-    sunday.setDate(today.getDate() - today.getDay());
-    const todayIso = localIsoDate(today);
-    const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-    return Array.from({ length: 7 }, (_, i) => {
-      const day = new Date(sunday);
-      day.setDate(sunday.getDate() + i);
-      const isoDate = localIsoDate(day);
-
-      const byVariety = new Map<string, { name: string; kg: number }>();
-      for (const entry of entries) {
-        for (const breakdown of entry.daily_breakdowns) {
-          if (breakdown.packed_date !== isoDate) continue;
-          const existing = byVariety.get(entry.variety_id);
-          if (existing) {
-            existing.kg += breakdown.total_kg;
-          } else {
-            byVariety.set(entry.variety_id, { name: entry.variety_name, kg: breakdown.total_kg });
-          }
-        }
-      }
-
-      return {
-        isoDate,
-        dayName: DAY_NAMES[i],
-        shortDate: day.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-        isToday: isoDate === todayIso,
-        varieties: Array.from(byVariety.values()).sort((a, b) => b.kg - a.kg)
-      };
-    });
-  }, [entries]);
-
   function resetSizeKgFields(sizes: YieldSizeOption[]) {
     const next: Record<string, string> = {};
     for (const size of sizes) {
@@ -1469,35 +1433,6 @@ export function KgEntriesTab() {
             ))}
           </div>
         )}
-
-        <div className="coming-soon-card yield-entry-weekly-summary">
-          <h2>This Week</h2>
-          <div className="week-day-grid">
-            {weekSummaryDays.map((day) => (
-              <div
-                key={day.isoDate}
-                className={`week-day-col${day.isToday ? " week-day-today" : ""}`}
-              >
-                <div className="week-day-header">
-                  <span className="week-day-name">{day.dayName}</span>
-                  <span className="week-day-date">{day.shortDate}</span>
-                </div>
-                {day.varieties.length === 0 ? (
-                  <p className="week-day-empty">No entries</p>
-                ) : (
-                  <ul className="week-day-entries">
-                    {day.varieties.map((v) => (
-                      <li key={v.name} className="week-day-entry">
-                        <span className="week-day-variety">{v.name}</span>
-                        <span className="week-day-kg">{roundTo(v.kg, 1)} kg</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
 
         <div className="coming-soon-card yield-entry-recent-entries">
           <h2>Recent Entries</h2>

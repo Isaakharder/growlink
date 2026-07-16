@@ -888,7 +888,8 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
         yield_entry_id: existingEntry.id,
         packed_date: payload.packedDate ?? null,
         size_kg: sizeKgById,
-        total_kg: incomingBreakdownTotal
+        total_kg: incomingBreakdownTotal,
+        average_fruit_weight_g: payload.averageFruitWeightG
       });
 
     if (appendBreakdownError) {
@@ -1002,7 +1003,8 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       yield_entry_id: inserted.id,
       packed_date: payload.packedDate ?? null,
       size_kg: sizeKgById,
-      total_kg: createBreakdownTotal
+      total_kg: createBreakdownTotal,
+      average_fruit_weight_g: payload.averageFruitWeightG
     });
 
   if (createBreakdownError) {
