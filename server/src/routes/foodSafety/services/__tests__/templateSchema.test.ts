@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateFormSchema, collectReferencedDepartmentIds, FORM_SCHEMA_VERSION } from "../templateSchema";
+import { validateFormSchema, collectReferencedDepartmentIds, readRequiresVerification, FORM_SCHEMA_VERSION } from "../templateSchema";
 
 function validSchema() {
   return {
@@ -294,6 +294,53 @@ test("rejects an oversized schema payload", () => {
   (schema as any).description = "x".repeat(250_000);
   const result = validateFormSchema(schema);
   assert.equal(result.valid, false);
+});
+
+test("readRequiresVerification defaults to true when workflow is absent (old Phase 2 templates)", () => {
+  assert.equal(readRequiresVerification({}), true);
+  assert.equal(readRequiresVerification({ workflow: undefined }), true);
+});
+
+test("readRequiresVerification honors an explicit false", () => {
+  assert.equal(readRequiresVerification({ workflow: { requiresVerification: false } }), false);
+});
+
+test("readRequiresVerification honors an explicit true", () => {
+  assert.equal(readRequiresVerification({ workflow: { requiresVerification: true } }), true);
+});
+
+test("accepts a schema with a valid workflow.requiresVerification", () => {
+  const schema = validSchema();
+  (schema as any).workflow = { requiresVerification: false };
+  const result = validateFormSchema(schema);
+  assert.equal(result.valid, true);
+});
+
+test("a schema with no workflow key at all is still valid (Phase 2 backward compatibility)", () => {
+  const schema = validSchema();
+  assert.equal("workflow" in schema, false);
+  const result = validateFormSchema(schema);
+  assert.equal(result.valid, true);
+});
+
+test("rejects a non-boolean workflow.requiresVerification", () => {
+  const schema = validSchema();
+  (schema as any).workflow = { requiresVerification: "yes" };
+  const result = validateFormSchema(schema);
+  assert.equal(result.valid, false);
+  if (!result.valid) {
+    assert.ok(result.errors.some((e) => e.includes("workflow.requiresVerification must be a boolean")));
+  }
+});
+
+test("rejects unknown keys inside workflow", () => {
+  const schema = validSchema();
+  (schema as any).workflow = { requiresVerification: true, autoApprove: true };
+  const result = validateFormSchema(schema);
+  assert.equal(result.valid, false);
+  if (!result.valid) {
+    assert.ok(result.errors.some((e) => e.includes("unsupported setting")));
+  }
 });
 
 test("collectReferencedDepartmentIds returns distinct department ids from location_asset_selector fields", () => {

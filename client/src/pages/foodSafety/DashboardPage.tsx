@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../hooks/usePermissions";
-import { listDepartments, listLocations, listTemplates } from "../../lib/foodSafety/api";
+import { listAwaitingVerification, listDepartments, listLocations, listRecords, listTemplates } from "../../lib/foodSafety/api";
 
 type LoadState = "loading" | "loaded" | "error";
 
@@ -10,6 +10,8 @@ export function FoodSafetyDashboardPage() {
   const canSeeDepartments = canAny(["food_safety:view", "food_safety:manage_departments"]);
   const canSeeLocations = canAny(["food_safety:view", "food_safety:manage_locations"]);
   const canSeeTemplates = canAny(["food_safety:view", "food_safety:manage_templates"]);
+  const canSeeRecords = canAny(["food_safety:view", "food_safety:complete", "food_safety:verify"]);
+  const canSeeAwaitingVerification = canAny(["food_safety:verify"]);
 
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -17,6 +19,8 @@ export function FoodSafetyDashboardPage() {
   const [activeLocations, setActiveLocations] = useState(0);
   const [templateCount, setTemplateCount] = useState(0);
   const [draftCount, setDraftCount] = useState(0);
+  const [recordCount, setRecordCount] = useState(0);
+  const [awaitingVerificationCount, setAwaitingVerificationCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,11 +38,13 @@ export function FoodSafetyDashboardPage() {
       const results = await Promise.allSettled([
         canSeeDepartments ? listDepartments() : Promise.resolve(null),
         canSeeLocations ? listLocations() : Promise.resolve(null),
-        canSeeTemplates ? listTemplates() : Promise.resolve(null)
+        canSeeTemplates ? listTemplates() : Promise.resolve(null),
+        canSeeRecords ? listRecords() : Promise.resolve(null),
+        canSeeAwaitingVerification ? listAwaitingVerification() : Promise.resolve(null)
       ]);
       if (cancelled) return;
 
-      const [departmentsResult, locationsResult, templatesResult] = results;
+      const [departmentsResult, locationsResult, templatesResult, recordsResult, awaitingResult] = results;
 
       if (departmentsResult.status === "fulfilled" && departmentsResult.value) {
         setActiveDepartments(departmentsResult.value.filter((department) => department.active).length);
@@ -49,6 +55,12 @@ export function FoodSafetyDashboardPage() {
       if (templatesResult.status === "fulfilled" && templatesResult.value) {
         setTemplateCount(templatesResult.value.length);
         setDraftCount(templatesResult.value.filter((template) => template.has_draft).length);
+      }
+      if (recordsResult.status === "fulfilled" && recordsResult.value) {
+        setRecordCount(recordsResult.value.length);
+      }
+      if (awaitingResult.status === "fulfilled" && awaitingResult.value) {
+        setAwaitingVerificationCount(awaitingResult.value.length);
       }
 
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -64,7 +76,7 @@ export function FoodSafetyDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [canSeeDepartments, canSeeLocations, canSeeTemplates]);
+  }, [canSeeDepartments, canSeeLocations, canSeeTemplates, canSeeRecords, canSeeAwaitingVerification]);
 
   return (
     <section className="page-shell">
@@ -101,6 +113,16 @@ export function FoodSafetyDashboardPage() {
                 </p>
               </>
             ) : null}
+            {canSeeRecords ? (
+              <p style={{ margin: 0 }}>
+                <strong>{recordCount}</strong> submitted record{recordCount === 1 ? "" : "s"}
+              </p>
+            ) : null}
+            {canSeeAwaitingVerification ? (
+              <p style={{ margin: 0 }}>
+                <strong>{awaitingVerificationCount}</strong> awaiting verification
+              </p>
+            ) : null}
           </div>
         )}
       </div>
@@ -111,15 +133,15 @@ export function FoodSafetyDashboardPage() {
           {canSeeDepartments ? <Link to="/food-safety/departments">Departments</Link> : null}
           {canSeeLocations ? <Link to="/food-safety/locations">Locations &amp; Assets</Link> : null}
           {canSeeTemplates ? <Link to="/food-safety/templates">Form Templates</Link> : null}
+          {canSeeRecords ? <Link to="/food-safety/records">Records</Link> : null}
         </div>
       </div>
 
       <div className="coming-soon-card">
         <h2>Coming soon</h2>
         <p>
-          Task scheduling, QR code check-ins, form submissions, corrective actions, training records,
-          and Audit Mode are planned for later phases of the Food Safety module. This dashboard
-          currently covers departments, locations/assets, and versioned form templates only.
+          Recurring schedules, automatically generated due tasks, QR code check-ins, corrective actions,
+          training records, and Audit Mode are planned for later phases of the Food Safety module.
         </p>
       </div>
     </section>

@@ -64,6 +64,8 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "food_safety:manage_departments", label: "Food Safety — Manage Departments" },
       { key: "food_safety:manage_locations",   label: "Food Safety — Manage Locations & Assets" },
       { key: "food_safety:manage_templates",    label: "Food Safety — Manage Form Templates" },
+      { key: "food_safety:complete",             label: "Food Safety — Complete Records" },
+      { key: "food_safety:verify",               label: "Food Safety — Verify Records" },
     ],
   },
   {
@@ -75,6 +77,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "mobile:pest",         label: "Mobile — Pest" },
       { key: "mobile:quality",      label: "Mobile — Quality" },
       { key: "mobile:payroll",      label: "Mobile — Payroll" },
+      { key: "mobile:food_safety",  label: "Mobile — Food Safety" },
     ],
   },
   {

@@ -81,13 +81,24 @@ export type FoodSafetyFormSection = {
   fields: FoodSafetyFormField[];
 };
 
+export type FoodSafetyWorkflowConfig = {
+  requiresVerification: boolean;
+};
+
 export type FoodSafetyFormSchema = {
   schemaVersion: number;
   title: string;
   description?: string;
   instructions?: string;
+  // Optional, additive to schemaVersion 1 — see the server-side copy of this
+  // comment in services/templateSchema.ts for the compatibility rationale.
+  workflow?: FoodSafetyWorkflowConfig;
   sections: FoodSafetyFormSection[];
 };
+
+export function readRequiresVerification(schema: Pick<FoodSafetyFormSchema, "workflow">): boolean {
+  return schema.workflow?.requiresVerification ?? true;
+}
 
 let idCounter = 0;
 
@@ -103,6 +114,7 @@ export function createEmptySchema(title: string): FoodSafetyFormSchema {
     title,
     description: "",
     instructions: "",
+    workflow: { requiresVerification: true },
     sections: []
   };
 }

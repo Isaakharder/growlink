@@ -91,6 +91,11 @@ const navItems: NavItem[] = [
         to: "/food-safety/templates",
         anyPermission: ["food_safety:view", "food_safety:manage_templates"]
       },
+      {
+        label: "Records",
+        to: "/food-safety/records",
+        anyPermission: ["food_safety:view", "food_safety:complete", "food_safety:verify"]
+      },
     ],
   },
   {

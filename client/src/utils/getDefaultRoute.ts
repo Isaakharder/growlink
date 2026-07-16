@@ -18,6 +18,8 @@ const DESKTOP_PERMISSIONS = [
   "food_safety:manage_departments",
   "food_safety:manage_locations",
   "food_safety:manage_templates",
+  "food_safety:complete",
+  "food_safety:verify",
 ];
 
 // Mobile permission keys — any one of these means the user has mobile access.
@@ -29,6 +31,7 @@ const MOBILE_PERMISSIONS = [
   "mobile:pest",
   "mobile:quality",
   "mobile:payroll",
+  "mobile:food_safety",
 ];
 
 /**

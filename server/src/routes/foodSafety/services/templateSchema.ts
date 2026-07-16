@@ -72,13 +72,34 @@ export type FoodSafetyFormSection = {
   fields: FoodSafetyFormField[];
 };
 
+export type FoodSafetyWorkflowConfig = {
+  requiresVerification: boolean;
+};
+
 export type FoodSafetyFormSchema = {
   schemaVersion: number;
   title: string;
   description?: string;
   instructions?: string;
+  // Optional, additive to schemaVersion 1 (see readRequiresVerification below
+  // for the compatibility rationale) — controls whether a submitted record
+  // needs supervisor verification before it's considered complete.
+  workflow?: FoodSafetyWorkflowConfig;
   sections: FoodSafetyFormSection[];
 };
+
+// Phase 3 introduces workflow.requiresVerification. Rather than bumping
+// schemaVersion to 2 (which would require maintaining parallel
+// validation/rendering paths for two schema shapes), the field was added as
+// OPTIONAL to schemaVersion 1: every schema published before this change
+// simply has no `workflow` key, which is indistinguishable from "not yet
+// configured" — never from "explicitly configured to skip verification".
+// Reading it always goes through this helper so the safe default
+// (verification required) is applied uniformly, and old Phase 2 templates
+// remain valid and readable without any migration or backfill.
+export function readRequiresVerification(schema: Pick<FoodSafetyFormSchema, "workflow">): boolean {
+  return schema.workflow?.requiresVerification ?? true;
+}
 
 export type ValidationResult =
   | { valid: true; schema: FoodSafetyFormSchema }
@@ -166,6 +187,20 @@ export function validateFormSchema(input: unknown): ValidationResult {
 
   if (!isOptionalString(input.instructions, MAX_LONG_STRING)) {
     errors.push("instructions must be a string.");
+  }
+
+  if (input.workflow !== undefined) {
+    if (!isPlainObject(input.workflow)) {
+      errors.push("workflow must be an object.");
+    } else {
+      const unknownKeys = Object.keys(input.workflow).filter((key) => key !== "requiresVerification");
+      if (unknownKeys.length > 0) {
+        errors.push(`workflow: unsupported setting(s) ${unknownKeys.join(", ")}.`);
+      }
+      if (typeof input.workflow.requiresVerification !== "boolean") {
+        errors.push("workflow.requiresVerification must be a boolean.");
+      }
+    }
   }
 
   if (!Array.isArray(input.sections)) {

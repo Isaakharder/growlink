@@ -11,7 +11,9 @@
     "test:food-safety": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/services/__tests__/orgScopedTable.test.ts src/routes/foodSafety/__tests__/validation.test.ts src/routes/foodSafety/__tests__/permissions.test.ts",
     "test:food-safety-db": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/__tests__/dbIntegration.test.ts",
     "test:food-safety-templates": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/services/__tests__/templateSchema.test.ts src/routes/foodSafety/__tests__/templatePermissions.test.ts",
-    "test:food-safety-templates-db": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/__tests__/templates.integration.test.ts"
+    "test:food-safety-templates-db": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/__tests__/templates.integration.test.ts",
+    "test:food-safety-records": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/services/__tests__/recordValidation.test.ts src/routes/foodSafety/services/__tests__/recordRevisions.test.ts src/routes/foodSafety/__tests__/recordPermissions.test.ts src/routes/foodSafety/__tests__/recordLifecyclePermissions.test.ts",
+    "test:food-safety-records-db": "node --require dotenv/config --require tsx/cjs --test src/routes/foodSafety/__tests__/records.integration.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

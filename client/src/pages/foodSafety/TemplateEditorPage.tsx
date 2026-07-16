@@ -13,7 +13,13 @@ import {
   updateTemplateVersionDraft
 } from "../../lib/foodSafety/api";
 import type { FoodSafetyDepartment, FoodSafetyFormTemplate, FoodSafetyFormTemplateVersionSummary } from "../../lib/foodSafety/types";
-import { createEmptySchema, createEmptySection, type FoodSafetyFormSchema, type FoodSafetyFormSection } from "../../lib/foodSafety/formSchema";
+import {
+  createEmptySchema,
+  createEmptySection,
+  readRequiresVerification,
+  type FoodSafetyFormSchema,
+  type FoodSafetyFormSection
+} from "../../lib/foodSafety/formSchema";
 import { SectionEditor } from "../../components/food-safety/SectionEditor";
 import { FormPreview } from "../../components/food-safety/FormPreview";
 
@@ -352,6 +358,16 @@ export function FoodSafetyTemplateEditorPage() {
               <label>
                 Version notes
                 <input type="text" value={versionNotes} onChange={(event) => setVersionNotes(event.target.value)} />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  checked={readRequiresVerification(schema)}
+                  onChange={(event) =>
+                    setSchema({ ...schema, workflow: { requiresVerification: event.target.checked } })
+                  }
+                />
+                Requires supervisor verification before a submitted record is considered complete
               </label>
             </div>
           </div>

@@ -41,6 +41,10 @@ import { FoodSafetyLocationsPage } from "../pages/foodSafety/LocationsPage";
 import { FoodSafetyTemplatesPage } from "../pages/foodSafety/TemplatesPage";
 import { FoodSafetyTemplateEditorPage } from "../pages/foodSafety/TemplateEditorPage";
 import { FoodSafetyTemplateVersionHistoryPage } from "../pages/foodSafety/TemplateVersionHistoryPage";
+import { FoodSafetyRecordsPage } from "../pages/foodSafety/RecordsPage";
+import { FoodSafetyRecordDetailPage } from "../pages/foodSafety/RecordDetailPage";
+import { MobileFoodSafetyPage } from "../pages/foodSafety/MobileFoodSafetyPage";
+import { MobileRecordCompletionPage } from "../pages/foodSafety/MobileRecordCompletionPage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -296,6 +300,24 @@ export const appRouter = createBrowserRouter([
                 <FoodSafetyTemplateVersionHistoryPage />
               </RequireAnyPermission>
             )
+          },
+
+          // Food Safety Records — requires view OR complete OR verify
+          {
+            path: "food-safety/records",
+            element: (
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:complete", "food_safety:verify"]}>
+                <FoodSafetyRecordsPage />
+              </RequireAnyPermission>
+            )
+          },
+          {
+            path: "food-safety/records/:recordId",
+            element: (
+              <RequireAnyPermission permissions={["food_safety:view", "food_safety:complete", "food_safety:verify"]}>
+                <FoodSafetyRecordDetailPage />
+              </RequireAnyPermission>
+            )
           }
         ]
       }
@@ -313,6 +335,30 @@ export const appRouter = createBrowserRouter([
           {
             index: true,
             element: <MobileHomePage />
+          },
+          {
+            // mobile:food_safety alone is never sufficient to reach the page —
+            // it must be paired with at least one of complete/verify, which is
+            // what actually makes the mobile area useful (browsing/completing
+            // forms, or reviewing records awaiting verification).
+            path: "food-safety",
+            element: (
+              <RequirePermission permission="mobile:food_safety">
+                <RequireAnyPermission permissions={["food_safety:complete", "food_safety:verify"]}>
+                  <MobileFoodSafetyPage />
+                </RequireAnyPermission>
+              </RequirePermission>
+            )
+          },
+          {
+            path: "food-safety/records/:recordId",
+            element: (
+              <RequirePermission permission="mobile:food_safety">
+                <RequireAnyPermission permissions={["food_safety:complete", "food_safety:verify"]}>
+                  <MobileRecordCompletionPage />
+                </RequireAnyPermission>
+              </RequirePermission>
+            )
           },
           {
             path: "daily-yield",

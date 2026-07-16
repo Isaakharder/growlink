@@ -12,7 +12,8 @@ const MOBILE_PERMISSIONS = [
   "mobile:irrigation",
   "mobile:pest",
   "mobile:quality",
-  "mobile:payroll"
+  "mobile:payroll",
+  "mobile:food_safety"
 ] as const;
 
 function MobileLayoutInner() {
