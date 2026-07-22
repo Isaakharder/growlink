@@ -10,6 +10,8 @@ import {
   YAxis
 } from "recharts";
 import { apiFetch } from "../lib/api";
+import { usePermissions } from "../hooks/usePermissions";
+import { BonusesTab } from "./qualityCheck/BonusesTab";
 
 type CheckType = "winding_pruning" | "picking_peppers";
 
@@ -65,7 +67,7 @@ type EmployeeTrend = {
   status: "improving" | "worsening" | "stable" | "insufficient";
 };
 
-type ActiveTab = "wp_report" | "pp_report" | "setup";
+type ActiveTab = "wp_report" | "pp_report" | "bonuses" | "setup";
 
 function safeRate(issues: number, stems: number): number {
   if (!Number.isFinite(stems) || stems <= 0) return 0;
@@ -163,6 +165,10 @@ function buildTrendData(checks: QualityCheck[], employees: QualityEmployee[]): E
 }
 
 export function QualityCheckPage() {
+  const { canAny, can } = usePermissions();
+  const canViewBonuses = canAny(["quality:bonuses_view", "quality:bonuses_edit"]);
+  const canEditBonuses = can("quality:bonuses_edit");
+
   const [activeTab, setActiveTab] = useState<ActiveTab>("wp_report");
 
   const [employees, setEmployees] = useState<QualityEmployee[]>([]);
@@ -590,6 +596,15 @@ export function QualityCheckPage() {
         >
           Picking Report
         </button>
+        {canViewBonuses ? (
+          <button
+            type="button"
+            className={`tab-button${activeTab === "bonuses" ? " active" : ""}`}
+            onClick={() => setActiveTab("bonuses")}
+          >
+            Bonuses
+          </button>
+        ) : null}
         <button
           type="button"
           className={`tab-button${activeTab === "setup" ? " active" : ""}`}
@@ -781,6 +796,11 @@ export function QualityCheckPage() {
             </>
           )}
         </div>
+      ) : null}
+
+      {/* ── Bonuses tab ───────────────────────────────────────────────── */}
+      {activeTab === "bonuses" && canViewBonuses ? (
+        <BonusesTab employees={employees} canEdit={canEditBonuses} />
       ) : null}
 
       {/* ── Setup tab ─────────────────────────────────────────────────── */}

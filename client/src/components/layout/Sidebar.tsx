@@ -20,10 +20,6 @@ type NavGroupChild = {
   label: string;
   to: string;
   permission?: string;
-  // Use when the backing route accepts more than one permission key (the
-  // "view OR manage_x" pattern) — mirrors RequireAnyPermission in routes.tsx.
-  // Ignored if `permission` is also set.
-  anyPermission?: string[];
 };
 
 type NavGroupItem = {
@@ -66,36 +62,9 @@ const navItems: NavItem[] = [
     label: "Food Safety",
     base: "/food-safety",
     children: [
-      {
-        label: "Dashboard",
-        to: "/food-safety",
-        anyPermission: [
-          "food_safety:view",
-          "food_safety:manage_departments",
-          "food_safety:manage_locations",
-          "food_safety:manage_templates"
-        ]
-      },
-      {
-        label: "Departments",
-        to: "/food-safety/departments",
-        anyPermission: ["food_safety:view", "food_safety:manage_departments"]
-      },
-      {
-        label: "Locations & Assets",
-        to: "/food-safety/locations",
-        anyPermission: ["food_safety:view", "food_safety:manage_locations"]
-      },
-      {
-        label: "Form Templates",
-        to: "/food-safety/templates",
-        anyPermission: ["food_safety:view", "food_safety:manage_templates"]
-      },
-      {
-        label: "Records",
-        to: "/food-safety/records",
-        anyPermission: ["food_safety:view", "food_safety:complete", "food_safety:verify"]
-      },
+      { label: "Dashboard", to: "/food-safety", permission: "food_safety:view" },
+      { label: "Locations", to: "/food-safety/locations", permission: "food_safety:view" },
+      { label: "Reports", to: "/food-safety/reports", permission: "food_safety:view" },
     ],
   },
   {
@@ -115,7 +84,7 @@ const navItems: NavItem[] = [
 export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
   const location = useLocation();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const { can, canAny } = usePermissions();
+  const { can } = usePermissions();
   const { isPlatformAdmin } = usePlatformAdmin();
 
   // All groups (used to initialise expandedGroups — runs over full navItems, not
@@ -160,13 +129,12 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
       // Group: filter children; hide the whole group if none remain visible.
       const visibleChildren = item.children.filter((child) => {
         if (child.permission) return can(child.permission);
-        if (child.anyPermission) return canAny(child.anyPermission);
         return true;
       });
       if (visibleChildren.length === 0) return [];
       return [{ ...item, children: visibleChildren }];
     });
-  }, [can, canAny]);
+  }, [can]);
 
   async function handleLogout() {
     setIsLoggingOut(true);
@@ -234,6 +202,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                       <NavLink
                         key={child.to}
                         to={child.to}
+                        end={child.to === item.base}
                         onClick={onCloseMobile}
                         className={({ isActive }) =>
                           `nav-sublink ${isActive ? "active" : ""}`

@@ -4,7 +4,7 @@ const DB_NAME = "growlink_offline";
 const DB_VERSION = 1;
 const STORE = "queue";
 
-export type QueueModule = "daily_yield" | "irrigation" | "pest" | "quality";
+export type QueueModule = "daily_yield" | "irrigation" | "pest" | "quality" | "food_safety";
 
 export type QueueItem = {
   id: string;

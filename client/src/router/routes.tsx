@@ -4,7 +4,6 @@ import { MobileLayout } from "../components/layout/MobileLayout";
 import { PagePlaceholder } from "../components/layout/PagePlaceholder";
 import { RequireAuth } from "../components/auth/RequireAuth";
 import { RequirePermission } from "../components/auth/RequirePermission";
-import { RequireAnyPermission } from "../components/auth/RequireAnyPermission";
 import { DashboardPage } from "../pages/DashboardPage";
 import { GreenhouseSetupPage } from "../pages/GreenhouseSetupPage";
 import { IrrigationPage } from "../pages/IrrigationPage";
@@ -35,16 +34,11 @@ import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
 import { PayrollPage } from "../pages/PayrollPage";
 import { MobilePayrollPage } from "../pages/MobilePayrollPage";
-import { FoodSafetyDashboardPage } from "../pages/foodSafety/DashboardPage";
-import { FoodSafetyDepartmentsPage } from "../pages/foodSafety/DepartmentsPage";
-import { FoodSafetyLocationsPage } from "../pages/foodSafety/LocationsPage";
-import { FoodSafetyTemplatesPage } from "../pages/foodSafety/TemplatesPage";
-import { FoodSafetyTemplateEditorPage } from "../pages/foodSafety/TemplateEditorPage";
-import { FoodSafetyTemplateVersionHistoryPage } from "../pages/foodSafety/TemplateVersionHistoryPage";
-import { FoodSafetyRecordsPage } from "../pages/foodSafety/RecordsPage";
-import { FoodSafetyRecordDetailPage } from "../pages/foodSafety/RecordDetailPage";
-import { MobileFoodSafetyPage } from "../pages/foodSafety/MobileFoodSafetyPage";
-import { MobileRecordCompletionPage } from "../pages/foodSafety/MobileRecordCompletionPage";
+import { FoodSafetyPage } from "../pages/FoodSafetyPage";
+import { FoodSafetyLocationsPage } from "../pages/FoodSafetyLocationsPage";
+import { FoodSafetyReportsPage } from "../pages/FoodSafetyReportsPage";
+import { MobileFoodSafetyPage } from "../pages/MobileFoodSafetyPage";
+import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationPage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -243,80 +237,29 @@ export const appRouter = createBrowserRouter([
             )
           },
 
-          // Food Safety — dashboard is reachable with any Food Safety
-          // permission (including the narrower manage_* keys, which each
-          // include their own read access on the backend).
+          // Food Safety — requires food_safety:view
           {
             path: "food-safety",
             element: (
-              <RequireAnyPermission
-                permissions={[
-                  "food_safety:view",
-                  "food_safety:manage_departments",
-                  "food_safety:manage_locations",
-                  "food_safety:manage_templates"
-                ]}
-              >
-                <FoodSafetyDashboardPage />
-              </RequireAnyPermission>
-            )
-          },
-          {
-            path: "food-safety/departments",
-            element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_departments"]}>
-                <FoodSafetyDepartmentsPage />
-              </RequireAnyPermission>
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetyPage />
+              </RequirePermission>
             )
           },
           {
             path: "food-safety/locations",
             element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_locations"]}>
+              <RequirePermission permission="food_safety:view">
                 <FoodSafetyLocationsPage />
-              </RequireAnyPermission>
+              </RequirePermission>
             )
           },
           {
-            path: "food-safety/templates",
+            path: "food-safety/reports",
             element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_templates"]}>
-                <FoodSafetyTemplatesPage />
-              </RequireAnyPermission>
-            )
-          },
-          {
-            path: "food-safety/templates/:templateId/edit",
-            element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_templates"]}>
-                <FoodSafetyTemplateEditorPage />
-              </RequireAnyPermission>
-            )
-          },
-          {
-            path: "food-safety/templates/:templateId/versions",
-            element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:manage_templates"]}>
-                <FoodSafetyTemplateVersionHistoryPage />
-              </RequireAnyPermission>
-            )
-          },
-
-          // Food Safety Records — requires view OR complete OR verify
-          {
-            path: "food-safety/records",
-            element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:complete", "food_safety:verify"]}>
-                <FoodSafetyRecordsPage />
-              </RequireAnyPermission>
-            )
-          },
-          {
-            path: "food-safety/records/:recordId",
-            element: (
-              <RequireAnyPermission permissions={["food_safety:view", "food_safety:complete", "food_safety:verify"]}>
-                <FoodSafetyRecordDetailPage />
-              </RequireAnyPermission>
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetyReportsPage />
+              </RequirePermission>
             )
           }
         ]
@@ -337,26 +280,18 @@ export const appRouter = createBrowserRouter([
             element: <MobileHomePage />
           },
           {
-            // mobile:food_safety alone is never sufficient to reach the page —
-            // it must be paired with at least one of complete/verify, which is
-            // what actually makes the mobile area useful (browsing/completing
-            // forms, or reviewing records awaiting verification).
             path: "food-safety",
             element: (
               <RequirePermission permission="mobile:food_safety">
-                <RequireAnyPermission permissions={["food_safety:complete", "food_safety:verify"]}>
-                  <MobileFoodSafetyPage />
-                </RequireAnyPermission>
+                <MobileFoodSafetyPage />
               </RequirePermission>
             )
           },
           {
-            path: "food-safety/records/:recordId",
+            path: "food-safety/:locationId",
             element: (
               <RequirePermission permission="mobile:food_safety">
-                <RequireAnyPermission permissions={["food_safety:complete", "food_safety:verify"]}>
-                  <MobileRecordCompletionPage />
-                </RequireAnyPermission>
+                <MobileFoodSafetyLocationPage />
               </RequirePermission>
             )
           },

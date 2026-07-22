@@ -4301,6 +4301,222 @@ body {
   box-shadow: 0 0 0 3px rgba(15, 118, 96, 0.15);
 }
 
+/* ── Quality Check — Bonuses tab (entry form / filters / history table) ───── */
+
+.bonus-form {
+  margin-top: 0.85rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
+  align-items: end;
+}
+
+.bonus-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+}
+
+.bonus-form input,
+.bonus-form select {
+  height: 42px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.2;
+  padding: 0 0.6rem;
+}
+
+.bonus-form input:focus,
+.bonus-form select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(15, 118, 96, 0.12);
+}
+
+.bonus-form input:disabled {
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.bonus-history-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.bonus-filter-bar {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.bonus-filter-label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.bonus-filter-label input,
+.bonus-filter-label select {
+  height: 40px;
+  box-sizing: border-box;
+  width: 168px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.2;
+  padding: 0 0.55rem;
+}
+
+.bonus-filter-label input:focus,
+.bonus-filter-label select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(15, 118, 96, 0.12);
+}
+
+.bonus-history-table tbody tr:nth-child(odd) td {
+  background: var(--surface);
+}
+
+.bonus-history-table tbody tr:nth-child(even) td {
+  background: var(--surface-soft);
+}
+
+.bonus-history-table tbody tr:hover td {
+  background: var(--brand-soft);
+}
+
+.bonus-history-table tfoot td {
+  border-bottom: none;
+  border-top: 2px solid var(--border);
+  background: var(--surface);
+}
+
+.bonus-history-subrow td {
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.bonus-week-caption {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.bonus-tier-input {
+  height: 38px;
+  box-sizing: border-box;
+  width: 100px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 0.5rem;
+}
+
+.bonus-tier-form {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.bonus-tier-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.bonus-tier-form input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 150px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 0.55rem;
+}
+
+/* ── Quality Check — Bonus PDF import review table ─────────────────────────── */
+
+.bonus-pdf-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.6rem 1rem;
+}
+
+.bonus-pdf-meta div span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.bonus-pdf-meta div strong {
+  display: block;
+  font-size: 0.95rem;
+  margin-top: 0.15rem;
+}
+
+.bonus-pdf-table select {
+  height: 34px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 160px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0 0.5rem;
+}
+
+.bonus-pdf-row-skipped td {
+  opacity: 0.5;
+}
+
+.bonus-pdf-match-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.bonus-pdf-match-unmatched {
+  background: #f8d7da;
+  color: #842029;
+}
+
+.bonus-pdf-match-ambiguous {
+  background: #fff3cd;
+  color: #664d03;
+}
+
 /* ── H1 preview print styles ───────────────────────────────────────────────── */
 
 @media print {
@@ -4319,4 +4535,468 @@ body {
     width: 100%;
     background: #fff;
   }
+}
+
+/* ── Food Safety — Cleaning Locations ──────────────────────────────────────── */
+
+.cleaning-locations-toolbar {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cleaning-locations-toolbar button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0.5rem 0.8rem;
+  cursor: pointer;
+}
+
+.cleaning-locations-list {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.cleaning-location-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.cleaning-location-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.cleaning-location-card-name {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.cleaning-location-card-area {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.cleaning-location-card-stats {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.cleaning-location-card-actions {
+  flex-shrink: 0;
+}
+
+.cleaning-location-modal {
+  width: min(720px, 100%);
+}
+
+.cleaning-tasks-section {
+  grid-column: 1 / -1;
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.cleaning-tasks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.cleaning-tasks-header button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+.cleaning-tasks-empty {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.cleaning-task-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.cleaning-task-row-main {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.cleaning-task-row-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cleaning-task-row-options select,
+.cleaning-task-row-options input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.cleaning-task-row input,
+.cleaning-task-row select {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+}
+
+.cleaning-task-row button {
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+
+.cleaning-location-confirm-modal {
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 1.15rem;
+}
+
+.cleaning-location-confirm-modal h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.cleaning-location-confirm-modal p {
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.form-actions .danger {
+  background: var(--surface-soft);
+}
+
+/* ── Food Safety — Mobile Cleaning Checklist ───────────────────────────────── */
+
+.cleaning-checklist-section {
+  margin-top: 1.25rem;
+}
+
+.cleaning-checklist-section-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 0.6rem;
+}
+
+.cleaning-checklist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.cleaning-checklist-location-card {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 0.9rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.cleaning-checklist-card-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cleaning-checklist-card-area {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.cleaning-checklist-card-progress {
+  font-size: 0.88rem;
+  color: var(--text);
+  margin-top: 0.35rem;
+  font-weight: 600;
+}
+
+.cleaning-checklist-status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-top: 0.5rem;
+}
+
+.cleaning-checklist-status-badge.status-not-started {
+  color: var(--text-muted);
+  background: var(--surface-soft);
+}
+
+.cleaning-checklist-status-badge.status-in-progress {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.cleaning-checklist-status-badge.status-complete {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.cleaning-checklist-card-initials {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+.mobile-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--brand);
+  text-decoration: none;
+  margin-bottom: 0.75rem;
+}
+
+.cleaning-checklist-completed-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.6rem 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.cleaning-checklist-completed-date {
+  font-weight: 500;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.cleaning-checklist-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.cleaning-checklist-task-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 52px;
+  padding: 0.7rem 0.8rem;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cleaning-checklist-task-row.checked {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.cleaning-checklist-task-row:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.cleaning-checklist-checkbox {
+  font-size: 1.4rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cleaning-checklist-task-name {
+  flex: 1;
+}
+
+.cleaning-checklist-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.cleaning-checklist-field-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cleaning-checklist-response-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.65rem 0.8rem;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+  box-sizing: border-box;
+}
+
+textarea.cleaning-checklist-response-input {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.cleaning-checklist-response-input.filled {
+  border-color: var(--brand);
+}
+
+.cleaning-checklist-response-input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.cleaning-checklist-number-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cleaning-checklist-number-input-wrap .cleaning-checklist-response-input {
+  flex: 1;
+}
+
+.cleaning-checklist-number-unit {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ── Food Safety — Reports ─────────────────────────────────────────────────── */
+
+.cleaning-reports-list {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.cleaning-report-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 1rem;
+}
+
+.cleaning-report-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.cleaning-report-card-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.cleaning-reports-empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.cleaning-report-detail-modal {
+  width: min(680px, 100%);
+}
+
+.cleaning-report-detail-line {
+  margin: 0.2rem 0;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.cleaning-report-detail-tasks-title {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.cleaning-report-detail-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.cleaning-report-detail-task {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 0.6rem 0.7rem;
+}
+
+.cleaning-report-detail-task-name {
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.cleaning-report-detail-task-row {
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
