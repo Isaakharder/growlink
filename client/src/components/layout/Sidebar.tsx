@@ -42,6 +42,7 @@ const navItems: NavItem[] = [
     children: [
       { label: "Data Entry", to: "/yield/data-entry", permission: "yield:view" },
       { label: "Yield Analytics", to: "/yield/analytics", permission: "yield:view" },
+      { label: "Daily Yield Samples", to: "/yield/daily-yield-samples", permission: "yield:view" },
     ],
   },
   { type: "link", label: "Environment", to: "/irrigation", permission: "irrigation:view" },
@@ -76,6 +77,7 @@ const navItems: NavItem[] = [
       { label: "Greenhouse Setup",   to: "/setup/greenhouse",    permission: "greenhouse_setup:view" },
       { label: "Irrigation Setup",   to: "/setup/irrigation",    permission: "irrigation:view" },
       { label: "Varieties Setup",    to: "/setup/varieties",     permission: "greenhouse_setup:view" },
+      { label: "Food Safety Setup",  to: "/setup/food-safety",   permission: "food_safety:view" },
       { label: "Settings",           to: "/setup/settings" }, // visible to everyone
     ],
   },

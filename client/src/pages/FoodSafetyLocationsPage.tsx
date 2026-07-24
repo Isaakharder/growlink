@@ -1,16 +1,16 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, apiUrl } from "../lib/api";
 import { usePermissions } from "../hooks/usePermissions";
+import { ModalOverlay } from "../components/ModalOverlay";
 
-type CleaningTaskFrequency = "daily" | "weekly" | "monthly" | "annually";
+type CleaningLocationFrequency = "daily" | "weekly" | "monthly" | "annually";
 type CleaningTaskResponseType = "checkbox" | "number" | "short_text" | "long_text";
 
 type CleaningTask = {
   id: string;
   name: string;
-  frequency: CleaningTaskFrequency;
   response_type: CleaningTaskResponseType;
-  action_label: string | null;
+  action_labels: string[] | null;
   sort_order: number;
 };
 
@@ -18,16 +18,26 @@ type CleaningLocation = {
   id: string;
   name: string;
   area: string;
+  frequency: CleaningLocationFrequency;
+  notes: string | null;
   tasks: CleaningTask[];
+};
+
+type ActionLabelRow = {
+  key: string;
+  value: string;
 };
 
 type TaskFormRow = {
   key: string;
   name: string;
-  frequency: CleaningTaskFrequency;
   responseType: CleaningTaskResponseType;
-  actionLabel: string;
+  actionLabels: ActionLabelRow[];
 };
+
+function newActionLabelRow(value = ""): ActionLabelRow {
+  return { key: crypto.randomUUID(), value };
+}
 
 const RESPONSE_TYPE_LABELS: Record<CleaningTaskResponseType, string> = {
   checkbox: "Checkbox",
@@ -36,55 +46,54 @@ const RESPONSE_TYPE_LABELS: Record<CleaningTaskResponseType, string> = {
   long_text: "Long text"
 };
 
+const MAX_NOTES_LENGTH = 2000;
+
 type LocationFormState = {
   name: string;
   area: string;
+  frequency: CleaningLocationFrequency;
+  notes: string;
   tasks: TaskFormRow[];
 };
 
 const API_BASE = apiUrl("/api/food-safety/cleaning-locations");
 
-const FREQUENCY_LABELS: Record<CleaningTaskFrequency, string> = {
+const FREQUENCY_LABELS: Record<CleaningLocationFrequency, string> = {
   daily: "Daily",
   weekly: "Weekly",
   monthly: "Monthly",
   annually: "Annually"
 };
 
-const FREQUENCY_ORDER: CleaningTaskFrequency[] = ["daily", "weekly", "monthly", "annually"];
-
 function newTaskRow(): TaskFormRow {
-  return { key: crypto.randomUUID(), name: "", frequency: "daily", responseType: "checkbox", actionLabel: "" };
+  return {
+    key: crypto.randomUUID(),
+    name: "",
+    responseType: "checkbox",
+    actionLabels: [newActionLabelRow()]
+  };
 }
 
 function emptyForm(): LocationFormState {
-  return { name: "", area: "", tasks: [newTaskRow()] };
+  return { name: "", area: "", frequency: "daily", notes: "", tasks: [newTaskRow()] };
 }
 
 function toFormState(location: CleaningLocation): LocationFormState {
   return {
     name: location.name,
     area: location.area,
+    frequency: location.frequency,
+    notes: location.notes ?? "",
     tasks: location.tasks.map((task) => ({
       key: crypto.randomUUID(),
       name: task.name,
-      frequency: task.frequency,
       responseType: task.response_type,
-      actionLabel: task.action_label ?? ""
+      actionLabels:
+        task.action_labels && task.action_labels.length > 0
+          ? task.action_labels.map((label) => newActionLabelRow(label))
+          : [newActionLabelRow()]
     }))
   };
-}
-
-function frequencySummary(tasks: CleaningTask[]): string {
-  const counts = new Map<CleaningTaskFrequency, number>();
-  for (const task of tasks) {
-    counts.set(task.frequency, (counts.get(task.frequency) ?? 0) + 1);
-  }
-
-  return FREQUENCY_ORDER
-    .filter((frequency) => counts.has(frequency))
-    .map((frequency) => `${counts.get(frequency)} ${FREQUENCY_LABELS[frequency]}`)
-    .join(", ");
 }
 
 export function FoodSafetyLocationsPage() {
@@ -128,19 +137,6 @@ export function FoodSafetyLocationsPage() {
     void fetchLocations();
   }, []);
 
-  useEffect(() => {
-    if (!isModalOpen && !deleteTarget) return;
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      if (isModalOpen) closeModal();
-      if (deleteTarget) setDeleteTarget(null);
-    }
-
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, [isModalOpen, deleteTarget]);
-
   function openAddModal() {
     setEditingId(null);
     setForm(emptyForm());
@@ -177,24 +173,57 @@ export function FoodSafetyLocationsPage() {
     }));
   }
 
-  function updateTaskFrequency(key: string, frequency: CleaningTaskFrequency) {
-    setForm((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => (task.key === key ? { ...task, frequency } : task))
-    }));
-  }
-
   function updateTaskResponseType(key: string, responseType: CleaningTaskResponseType) {
     setForm((current) => ({
       ...current,
-      tasks: current.tasks.map((task) => (task.key === key ? { ...task, responseType } : task))
+      tasks: current.tasks.map((task) =>
+        task.key === key
+          ? {
+              ...task,
+              responseType,
+              // Switching to checkbox with no labels configured yet gets one
+              // empty slot to fill in, same as a brand-new task.
+              actionLabels:
+                responseType === "checkbox" && task.actionLabels.length === 0
+                  ? [newActionLabelRow()]
+                  : task.actionLabels
+            }
+          : task
+      )
     }));
   }
 
-  function updateTaskActionLabel(key: string, actionLabel: string) {
+  function addActionLabel(taskKey: string) {
     setForm((current) => ({
       ...current,
-      tasks: current.tasks.map((task) => (task.key === key ? { ...task, actionLabel } : task))
+      tasks: current.tasks.map((task) =>
+        task.key === taskKey ? { ...task, actionLabels: [...task.actionLabels, newActionLabelRow()] } : task
+      )
+    }));
+  }
+
+  function removeActionLabel(taskKey: string, labelKey: string) {
+    setForm((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) =>
+        task.key === taskKey
+          ? { ...task, actionLabels: task.actionLabels.filter((label) => label.key !== labelKey) }
+          : task
+      )
+    }));
+  }
+
+  function updateActionLabel(taskKey: string, labelKey: string, value: string) {
+    setForm((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) =>
+        task.key === taskKey
+          ? {
+              ...task,
+              actionLabels: task.actionLabels.map((label) => (label.key === labelKey ? { ...label, value } : label))
+            }
+          : task
+      )
     }));
   }
 
@@ -204,6 +233,7 @@ export function FoodSafetyLocationsPage() {
 
     const name = form.name.trim();
     const area = form.area.trim();
+    const notes = form.notes.trim();
 
     if (!name) {
       setFormError("Location name is required.");
@@ -212,6 +242,11 @@ export function FoodSafetyLocationsPage() {
 
     if (!area) {
       setFormError("Area/building is required.");
+      return;
+    }
+
+    if (notes.length > MAX_NOTES_LENGTH) {
+      setFormError(`Notes cannot exceed ${MAX_NOTES_LENGTH} characters.`);
       return;
     }
 
@@ -225,8 +260,8 @@ export function FoodSafetyLocationsPage() {
         setFormError(`Task ${index + 1} needs a name.`);
         return;
       }
-      if (task.responseType === "checkbox" && !task.actionLabel.trim()) {
-        setFormError(`Task ${index + 1} needs a checkbox label.`);
+      if (task.responseType === "checkbox" && task.actionLabels.every((label) => !label.value.trim())) {
+        setFormError(`Task ${index + 1} needs at least one checkbox label.`);
         return;
       }
     }
@@ -234,11 +269,15 @@ export function FoodSafetyLocationsPage() {
     const payload = {
       name,
       area,
+      frequency: form.frequency,
+      notes: notes.length > 0 ? notes : null,
       tasks: form.tasks.map((task) => ({
         name: task.name.trim(),
-        frequency: task.frequency,
         responseType: task.responseType,
-        actionLabel: task.responseType === "checkbox" ? task.actionLabel.trim() : null
+        actionLabels:
+          task.responseType === "checkbox"
+            ? task.actionLabels.map((label) => label.value.trim()).filter((value) => value.length > 0)
+            : null
       }))
     };
 
@@ -283,13 +322,20 @@ export function FoodSafetyLocationsPage() {
     try {
       const response = await apiFetch(`${API_BASE}/${deleteTarget.id}`, { method: "DELETE" });
       if (!response.ok) {
-        throw new Error(`Delete failed (${response.status})`);
+        let message = `Delete failed (${response.status})`;
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch {
+          // Ignore malformed error response and use fallback message.
+        }
+        throw new Error(message);
       }
 
       setDeleteTarget(null);
       await fetchLocations();
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "Failed to delete location");
+      setDeleteError(error instanceof Error ? error.message : "Failed to deactivate location");
     } finally {
       setDeleting(false);
     }
@@ -324,7 +370,7 @@ export function FoodSafetyLocationsPage() {
                 <div className="cleaning-location-card-area">{location.area}</div>
                 <div className="cleaning-location-card-stats">
                   <span>{location.tasks.length} cleaning task{location.tasks.length === 1 ? "" : "s"}</span>
-                  <span>{frequencySummary(location.tasks)}</span>
+                  <span>{FREQUENCY_LABELS[location.frequency]}</span>
                 </div>
               </div>
 
@@ -333,8 +379,13 @@ export function FoodSafetyLocationsPage() {
                   <button type="button" onClick={() => beginEdit(location)}>
                     Edit
                   </button>
-                  <button type="button" className="danger" onClick={() => requestDelete(location)}>
-                    Delete
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => requestDelete(location)}
+                    aria-label={`Deactivate location ${location.name}`}
+                  >
+                    Deactivate
                   </button>
                 </div>
               )}
@@ -344,9 +395,12 @@ export function FoodSafetyLocationsPage() {
       ) : null}
 
       {isModalOpen ? (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="variety-modal cleaning-location-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingId ? "Edit Location" : "Add Location"}</h2>
+        <ModalOverlay
+          onClose={closeModal}
+          contentClassName="variety-modal cleaning-location-modal"
+          titleId="food-safety-location-modal-title"
+        >
+            <h2 id="food-safety-location-modal-title">{editingId ? "Edit Location" : "Add Location"}</h2>
 
             <form className="varieties-form cleaning-location-form" onSubmit={handleSubmit}>
               <label>
@@ -371,6 +425,32 @@ export function FoodSafetyLocationsPage() {
                 />
               </label>
 
+              <label>
+                Frequency
+                <select
+                  value={form.frequency}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, frequency: event.target.value as CleaningLocationFrequency }))
+                  }
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="annually">Annually</option>
+                </select>
+              </label>
+
+              <label className="cleaning-location-notes-field">
+                Notes
+                <textarea
+                  value={form.notes}
+                  onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="Cleaning instructions, access information, equipment used, or other important details for this location…"
+                  maxLength={MAX_NOTES_LENGTH}
+                  rows={4}
+                />
+              </label>
+
               <div className="cleaning-tasks-section">
                 <div className="cleaning-tasks-header">
                   <span>Cleaning Tasks</span>
@@ -383,7 +463,9 @@ export function FoodSafetyLocationsPage() {
                   <p className="cleaning-tasks-empty">No cleaning tasks yet. Add at least one.</p>
                 ) : null}
 
-                {form.tasks.map((task) => (
+                {form.tasks.map((task, taskIndex) => {
+                  const taskLabel = task.name.trim() || `task ${taskIndex + 1}`;
+                  return (
                   <div className="cleaning-task-row" key={task.key}>
                     <div className="cleaning-task-row-main">
                       <input
@@ -391,8 +473,14 @@ export function FoodSafetyLocationsPage() {
                         value={task.name}
                         onChange={(event) => updateTaskName(task.key, event.target.value)}
                         placeholder="Task name, e.g. Floor"
+                        aria-label={`Task ${taskIndex + 1} name`}
                       />
-                      <button type="button" className="danger" onClick={() => removeTaskRow(task.key)}>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => removeTaskRow(task.key)}
+                        aria-label={`Remove task ${taskLabel}`}
+                      >
                         Remove
                       </button>
                     </div>
@@ -403,6 +491,7 @@ export function FoodSafetyLocationsPage() {
                         onChange={(event) =>
                           updateTaskResponseType(task.key, event.target.value as CleaningTaskResponseType)
                         }
+                        aria-label={`Response type for ${taskLabel}`}
                       >
                         {(Object.keys(RESPONSE_TYPE_LABELS) as CleaningTaskResponseType[]).map((type) => (
                           <option key={type} value={type}>
@@ -410,28 +499,52 @@ export function FoodSafetyLocationsPage() {
                           </option>
                         ))}
                       </select>
-
-                      {task.responseType === "checkbox" ? (
-                        <input
-                          type="text"
-                          value={task.actionLabel}
-                          onChange={(event) => updateTaskActionLabel(task.key, event.target.value)}
-                          placeholder="Checkbox label, e.g. Cleaned"
-                        />
-                      ) : null}
-
-                      <select
-                        value={task.frequency}
-                        onChange={(event) => updateTaskFrequency(task.key, event.target.value as CleaningTaskFrequency)}
-                      >
-                        <option value="daily">Daily</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
-                        <option value="annually">Annually</option>
-                      </select>
                     </div>
+
+                    {task.responseType === "checkbox" ? (
+                      <div className="cleaning-task-checkboxes">
+                        <div className="cleaning-task-checkboxes-header">
+                          <span>Checkboxes</span>
+                          <button
+                            type="button"
+                            onClick={() => addActionLabel(task.key)}
+                            aria-label={`Add checkbox to ${taskLabel}`}
+                          >
+                            + Add Checkbox
+                          </button>
+                        </div>
+
+                        {task.actionLabels.length === 0 ? (
+                          <p className="cleaning-tasks-empty">No checkboxes yet. Add at least one.</p>
+                        ) : null}
+
+                        {task.actionLabels.map((label, labelIndex) => {
+                          const labelText = label.value.trim() || `checkbox ${labelIndex + 1}`;
+                          return (
+                          <div className="cleaning-task-checkbox-row" key={label.key}>
+                            <input
+                              type="text"
+                              value={label.value}
+                              onChange={(event) => updateActionLabel(task.key, label.key, event.target.value)}
+                              placeholder="Checkbox label, e.g. Cleaned"
+                              aria-label={`Checkbox ${labelIndex + 1} label for ${taskLabel}`}
+                            />
+                            <button
+                              type="button"
+                              className="danger"
+                              onClick={() => removeActionLabel(task.key, label.key)}
+                              aria-label={`Remove checkbox ${labelText} from ${taskLabel}`}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               {formError ? <p className="form-error">{formError}</p> : null}
@@ -445,28 +558,33 @@ export function FoodSafetyLocationsPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {deleteTarget ? (
-        <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
-          <div className="cleaning-location-confirm-modal" onClick={(event) => event.stopPropagation()}>
-            <h3>Delete {deleteTarget.name}?</h3>
-            <p>This will also remove all cleaning tasks configured for this location.</p>
+        <ModalOverlay
+          onClose={() => setDeleteTarget(null)}
+          contentClassName="cleaning-location-confirm-modal"
+          titleId="food-safety-location-delete-title"
+        >
+            <h3 id="food-safety-location-delete-title">Deactivate {deleteTarget.name}?</h3>
+            <p>
+              This location will be deactivated, not erased. It will disappear from this list and from mobile
+              task completion, but its completed reports stay fully intact and remain visible (marked Inactive)
+              on the Reports page. You can reuse this name for a new location afterward.
+            </p>
 
             {deleteError ? <p className="form-error">{deleteError}</p> : null}
 
             <div className="form-actions">
               <button type="button" className="danger" onClick={confirmDelete} disabled={deleting}>
-                {deleting ? "Deleting..." : "Delete Location"}
+                {deleting ? "Deactivating..." : "Deactivate Location"}
               </button>
               <button type="button" className="secondary" onClick={() => setDeleteTarget(null)}>
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

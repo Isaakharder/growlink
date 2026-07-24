@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type YieldSizeStatus = "active" | "inactive";
 type VarietyStatus = "active" | "inactive";
@@ -447,42 +448,6 @@ export function KgEntriesTab() {
     void fetchOptionsAndEntries();
     void fetchPendingWeeks();
   }, []);
-
-  useEffect(() => {
-    if (!isEntryModalOpen) {
-      return;
-    }
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsEntryModalOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-
-    return () => {
-      window.removeEventListener("keydown", onEscape);
-    };
-  }, [isEntryModalOpen]);
-
-  useEffect(() => {
-    if (!isPdfPreviewOpen) {
-      return;
-    }
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closePdfPreviewModal();
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-
-    return () => {
-      window.removeEventListener("keydown", onEscape);
-    };
-  }, [isPdfPreviewOpen]);
 
   async function executeSubmit(submitPayload: {
     variety_id: string;
@@ -1500,14 +1465,11 @@ export function KgEntriesTab() {
       </div>
 
       {isPdfPreviewOpen ? (
-        <div className="modal-overlay" onClick={closePdfPreviewModal}>
-          <div
-            className="variety-modal pdf-preview-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="pdf-import-preview-title"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <ModalOverlay
+          onClose={closePdfPreviewModal}
+          contentClassName="variety-modal pdf-preview-modal"
+          titleId="pdf-import-preview-title"
+        >
             <div className="pdf-preview-modal-header">
               <h2 id="pdf-import-preview-title">PDF Import Preview</h2>
               <div className="pdf-preview-header-actions">
@@ -1858,19 +1820,15 @@ export function KgEntriesTab() {
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {pendingAppend ? (
-        <div className="modal-overlay" onClick={() => setPendingAppend(null)}>
-          <div
-            className="variety-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-append-title"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <ModalOverlay
+          onClose={() => setPendingAppend(null)}
+          contentClassName="variety-modal"
+          titleId="confirm-append-title"
+        >
             <h2 id="confirm-append-title">Add to Existing Entry?</h2>
             <p>
               An entry already exists for <strong>{pendingAppend.varietyName}</strong> Week{" "}
@@ -1898,19 +1856,11 @@ export function KgEntriesTab() {
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {isEntryModalOpen ? (
-        <div className="modal-overlay" onClick={closeEntryModal}>
-          <div
-            className="variety-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="enter-kg-title"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <ModalOverlay onClose={closeEntryModal} contentClassName="variety-modal" titleId="enter-kg-title">
             <h2 id="enter-kg-title">{editingId ? "Edit Yield Entry" : "Enter Kg"}</h2>
 
             {error ? <p className="form-error">{error}</p> : null}
@@ -2048,8 +1998,7 @@ export function KgEntriesTab() {
                 </div>
               </form>
             ) : null}
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </div>
   );

@@ -302,47 +302,98 @@ body {
   font-size: 0.92rem;
 }
 
-.dashboard-yield-projection-inline {
-  flex: 1;
-  min-width: 0;
+.dashboard-daily-yield-projection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  align-items: stretch;
+}
+
+.dyp-card {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  align-self: center;
+  border-left: 3px solid transparent;
+  border-radius: 0 10px 10px 0;
+  background: var(--surface-soft);
+  padding: 0.55rem 0.75rem;
 }
 
-.dashboard-yield-projection-row {
+.dyp-card-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   flex-wrap: wrap;
-  gap: 0.3rem;
-  padding: 0.25rem 0.55rem;
-  border-left: 3px solid transparent;
-  border-radius: 0 6px 6px 0;
-  background: var(--surface-soft);
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  line-height: 1.3;
 }
 
-.dyp-label {
+.dyp-card-sample-count {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.dyp-card-metrics {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.4rem;
+}
+
+.dyp-card-metric {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.1rem;
+}
+
+.dyp-card-metric-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.dyp-card-metric-value {
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text);
 }
 
-.dyp-sep {
-  opacity: 0.4;
-  user-select: none;
+.dyp-card-status {
+  margin: 0.45rem 0 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-.dyp-varieties {
-  opacity: 0.85;
+.dyp-card-status-ready {
+  color: #15803d;
+  background: rgba(21, 128, 61, 0.1);
 }
 
-@media (max-width: 720px) {
-  .dashboard-yield-projection-inline {
-    align-self: stretch;
-  }
+.dyp-card-status-preliminary {
+  color: #b45309;
+  background: rgba(180, 83, 9, 0.1);
+}
+
+.dyp-card-meta {
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.dashboard-daily-yield-view-samples-link {
+  display: inline-block;
+  margin-top: 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--brand, #0f7660);
+  text-decoration: none;
+}
+
+.dashboard-daily-yield-view-samples-link:hover {
+  text-decoration: underline;
 }
 
 .dashboard-card-grid {
@@ -931,6 +982,7 @@ body {
 .varieties-form select,
 .yield-entry-form input,
 .yield-entry-form select,
+.cleaning-report-filter-fields input,
 .form-actions button,
 .row-actions button {
   border: 1px solid var(--border);
@@ -947,6 +999,10 @@ body {
 
 .yield-entry-form input,
 .yield-entry-form select {
+  padding: 0.52rem 0.6rem;
+}
+
+.cleaning-report-filter-fields input {
   padding: 0.52rem 0.6rem;
 }
 
@@ -3630,6 +3686,31 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .cleaning-report-toolbar {
+    align-items: stretch;
+  }
+
+  .cleaning-report-filter-fields {
+    align-items: stretch;
+  }
+
+  .cleaning-report-filter-fields label {
+    min-width: 0;
+    flex: 1 1 140px;
+  }
+
+  .cleaning-report-filter-fields .row-actions {
+    width: 100%;
+  }
+
+  .cleaning-report-filter-fields .row-actions button {
+    flex: 1;
+  }
+
+  .cleaning-report-print-button {
+    width: 100%;
+  }
+
   .yield-entry-form {
     grid-template-columns: 1fr;
   }
@@ -4557,9 +4638,15 @@ body {
 
 .cleaning-locations-list {
   margin-top: 1rem;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .cleaning-locations-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .cleaning-location-card {
@@ -4605,6 +4692,15 @@ body {
 
 .cleaning-location-modal {
   width: min(720px, 100%);
+}
+
+.cleaning-location-notes-field {
+  grid-column: 1 / -1;
+}
+
+.cleaning-location-notes-field textarea {
+  resize: vertical;
+  font-family: inherit;
 }
 
 .cleaning-tasks-section {
@@ -4683,6 +4779,43 @@ body {
 .cleaning-task-row button {
   padding: 0.45rem 0.7rem;
   cursor: pointer;
+}
+
+.cleaning-task-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-left: 0.9rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+}
+
+.cleaning-task-checkboxes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.cleaning-task-checkboxes-header button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+}
+
+.cleaning-task-checkbox-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .cleaning-location-confirm-modal {
@@ -4783,6 +4916,21 @@ body {
   background: var(--brand-soft);
 }
 
+/* Deactivated (soft-deleted) location, still shown because it has report
+   history — see server/src/routes/foodSafety/reports.ts. */
+.cleaning-location-inactive-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  vertical-align: middle;
+}
+
 .cleaning-checklist-card-initials {
   margin-top: 0.4rem;
   font-size: 0.82rem;
@@ -4856,6 +5004,25 @@ body {
   cursor: not-allowed;
 }
 
+/* Tapped while offline: the optimistic check/uncheck is kept (not reverted)
+   and visibly marked as not yet confirmed by the server -- see
+   MobileFoodSafetyLocationPage.tsx's queuedItemIds. */
+.cleaning-checklist-task-row.pending-sync {
+  border-style: dashed;
+  border-color: #b45309;
+}
+
+.cleaning-checklist-pending-sync-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+}
+
 .cleaning-checklist-checkbox {
   font-size: 1.4rem;
   line-height: 1;
@@ -4924,11 +5091,68 @@ textarea.cleaning-checklist-response-input {
 
 /* ── Food Safety — Reports ─────────────────────────────────────────────────── */
 
-.cleaning-reports-list {
+.desktop-back-link {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.desktop-back-link:hover {
+  color: var(--brand, #0f7660);
+  text-decoration: underline;
+}
+
+.cleaning-report-summary-list {
   margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.cleaning-report-summary-card {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 1rem;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.cleaning-report-summary-card:hover,
+.cleaning-report-summary-card:focus-visible {
+  border-color: var(--brand, #0f7660);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+.cleaning-report-summary-card:focus-visible {
+  outline: 2px solid var(--brand, #0f7660);
+  outline-offset: 2px;
+}
+
+.cleaning-report-summary-card-title {
+  margin-bottom: 0.75rem;
+}
+
+.cleaning-report-summary-card-stats {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.cleaning-report-summary-card-cta {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--brand, #0f7660);
 }
 
 .cleaning-report-card {
@@ -4963,40 +5187,729 @@ textarea.cleaning-checklist-response-input {
   margin: 0;
 }
 
-.cleaning-report-detail-modal {
-  width: min(680px, 100%);
+.cleaning-reports-scroll-hint {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
 }
 
-.cleaning-report-detail-line {
-  margin: 0.2rem 0;
-  font-size: 0.9rem;
+.cleaning-reports-scroll-container {
+  position: relative;
+  margin-top: 0.5rem;
+}
+
+.cleaning-reports-table-wrapper {
+  overflow-x: auto;
+  /* Keep a horizontal scrollbar visibly present (not just on hover/overlay)
+     so users can see at a glance that the table scrolls, and style it to
+     match the app rather than leaving the OS default. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--brand, #0f7660) var(--surface-soft);
+  padding-bottom: 0.4rem;
+}
+
+.cleaning-reports-table-wrapper::-webkit-scrollbar {
+  height: 10px;
+}
+
+.cleaning-reports-table-wrapper::-webkit-scrollbar-track {
+  background: var(--surface-soft);
+  border-radius: 999px;
+}
+
+.cleaning-reports-table-wrapper::-webkit-scrollbar-thumb {
+  background: var(--brand, #0f7660);
+  border-radius: 999px;
+}
+
+.cleaning-reports-scroll-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0.4rem;
+  width: 32px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+
+.cleaning-reports-scroll-fade.visible {
+  opacity: 1;
+}
+
+.cleaning-reports-scroll-fade-left {
+  left: 0;
+  background: linear-gradient(to right, rgba(31, 42, 46, 0.12), transparent);
+}
+
+.cleaning-reports-scroll-fade-right {
+  right: 0;
+  background: linear-gradient(to left, rgba(31, 42, 46, 0.12), transparent);
+}
+
+.cleaning-reports-table {
+  border-collapse: collapse;
+}
+
+.cleaning-reports-table th,
+.cleaning-reports-table td {
+  padding: 0.85rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.cleaning-reports-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: normal;
+  min-width: 130px;
+  word-break: break-word;
+  vertical-align: bottom;
+  text-align: center;
+}
+
+.cleaning-reports-table th.cleaning-reports-col-date,
+.cleaning-reports-table th.cleaning-reports-col-employee,
+.cleaning-reports-col-date,
+.cleaning-reports-col-employee {
+  text-align: left;
+  background: var(--surface);
+  min-width: auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+.cleaning-reports-col-date {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--border);
+  box-shadow: 2px 0 4px rgba(31, 42, 46, 0.08);
+}
+
+.cleaning-reports-col-employee {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  border-left: 1px solid var(--border);
+  box-shadow: -2px 0 4px rgba(31, 42, 46, 0.08);
+}
+
+.cleaning-reports-check-cell {
+  min-width: 130px;
+}
+
+.cleaning-reports-checkmark {
+  color: var(--brand);
+  font-weight: 800;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.cleaning-report-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.cleaning-report-filter-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.cleaning-report-filter-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 150px;
+}
+
+.cleaning-report-filter-fields input,
+.cleaning-report-filter-fields .row-actions button,
+.cleaning-report-print-button {
+  height: 44px;
+}
+
+.cleaning-report-print-button {
+  flex-shrink: 0;
+}
+
+/* ── Food Safety — Cleaning Log print report (screen: hidden) ─────────────── */
+
+.food-safety-print-report {
+  display: none;
+}
+
+/* Off-screen measurement instance used by PrintableLocationReport.tsx to
+   compute rows-per-page from this location's actual rendered header/thead/
+   row/signature heights, at the real print content width, without needing
+   print media to actually be active (browsers offer no way to force that
+   for measurement purposes alone). These declarations MUST be kept in sync
+   with the equivalent @media print rules below -- they exist only so the
+   measurement instance's layout matches what will really be printed. */
+.food-safety-print-measure {
+  position: fixed;
+  top: 0;
+  left: -99999px;
+  width: 980px;
+  background: #fff;
+}
+
+.food-safety-print-measure .food-safety-print-header {
+  color: #000;
+  margin-bottom: 3mm;
+}
+
+.food-safety-print-measure .food-safety-print-header-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9pt;
+  font-weight: 700;
+}
+
+.food-safety-print-measure .food-safety-print-title {
+  margin-top: 1mm;
+  font-size: 12pt;
+  font-weight: 700;
+}
+
+.food-safety-print-measure .food-safety-print-location {
+  margin-top: 0.5mm;
+  font-size: 10.5pt;
+  font-weight: 600;
+}
+
+.food-safety-print-measure .food-safety-print-location-notes {
+  margin-top: 0.5mm;
+  font-size: 7pt;
+  font-weight: 400;
+  font-style: italic;
+  color: #333;
+}
+
+.food-safety-print-measure .food-safety-print-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.food-safety-print-measure .food-safety-print-table th,
+.food-safety-print-measure .food-safety-print-table td {
+  border: 1px solid #000;
+  padding: 0.8mm 1.5mm;
+  font-size: 8pt;
+  line-height: 1.15;
+  color: #000;
+  text-align: center;
+}
+
+.food-safety-print-measure .food-safety-print-table th {
+  padding: 1mm 1.5mm;
+  font-size: 7.5pt;
+  font-weight: 700;
+  background: #fff;
+}
+
+.food-safety-print-measure .food-safety-print-table-compact th {
+  padding: 0.6mm 1mm;
+  font-size: 6.5pt;
+  line-height: 1.05;
+}
+
+.food-safety-print-measure .food-safety-print-table-compact td {
+  padding: 0.6mm 1mm;
+  font-size: 7.5pt;
+}
+
+.food-safety-print-measure .food-safety-print-col-date,
+.food-safety-print-measure .food-safety-print-col-initials {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.food-safety-print-measure .food-safety-print-check-cell {
+  font-weight: 700;
+}
+
+.food-safety-print-measure .food-safety-print-signature {
+  margin-top: 3mm;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8mm;
+}
+
+.food-safety-print-measure .food-safety-print-signature-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 3mm;
+  font-size: 9pt;
+}
+
+.food-safety-print-measure .food-safety-print-signature-field-main {
+  flex: 1;
+}
+
+.food-safety-print-measure .food-safety-print-signature-label {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.food-safety-print-measure .food-safety-print-signature-line {
+  flex: 1;
+  max-width: 110mm;
+  height: 5mm;
+  border-bottom: 1px solid #000;
+}
+
+.food-safety-print-measure .food-safety-print-signature-line-short {
+  flex: 0 0 auto;
+  width: 40mm;
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  /* Same "print only this element" pattern used for the H1 preview above —
+     hides the sidebar/nav/filters/buttons/other location cards without
+     needing to know their class names. visibility:hidden alone leaves every
+     hidden element's layout box in normal document flow, so a long on-screen
+     reports table (up to hundreds of rows) still consumes real page height
+     during print pagination even though nothing of it is visible -- pulling
+     hidden elements out of flow via position:fixed with zero dimensions is
+     what actually stops that phantom height from forcing extra blank pages.
+     Ancestors of .food-safety-print-report are excluded via :has() -- if an
+     ancestor were also collapsed to position:fixed/width:0, it would become
+     the containing block for the report's own position:absolute box (the
+     nearest positioned ancestor), resolving the report's width:100% against
+     a zero-width box instead of the viewport. */
+  body * {
+    visibility: hidden;
+  }
+  body *:not(.food-safety-print-report):not(.food-safety-print-report *):not(:has(.food-safety-print-report)) {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+  }
+  .food-safety-print-report,
+  .food-safety-print-report * {
+    visibility: visible;
+  }
+
+  .food-safety-print-report {
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff;
+  }
+
+  .food-safety-print-page {
+    break-after: page;
+    page-break-after: always;
+  }
+  .food-safety-print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  .food-safety-print-header {
+    color: #000;
+    margin-bottom: 3mm;
+  }
+
+  .food-safety-print-header-top {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9pt;
+    font-weight: 700;
+  }
+
+  .food-safety-print-title {
+    margin-top: 1mm;
+    font-size: 12pt;
+    font-weight: 700;
+  }
+
+  .food-safety-print-location {
+    margin-top: 0.5mm;
+    font-size: 10.5pt;
+    font-weight: 600;
+  }
+
+  .food-safety-print-location-notes {
+    margin-top: 0.5mm;
+    font-size: 7pt;
+    font-weight: 400;
+    font-style: italic;
+    color: #333;
+  }
+
+  .food-safety-print-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+  }
+
+  .food-safety-print-table th,
+  .food-safety-print-table td {
+    border: 1px solid #000;
+    padding: 0.8mm 1.5mm;
+    font-size: 8pt;
+    line-height: 1.15;
+    color: #000;
+    text-align: center;
+  }
+
+  .food-safety-print-table th {
+    padding: 1mm 1.5mm;
+    font-size: 7.5pt;
+    font-weight: 700;
+    background: #fff;
+  }
+
+  /* Applied when a location has more than 6 task columns — the wrapped
+     multi-word headers (e.g. "Water Source Operating — Hot") otherwise make
+     the one-time header row tall enough, across many narrow columns, to push
+     a full 20-row page past one physical printed sheet. */
+  .food-safety-print-table-compact th {
+    padding: 0.6mm 1mm;
+    font-size: 6.5pt;
+    line-height: 1.05;
+  }
+
+  .food-safety-print-table-compact td {
+    padding: 0.6mm 1mm;
+    font-size: 7.5pt;
+  }
+
+  .food-safety-print-table thead {
+    display: table-header-group;
+  }
+
+  .food-safety-print-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .food-safety-print-col-date,
+  .food-safety-print-col-initials {
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .food-safety-print-check-cell {
+    font-weight: 700;
+  }
+
+  .food-safety-print-signature {
+    margin-top: 3mm;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 8mm;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .food-safety-print-signature-field {
+    display: flex;
+    align-items: flex-end;
+    gap: 3mm;
+    font-size: 9pt;
+  }
+
+  .food-safety-print-signature-field-main {
+    flex: 1;
+  }
+
+  .food-safety-print-signature-label {
+    white-space: nowrap;
+    font-weight: 600;
+  }
+
+  .food-safety-print-signature-line {
+    flex: 1;
+    max-width: 110mm;
+    height: 5mm;
+    border-bottom: 1px solid #000;
+  }
+
+  .food-safety-print-signature-line-short {
+    flex: 0 0 auto;
+    width: 40mm;
+  }
+}
+
+/* ── Food Safety — Complete Location (mobile) ──────────────────────────────── */
+
+.cleaning-checklist-complete-button-wrap {
+  position: sticky;
+  bottom: 76px;
+  margin-top: 1.25rem;
+  z-index: 5;
+}
+
+.cleaning-checklist-complete-button {
+  width: 100%;
+  min-height: 56px;
+  font-size: 1.05rem;
+}
+
+/* ── Food Safety — Logs Backfill (desktop) ─────────────────────────────────── */
+
+.form-hint {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.backfill-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.backfill-task-chip {
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
   color: var(--text);
 }
 
-.cleaning-report-detail-tasks-title {
-  margin: 1rem 0 0.5rem;
-  font-size: 0.95rem;
+.backfill-location-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  align-items: center;
 }
 
-.cleaning-report-detail-tasks {
+.backfill-location-notes {
+  flex-basis: 100%;
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+}
+
+.backfill-task-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.backfill-task-select-chip {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text);
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.cleaning-report-detail-task {
+.backfill-task-select-chip:hover {
+  border-color: var(--brand, #0f7660);
+}
+
+.backfill-task-select-chip.active {
+  border-color: var(--brand, #0f7660);
+  background: var(--brand-soft, #e6f4ef);
+  font-weight: 600;
+}
+
+.backfill-task-select-chip-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.backfill-calendar-grid-wrapper {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.backfill-calendar {
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-soft);
-  padding: 0.6rem 0.7rem;
+  padding: 0.6rem;
 }
 
-.cleaning-report-detail-task-name {
-  font-weight: 600;
-  margin-bottom: 0.3rem;
-}
-
-.cleaning-report-detail-task-row {
+.backfill-calendar-title {
   font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+  color: var(--text);
+  text-align: center;
+}
+
+.backfill-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.backfill-calendar-weekday {
+  text-align: center;
+  font-size: 0.7rem;
   color: var(--text-muted);
+  padding-bottom: 2px;
+}
+
+.backfill-calendar-cell {
+  position: relative;
+  text-align: center;
+  font-size: 0.78rem;
+  padding: 0.4rem 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text);
+  cursor: default;
+}
+
+.backfill-calendar-cell-empty {
+  visibility: hidden;
+}
+
+.backfill-calendar-cell-available {
+  background: var(--surface);
+  border-color: var(--border);
+  cursor: pointer;
+}
+
+.backfill-calendar-cell-available:hover {
+  border-color: var(--brand, #0f7660);
+}
+
+.backfill-calendar-cell-selected {
+  background: #15803d;
+  border-color: #15803d;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.backfill-calendar-cell-existing {
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
+.backfill-calendar-cell-future,
+.backfill-calendar-cell-outOfRange {
+  background: none;
+  color: var(--text-muted);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.backfill-calendar-dot {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #d97706;
+}
+
+.backfill-calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.9rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.backfill-calendar-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.backfill-legend-swatch {
+  position: relative;
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.backfill-legend-swatch.available {
+  background: var(--surface);
+}
+
+.backfill-legend-swatch.selected {
+  background: #15803d;
+  border-color: #15803d;
+}
+
+.backfill-legend-swatch.existing {
+  background: var(--surface-soft);
+}
+
+.backfill-legend-swatch.disabled {
+  opacity: 0.4;
+}
+
+.backfill-legend-swatch .backfill-calendar-dot {
+  bottom: -3px;
+}
+
+.backfill-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  font-size: 0.88rem;
+}
+
+.backfill-summary-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.backfill-preview-table {
+  white-space: nowrap;
+}
+
+.backfill-success {
+  color: var(--brand, #0f7660);
+  font-weight: 600;
 }

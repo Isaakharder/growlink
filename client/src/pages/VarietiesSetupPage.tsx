@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, apiUrl } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type VarietyStatus = "active" | "inactive";
 type VarietyColor = "red" | "orange" | "yellow" | "green";
@@ -165,27 +166,6 @@ export function VarietiesSetupPage() {
   useEffect(() => {
     void fetchSizes();
   }, []);
-
-  useEffect(() => {
-    if (!isModalOpen && !isSizeModalOpen) {
-      return;
-    }
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        if (isModalOpen) {
-          closeModal();
-        }
-
-        if (isSizeModalOpen) {
-          closeSizeModal();
-        }
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, [isModalOpen, isSizeModalOpen]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -551,9 +531,8 @@ export function VarietiesSetupPage() {
       </div>
 
       {isModalOpen ? (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingId ? "Edit Variety" : "Add Variety"}</h2>
+        <ModalOverlay onClose={closeModal} contentClassName="variety-modal" titleId="variety-modal-title">
+            <h2 id="variety-modal-title">{editingId ? "Edit Variety" : "Add Variety"}</h2>
 
             <form className="varieties-form" onSubmit={handleSubmit}>
               <label>
@@ -667,14 +646,12 @@ export function VarietiesSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {isSizeModalOpen ? (
-        <div className="modal-overlay" onClick={closeSizeModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingSizeId ? "Edit Size" : "Add Size"}</h2>
+        <ModalOverlay onClose={closeSizeModal} contentClassName="variety-modal" titleId="variety-size-modal-title">
+            <h2 id="variety-size-modal-title">{editingSizeId ? "Edit Size" : "Add Size"}</h2>
 
             <form className="varieties-form" onSubmit={handleSizeSubmit}>
               <label>
@@ -731,8 +708,7 @@ export function VarietiesSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

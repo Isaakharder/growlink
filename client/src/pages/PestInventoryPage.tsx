@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type ChemicalType = "fungicide" | "insecticide" | "herbicide" | "pesticide";
 
@@ -143,20 +144,6 @@ export function PestInventoryPage() {
   useEffect(() => {
     void fetchChemicals();
   }, []);
-
-  useEffect(() => {
-    if (!isModalOpen && !isRestockModalOpen) return;
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        if (isModalOpen) closeModal();
-        if (isRestockModalOpen) closeRestockModal();
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, [isModalOpen, isRestockModalOpen]);
 
   // Close suggestion dropdown on outside click
   useEffect(() => {
@@ -617,9 +604,8 @@ export function PestInventoryPage() {
       </div>
 
       {isModalOpen ? (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingId ? "Edit Chemical" : "Add Chemical"}</h2>
+        <ModalOverlay onClose={closeModal} contentClassName="variety-modal" titleId="pest-inventory-chemical-title">
+            <h2 id="pest-inventory-chemical-title">{editingId ? "Edit Chemical" : "Add Chemical"}</h2>
 
             <form className="varieties-form" onSubmit={handleSubmit}>
               <label>
@@ -877,14 +863,12 @@ export function PestInventoryPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {isRestockModalOpen && restockChemical ? (
-        <div className="modal-overlay" onClick={closeRestockModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>Restock chemical</h2>
+        <ModalOverlay onClose={closeRestockModal} contentClassName="variety-modal" titleId="pest-inventory-restock-title">
+            <h2 id="pest-inventory-restock-title">Restock chemical</h2>
 
             <form className="varieties-form" onSubmit={handleRestockSubmit}>
               <label>
@@ -933,8 +917,7 @@ export function PestInventoryPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

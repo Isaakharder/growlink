@@ -2,6 +2,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
+import { resolveActor } from "./foodSafety/services/actorIdentity";
 
 type RowRecord = {
   id: string;
@@ -535,7 +536,8 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", canWrite, async (req,
       calculated_kg_per_stem: payload.calculated_kg_per_stem,
       sample_date: payload.sample_date,
       session_year: payload.session_year,
-      session_week: payload.session_week
+      session_week: payload.session_week,
+      created_by: req.userId ?? null
     })
     .select("*")
     .single();
@@ -637,13 +639,16 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
   const sessionWeek = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   const sessionYear = utcDate.getUTCFullYear();
 
-  const MINIMUM_SAMPLE_COUNT = 4;
+  // Every variety with at least one sample this week gets its own projection
+  // row on the Dashboard card — see MobileDailyYieldPage.tsx for the separate,
+  // unrelated 4-sample threshold used for the mobile picker's own live preview.
+  const MINIMUM_SAMPLE_COUNT = 1;
 
   try {
     const [samplesResult, optionsResult, binSettings] = await Promise.all([
       supabase
         .from("daily_yield_samples")
-        .select("variety_id, calculated_kg_per_stem")
+        .select("variety_id, calculated_kg_per_stem, sample_date, created_at, created_by")
         .eq("organization_id", organizationId)
         .eq("session_year", sessionYear)
         .eq("session_week", sessionWeek),
@@ -672,12 +677,25 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
     }
 
     const samplesByVariety = new Map<string, number[]>();
+    const latestSampleByVariety = new Map<
+      string,
+      { sampleDate: string; createdAt: string; createdBy: string | null }
+    >();
     for (const sample of samples) {
       const kg = Number(sample.calculated_kg_per_stem);
       if (!Number.isFinite(kg) || kg < 0) continue;
       const list = samplesByVariety.get(sample.variety_id) ?? [];
       list.push(kg);
       samplesByVariety.set(sample.variety_id, list);
+
+      const current = latestSampleByVariety.get(sample.variety_id);
+      if (!current || sample.created_at > current.createdAt) {
+        latestSampleByVariety.set(sample.variety_id, {
+          sampleDate: sample.sample_date,
+          createdAt: sample.created_at,
+          createdBy: sample.created_by
+        });
+      }
     }
 
     const stemsByVariety = new Map<string, number>();
@@ -697,8 +715,12 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
       varietyId: string;
       varietyName: string;
       color: string;
+      projectedKg: number;
       projectedCases: number;
       sampledRowCount: number;
+      lastSampleDate: string;
+      lastUpdatedAt: string;
+      lastEnteredByUserId: string | null;
     }> = [];
     const colorTotals = new Map<string, number>();
 
@@ -715,12 +737,17 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
       if (!Number.isFinite(projectedCases) || projectedCases <= 0) continue;
       totalSampledRows += kgValues.length;
       const color = varietyColorById.get(varietyId) ?? "unknown";
+      const latest = latestSampleByVariety.get(varietyId);
       byVariety.push({
         varietyId,
         varietyName: varietyNameById.get(varietyId) ?? "Unknown",
         color,
+        projectedKg,
         projectedCases,
-        sampledRowCount: kgValues.length
+        sampledRowCount: kgValues.length,
+        lastSampleDate: latest?.sampleDate ?? "",
+        lastUpdatedAt: latest?.createdAt ?? "",
+        lastEnteredByUserId: latest?.createdBy ?? null
       });
       colorTotals.set(color, (colorTotals.get(color) ?? 0) + projectedCases);
     }
@@ -728,6 +755,21 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
     if (byVariety.length === 0) {
       return res.json({ hasProjection: false });
     }
+
+    const enteredByUserIds = Array.from(
+      new Set(byVariety.map((entry) => entry.lastEnteredByUserId).filter((id): id is string => !!id))
+    );
+    const identityByUserId = new Map<string, { name: string; initials: string }>();
+    await Promise.all(
+      enteredByUserIds.map(async (userId) => {
+        try {
+          const actor = await resolveActor(userId);
+          identityByUserId.set(userId, { name: actor.name, initials: actor.initials });
+        } catch {
+          // Leave unresolved — surfaced as null below rather than failing the whole projection.
+        }
+      })
+    );
 
     const byColor = Array.from(colorTotals.entries())
       .map(([color, totalCases]) => ({ color, totalCases }))
@@ -740,9 +782,15 @@ mobileDailyYieldRouter.get("/mobile/daily-yield/today-projection", async (req, r
       sessionYear,
       sessionWeek,
       sampledRowCount: totalSampledRows,
-      byVariety: byVariety.sort(
-        (a, b) => a.color.localeCompare(b.color) || a.varietyName.localeCompare(b.varietyName)
-      ),
+      byVariety: byVariety
+        .sort((a, b) => a.color.localeCompare(b.color) || a.varietyName.localeCompare(b.varietyName))
+        .map(({ lastEnteredByUserId, ...entry }) => ({
+          ...entry,
+          lastEnteredByName: lastEnteredByUserId ? identityByUserId.get(lastEnteredByUserId)?.name ?? null : null,
+          lastEnteredByInitials: lastEnteredByUserId
+            ? identityByUserId.get(lastEnteredByUserId)?.initials ?? null
+            : null
+        })),
       byColor,
       grandTotal
     });

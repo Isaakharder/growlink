@@ -15,7 +15,8 @@ const API_BASE = apiUrl("/api/food-safety/mobile/cleaning-checklist");
 
 // Progress and status only ever consider required tasks — optional tasks can
 // still be filled in on the checklist page but never block "In Progress" vs
-// "Completed", consistent with server-side finalization logic.
+// "Completed". Completion itself is manual now (the Complete Location
+// button), independent of whether every checkbox ended up checked.
 function requiredItems(location: LocationCard) {
   return location.items.filter((item) => item.isRequired);
 }

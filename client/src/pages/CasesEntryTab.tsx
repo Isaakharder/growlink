@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type VarietyColor = "red" | "orange" | "yellow" | "green";
 
@@ -451,24 +452,6 @@ export function CasesEntryTab() {
     void fetchOptionsAndEntries();
   }, []);
 
-  useEffect(() => {
-    if (!isEntryModalOpen) {
-      return;
-    }
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsEntryModalOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-
-    return () => {
-      window.removeEventListener("keydown", onEscape);
-    };
-  }, [isEntryModalOpen]);
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -876,14 +859,7 @@ export function CasesEntryTab() {
       </div>
 
       {isEntryModalOpen ? (
-        <div className="modal-overlay" onClick={closeEntryModal}>
-          <div
-            className="variety-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="enter-cases-title"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <ModalOverlay onClose={closeEntryModal} contentClassName="variety-modal" titleId="enter-cases-title">
             <h2 id="enter-cases-title">Enter Cases</h2>
 
             {error ? <p className="form-error">{error}</p> : null}
@@ -993,8 +969,7 @@ export function CasesEntryTab() {
                 </div>
               </form>
             ) : null}
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </div>
   );

@@ -3,18 +3,14 @@ import { supabase } from "../../config/supabase";
 import { sendSafeError } from "../../utils/safeError";
 import { requirePermission } from "../../middleware/requirePermission";
 import { resolveActor } from "./services/actorIdentity";
-import { CHECKLIST_PERIOD_TYPES, computePeriodKey, type ChecklistPeriodType } from "./services/checklistPeriod";
+import { computePeriodKey, type ChecklistPeriodType } from "./services/checklistPeriod";
+import { getCurrentChecklistsForLocation } from "./services/currentChecklists";
 import { maybeCreateReport } from "./services/reportGeneration";
 
 type LocationRow = {
   id: string;
   name: string;
   area: string;
-};
-
-type TaskRow = {
-  id: string;
-  location_id: string;
   frequency: ChecklistPeriodType;
 };
 
@@ -70,33 +66,22 @@ type LocationCard = {
   }[];
 };
 
-// Ensures every (location, frequency-currently-in-use) checklist for the
-// given locations exists, creating any missing ones via the atomic RPC.
-async function ensureChecklists(
-  organizationId: string,
-  locations: LocationRow[],
-  tasksByLocation: Map<string, TaskRow[]>
-): Promise<void> {
+// Ensures the one checklist for each location's current period (its own
+// frequency) exists, creating any missing ones via the atomic RPC.
+async function ensureChecklists(organizationId: string, locations: LocationRow[]): Promise<void> {
   const now = new Date();
 
   for (const location of locations) {
-    const tasks = tasksByLocation.get(location.id) ?? [];
-    const frequencies = new Set(tasks.map((t) => t.frequency));
+    const periodKey = computePeriodKey(location.frequency, now);
+    const { error } = await supabase.rpc("food_safety_get_or_create_checklist", {
+      p_organization_id: organizationId,
+      p_location_id: location.id,
+      p_period_type: location.frequency,
+      p_period_key: periodKey
+    });
 
-    for (const periodType of CHECKLIST_PERIOD_TYPES) {
-      if (!frequencies.has(periodType)) continue;
-
-      const periodKey = computePeriodKey(periodType, now);
-      const { error } = await supabase.rpc("food_safety_get_or_create_checklist", {
-        p_organization_id: organizationId,
-        p_location_id: location.id,
-        p_period_type: periodType,
-        p_period_key: periodKey
-      });
-
-      if (error) {
-        throw new Error(`Failed to prepare checklist for location ${location.id} (${periodType}): ${error.message}`);
-      }
+    if (error) {
+      throw new Error(`Failed to prepare checklist for location ${location.id} (${location.frequency}): ${error.message}`);
     }
   }
 }
@@ -104,7 +89,7 @@ async function ensureChecklists(
 async function loadLocationCards(organizationId: string, locationIds?: string[]): Promise<LocationCard[]> {
   let locationQuery = supabase
     .from("food_safety_cleaning_locations")
-    .select("id, name, area")
+    .select("id, name, area, frequency")
     .eq("organization_id", organizationId)
     .eq("is_active", true);
 
@@ -121,24 +106,7 @@ async function loadLocationCards(organizationId: string, locationIds?: string[])
   const activeLocations = (locations ?? []) as LocationRow[];
   if (activeLocations.length === 0) return [];
 
-  const { data: tasks, error: tasksError } = await supabase
-    .from("food_safety_cleaning_tasks")
-    .select("id, location_id, frequency")
-    .eq("organization_id", organizationId)
-    .in("location_id", activeLocations.map((l) => l.id));
-
-  if (tasksError) {
-    throw new Error(tasksError.message);
-  }
-
-  const tasksByLocation = new Map<string, TaskRow[]>();
-  for (const task of (tasks ?? []) as TaskRow[]) {
-    const list = tasksByLocation.get(task.location_id) ?? [];
-    list.push(task);
-    tasksByLocation.set(task.location_id, list);
-  }
-
-  await ensureChecklists(organizationId, activeLocations, tasksByLocation);
+  await ensureChecklists(organizationId, activeLocations);
 
   const now = new Date();
   const periodKeyByType: Record<ChecklistPeriodType, string> = {
@@ -255,21 +223,43 @@ mobileCleaningChecklistRouter.get(
   }
 );
 
+async function resolveRequestActor(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) {
+    res.status(401).json({ message: "Authentication is required." });
+    return null;
+  }
+
+  try {
+    return await resolveActor(userId);
+  } catch (error) {
+    sendSafeError(res, 500, "Failed to resolve the logged-in employee.", "Actor resolution error:", error);
+    return null;
+  }
+}
+
+async function respondWithReloadedLocation(
+  req: Request,
+  res: Response,
+  organizationId: string,
+  locationId: string
+) {
+  try {
+    const cards = await loadLocationCards(organizationId, [locationId]);
+    return res.json({ location: cards[0] ?? null });
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to load the updated location.", "Cleaning checklist reload error:", error);
+  }
+}
+
+// Sets a task's response value / checked state. Never finalizes the
+// checklist by itself — only the explicit "Complete Location" action does.
 async function handleSetItemResponse(req: Request, res: Response, responseValue: string | null) {
   const organizationId = req.organizationId;
-  const userId = req.userId;
   const { itemId } = req.params;
 
-  if (!userId) {
-    return res.status(401).json({ message: "Authentication is required." });
-  }
-
-  let actor;
-  try {
-    actor = await resolveActor(userId);
-  } catch (error) {
-    return sendSafeError(res, 500, "Failed to resolve the logged-in employee.", "Actor resolution error:", error);
-  }
+  const actor = await resolveRequestActor(req, res);
+  if (!actor) return;
 
   const { data: checklist, error: rpcError } = await supabase.rpc("food_safety_set_checklist_item_response", {
     p_organization_id: organizationId,
@@ -290,22 +280,12 @@ async function handleSetItemResponse(req: Request, res: Response, responseValue:
     return sendSafeError(res, 500, "Failed to update the checklist item.", "Checklist item update error:", rpcError);
   }
 
-  // The RPC returns the full updated checklist row (function return type is
-  // `public.food_safety_cleaning_checklists`), so location_id is right there.
   const locationId = (checklist as { location_id?: string } | null)?.location_id ?? null;
-
   if (!locationId) {
     return sendSafeError(res, 500, "Failed to load the updated location.", "Checklist RPC result missing location_id:", checklist);
   }
 
-  await maybeCreateReport(organizationId, locationId);
-
-  try {
-    const cards = await loadLocationCards(organizationId, [locationId]);
-    return res.json({ location: cards[0] ?? null });
-  } catch (error) {
-    return sendSafeError(res, 500, "Failed to load the updated location.", "Cleaning checklist reload error:", error);
-  }
+  return respondWithReloadedLocation(req, res, organizationId, locationId);
 }
 
 mobileCleaningChecklistRouter.post(
@@ -330,6 +310,49 @@ mobileCleaningChecklistRouter.post(
     const rawValue = (req.body as Record<string, unknown> | undefined)?.value;
     const value = typeof rawValue === "string" ? rawValue.trim() : "";
     void handleSetItemResponse(req, res, value || null);
+  }
+);
+
+// "Complete Location" — the only way a checklist is ever finalized. No
+// validation: whatever is currently checked/unchecked across every
+// currently-due item (across every frequency in use at this location) is
+// what gets locked in and reported.
+mobileCleaningChecklistRouter.post(
+  "/food-safety/mobile/cleaning-checklist/locations/:locationId/complete",
+  canUseMobileFoodSafety,
+  async (req, res) => {
+    const organizationId = req.organizationId;
+    const locationId = String(req.params.locationId);
+
+    const actor = await resolveRequestActor(req, res);
+    if (!actor) return;
+
+    let currentChecklists;
+    try {
+      currentChecklists = await getCurrentChecklistsForLocation(organizationId, locationId);
+    } catch (error) {
+      return sendSafeError(res, 500, "Failed to load this location's checklists.", "Complete-location checklist lookup error:", error);
+    }
+
+    if (currentChecklists.length === 0) {
+      return res.status(400).json({ message: "There are no cleaning tasks due for this location right now." });
+    }
+
+    const { error: rpcError } = await supabase.rpc("food_safety_complete_location_checklists", {
+      p_organization_id: organizationId,
+      p_checklist_ids: currentChecklists.map((c) => c.id),
+      p_actor_user_id: actor.userId,
+      p_actor_name: actor.name,
+      p_actor_initials: actor.initials
+    });
+
+    if (rpcError) {
+      return sendSafeError(res, 500, "Failed to complete this location.", "Complete-location error:", rpcError);
+    }
+
+    await maybeCreateReport(organizationId, locationId);
+
+    return respondWithReloadedLocation(req, res, organizationId, locationId);
   }
 );
 

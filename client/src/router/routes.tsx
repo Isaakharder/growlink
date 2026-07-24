@@ -1,7 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLayout } from "../components/layout/AppLayout";
 import { MobileLayout } from "../components/layout/MobileLayout";
-import { PagePlaceholder } from "../components/layout/PagePlaceholder";
 import { RequireAuth } from "../components/auth/RequireAuth";
 import { RequirePermission } from "../components/auth/RequirePermission";
 import { DashboardPage } from "../pages/DashboardPage";
@@ -14,6 +13,7 @@ import { MobileIrrigationLogPage } from "../pages/MobileIrrigationLogPage";
 import { MobilePestLogPage } from "../pages/MobilePestLogPage";
 import { YieldAnalyticsPage } from "../pages/YieldAnalyticsPage";
 import { YieldDataEntryPage } from "../pages/YieldDataEntryPage";
+import { DailyYieldSamplesPage } from "../pages/DailyYieldSamplesPage";
 import { PestControlSetupPage } from "../pages/PestControlSetupPage";
 import { PestInventoryPage } from "../pages/PestInventoryPage";
 import { PestControlRecordsPage } from "../pages/PestControlRecordsPage";
@@ -21,6 +21,7 @@ import { PestPlannerPage } from "../pages/PestPlannerPage";
 import { QualityCheckPage } from "../pages/QualityCheckPage";
 import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
 import { VarietiesSetupPage } from "../pages/VarietiesSetupPage";
+import { FoodSafetySetupPage } from "../pages/FoodSafetySetupPage";
 import { AdminDocklinkIntegrationsPage } from "../pages/AdminDocklinkIntegrationsPage";
 import { AdminGrowlinkAgentPage } from "../pages/AdminGrowlinkAgentPage";
 import { AdminIntegrationsPage } from "../pages/AdminIntegrationsPage";
@@ -37,6 +38,7 @@ import { MobilePayrollPage } from "../pages/MobilePayrollPage";
 import { FoodSafetyPage } from "../pages/FoodSafetyPage";
 import { FoodSafetyLocationsPage } from "../pages/FoodSafetyLocationsPage";
 import { FoodSafetyReportsPage } from "../pages/FoodSafetyReportsPage";
+import { FoodSafetyLocationReportPage } from "../pages/foodSafetyReports/FoodSafetyLocationReportPage";
 import { MobileFoodSafetyPage } from "../pages/MobileFoodSafetyPage";
 import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationPage";
 
@@ -89,6 +91,14 @@ export const appRouter = createBrowserRouter([
             )
           },
           {
+            path: "yield/daily-yield-samples",
+            element: (
+              <RequirePermission permission="yield:view">
+                <DailyYieldSamplesPage />
+              </RequirePermission>
+            )
+          },
+          {
             path: "yield",
             element: <Navigate to="/yield/data-entry" replace />
           },
@@ -137,17 +147,6 @@ export const appRouter = createBrowserRouter([
             element: <Navigate to="/pest-control/planner" replace />
           },
 
-          // Daily Yield placeholder — no permission guard (internal placeholder)
-          {
-            path: "daily-yield",
-            element: (
-              <PagePlaceholder
-                title="Daily Yield"
-                description="Day-by-day yield summaries and routine harvest snapshots will be available in this page."
-              />
-            )
-          },
-
           // Quality Check — requires quality:view
           {
             path: "quality-check",
@@ -188,6 +187,14 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="greenhouse_setup:view">
                 <VarietiesSetupPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "setup/food-safety",
+            element: (
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetySetupPage />
               </RequirePermission>
             )
           },
@@ -259,6 +266,14 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="food_safety:view">
                 <FoodSafetyReportsPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "food-safety/reports/:locationId",
+            element: (
+              <RequirePermission permission="food_safety:view">
+                <FoodSafetyLocationReportPage />
               </RequirePermission>
             )
           }

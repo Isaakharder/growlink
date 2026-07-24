@@ -12,6 +12,7 @@ import {
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type YieldSize = {
   id: string;
@@ -1255,10 +1256,13 @@ export function YieldAnalyticsPage() {
       </div>
 
       {exportPreviewType ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Export Variety Summary">
-          <div className="variety-modal yield-analytics-export-modal">
+        <ModalOverlay
+          onClose={closeExportPreview}
+          contentClassName="variety-modal yield-analytics-export-modal"
+          titleId="yield-analytics-export-title"
+        >
             <div className="yield-analytics-export-modal-header">
-              <h2>Export Variety Summary</h2>
+              <h2 id="yield-analytics-export-title">Export Variety Summary</h2>
             </div>
 
             <div className="yield-analytics-export-summary-row" aria-label="Export summary">
@@ -1333,8 +1337,7 @@ export function YieldAnalyticsPage() {
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

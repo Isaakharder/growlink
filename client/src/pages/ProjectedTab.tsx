@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ModalOverlay } from "../components/ModalOverlay";
 import { apiFetch } from "../lib/api";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -228,9 +229,8 @@ function ProjectionModal({ editing, varieties, onSave, onClose }: ModalProps) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="variety-modal projection-modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="projection-modal-title">Edit Projection</h2>
+    <ModalOverlay onClose={onClose} contentClassName="variety-modal projection-modal" titleId="projection-modal-title">
+        <h2 className="projection-modal-title" id="projection-modal-title">Edit Projection</h2>
 
         <form onSubmit={handleSubmit}>
           {/* ── Forecast coordinates ── */}
@@ -392,8 +392,7 @@ function ProjectionModal({ editing, varieties, onSave, onClose }: ModalProps) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </ModalOverlay>
   );
 }
 

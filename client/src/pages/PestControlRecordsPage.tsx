@@ -3,6 +3,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { apiFetch } from "../lib/api";
 import { H1SheetPreview } from "../components/pest/H1SheetPreview";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 // ── Pest records types ────────────────────────────────────────────────────────
 
@@ -549,12 +550,6 @@ function H1PreviewModal({
 }) {
   const { logs } = sheet;
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   function handleDownloadPdf() {
     generateH1Pdf(logs);
   }
@@ -562,27 +557,22 @@ function H1PreviewModal({
   const recordLabel = logs.length === 1 ? "1 record" : `${logs.length} records`;
 
   return (
-    <div
-      className="modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="H1 Agronomic Inputs Preview"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <ModalOverlay
+      onClose={onClose}
+      contentClassName="h1-preview-modal"
+      titleId="h1-preview-modal-title"
+      contentStyle={{
+        width: "min(1140px, 98vw)",
+        maxHeight: "calc(100vh - 2rem)",
+        overflowY: "auto",
+        background: "#fff",
+        border: "1px solid #ccc",
+        borderRadius: "10px",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
+        display: "flex",
+        flexDirection: "column",
+      }}
     >
-      <div
-        className="h1-preview-modal"
-        style={{
-          width: "min(1140px, 98vw)",
-          maxHeight: "calc(100vh - 2rem)",
-          overflowY: "auto",
-          background: "#fff",
-          border: "1px solid #ccc",
-          borderRadius: "10px",
-          boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
         {/* Modal header — hidden on print */}
         <div
           className="h1-preview-header"
@@ -598,7 +588,7 @@ function H1PreviewModal({
           }}
         >
           <div style={{ flex: "1 1 auto" }}>
-            <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#111" }}>
+            <h2 id="h1-preview-modal-title" style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#111" }}>
               H1 Agronomic Inputs
             </h2>
             <p style={{ margin: "2px 0 0", fontSize: "0.78rem", color: "#666" }}>{recordLabel}</p>
@@ -620,8 +610,7 @@ function H1PreviewModal({
         <div style={{ padding: "1rem 1.25rem", overflowX: "auto" }}>
           <H1SheetPreview logs={logs} onEditLog={onEditLog} />
         </div>
-      </div>
-    </div>
+    </ModalOverlay>
   );
 }
 
@@ -712,13 +701,6 @@ function H1Modal({
     }
   }
 
-  // Close on Escape
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   // ── Shared styles for form-cell layout ────────────────────────────────────
   // Each field is rendered as a bordered cell (like the CanadaGAP form columns)
   // with a small uppercase label on top and a plain input below.
@@ -797,29 +779,24 @@ function H1Modal({
   };
 
   return (
-    <div
-      className="modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="H1 Sheet Row Editor"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <ModalOverlay
+      onClose={onClose}
+      titleId="h1-row-editor-title"
+      contentStyle={{
+        width: "min(1000px, 98vw)",
+        maxHeight: "calc(100vh - 2rem)",
+        overflowY: "auto",
+        background: "#fff",
+        border: "1px solid #ccc",
+        borderRadius: "10px",
+        boxShadow: "0 6px 32px rgba(0,0,0,0.15)",
+        padding: "1.25rem 1.5rem 1.5rem",
+        fontFamily: "Arial, Helvetica, sans-serif",
+      }}
     >
-      <div
-        style={{
-          width: "min(1000px, 98vw)",
-          maxHeight: "calc(100vh - 2rem)",
-          overflowY: "auto",
-          background: "#fff",
-          border: "1px solid #ccc",
-          borderRadius: "10px",
-          boxShadow: "0 6px 32px rgba(0,0,0,0.15)",
-          padding: "1.25rem 1.5rem 1.5rem",
-          fontFamily: "Arial, Helvetica, sans-serif",
-        }}
-      >
         {/* ── Modal header ────────────────────────────────────────────── */}
         <div style={{ display: "flex", alignItems: "baseline", gap: "0.75rem", marginBottom: "4px" }}>
-          <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#111" }}>
+          <h2 id="h1-row-editor-title" style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#111" }}>
             H1 Sheet Row Editor
           </h2>
           {dirty ? (
@@ -1020,8 +997,7 @@ function H1Modal({
             Close
           </button>
         </div>
-      </div>
-    </div>
+    </ModalOverlay>
   );
 }
 

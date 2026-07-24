@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -751,33 +752,6 @@ export function GreenhouseSetupPage() {
       setBinSettingsSaving(false);
     }
   }
-
-  useEffect(() => {
-    if (!groupModalOpen && !rowSectionModalOpen && !assignmentModalOpen) {
-      return;
-    }
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape") {
-        return;
-      }
-
-      if (groupModalOpen) {
-        closeGroupModal();
-      }
-
-      if (rowSectionModalOpen) {
-        closeRowSectionModal();
-      }
-
-      if (assignmentModalOpen) {
-        closeAssignmentModal();
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, [groupModalOpen, rowSectionModalOpen, assignmentModalOpen]);
 
   function closeGroupModal() {
     setGroupModalOpen(false);
@@ -1958,9 +1932,8 @@ export function GreenhouseSetupPage() {
       </div>
 
       {groupModalOpen ? (
-        <div className="modal-overlay" onClick={closeGroupModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingGroupId ? "Edit Group" : "Add Group"}</h2>
+        <ModalOverlay onClose={closeGroupModal} contentClassName="variety-modal" titleId="greenhouse-group-modal-title">
+            <h2 id="greenhouse-group-modal-title">{editingGroupId ? "Edit Group" : "Add Group"}</h2>
 
             <form className="varieties-form" onSubmit={submitGroup}>
               <label>
@@ -2017,14 +1990,12 @@ export function GreenhouseSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {rowSectionModalOpen ? (
-        <div className="modal-overlay" onClick={closeRowSectionModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingRowSectionId ? "Edit Row Section" : "Add Row Section"}</h2>
+        <ModalOverlay onClose={closeRowSectionModal} contentClassName="variety-modal" titleId="greenhouse-row-section-modal-title">
+            <h2 id="greenhouse-row-section-modal-title">{editingRowSectionId ? "Edit Row Section" : "Add Row Section"}</h2>
             <p>These values apply to each generated row.</p>
             {editingRowSectionId ? (
               <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: "-0.25rem 0 0.75rem" }}>
@@ -2177,14 +2148,12 @@ export function GreenhouseSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {assignmentModalOpen ? (
-        <div className="modal-overlay" onClick={closeAssignmentModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingAssignmentId ? "Edit Variety Assignment" : "Assign Variety"}</h2>
+        <ModalOverlay onClose={closeAssignmentModal} contentClassName="variety-modal" titleId="greenhouse-assignment-modal-title">
+            <h2 id="greenhouse-assignment-modal-title">{editingAssignmentId ? "Edit Variety Assignment" : "Assign Variety"}</h2>
 
             <form className="varieties-form" onSubmit={submitAssignment}>
               <label>
@@ -2275,18 +2244,20 @@ export function GreenhouseSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {valveModalOpen ? (
-        <div className="modal-overlay" onClick={closeValveModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>
-              {editingValveId
-                ? "Edit valve row assignment"
-                : "Assign rows to irrigation valve"}
-            </h2>
+        <ModalOverlay
+          onClose={closeValveModal}
+          contentClassName="variety-modal"
+          titleId="greenhouse-valve-modal-title"
+        >
+          <h2 id="greenhouse-valve-modal-title">
+            {editingValveId
+              ? "Edit valve row assignment"
+              : "Assign rows to irrigation valve"}
+          </h2>
             <form className="varieties-form" onSubmit={(event) => void assignValveRows(event)}>
               <label>
                 Valve
@@ -2388,8 +2359,7 @@ export function GreenhouseSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

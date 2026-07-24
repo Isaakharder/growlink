@@ -5,6 +5,14 @@ type DbErrorLike = {
   message?: string;
 };
 
+// Postgres unique_violation. Callers that want to turn a duplicate-value
+// insert/update into a 409 Conflict (instead of a generic 500) check this
+// before falling back to sendSafeError — see e.g.
+// routes/foodSafety/cleaningLocations.ts's POST/PUT handlers.
+export function isUniqueViolation(error: DbErrorLike | null | undefined): boolean {
+  return error?.code === "23505";
+}
+
 // Turns a raw Postgres/PostgREST error into a short, still-safe diagnostic
 // string (schema-cache / validation / permission / other-database-failure),
 // without leaking stack traces, connection details, or unrelated internals.

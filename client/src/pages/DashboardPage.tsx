@@ -1,6 +1,8 @@
 
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { usePermissions } from "../hooks/usePermissions";
+import { ModalOverlay } from "../components/ModalOverlay";
 import {
   CartesianGrid,
   Cell,
@@ -155,6 +157,7 @@ const YIELD_ENTRIES_URL = "/api/yield-entries";
 const VARIETIES_URL = "/api/varieties";
 const COLOR_CASE_ENTRIES_URL = "/api/color-case-entries";
 const YIELD_PROJECTION_URL = "/api/mobile/daily-yield/today-projection";
+const RECOMMENDED_MINIMUM_SAMPLE_COUNT = 4;
 
 /**
  * Generate an organization-scoped storage key for dashboard preferences.
@@ -233,6 +236,14 @@ function resolveTrackingMode(groups: IrrigationGroup[]): GroupType | null {
 function roundTo(value: number, decimals: number) {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+function formatSampleTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  const datePart = date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+  const timePart = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${datePart} at ${timePart}`;
 }
 
 function normalizeColor(value: unknown): VarietyColor | null {
@@ -524,8 +535,13 @@ type YieldProjectionEntry = {
   varietyId: string;
   varietyName: string;
   color: string;
+  projectedKg: number;
   projectedCases: number;
   sampledRowCount: number;
+  lastSampleDate: string;
+  lastUpdatedAt: string;
+  lastEnteredByName: string | null;
+  lastEnteredByInitials: string | null;
 };
 
 type YieldProjectionSummary =
@@ -956,42 +972,6 @@ export function DashboardPage() {
     [colorYieldSummary, preferences.yieldColorCards]
   );
 
-  const projectionRows = useMemo(() => {
-    if (!yieldProjection?.hasProjection) return null;
-    const { byColor, byVariety } = yieldProjection;
-
-    const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-    const fmt = (n: number) => Math.round(n).toLocaleString();
-
-    const colorAccents: Record<string, string> = {
-      red: "#dc2626",
-      orange: "#d97706",
-      yellow: "#ca8a04",
-      green: "#0f7660"
-    };
-
-    const varietiesByColor = new Map<string, YieldProjectionEntry[]>();
-    for (const v of byVariety) {
-      const list = varietiesByColor.get(v.color) ?? [];
-      list.push(v);
-      varietiesByColor.set(v.color, list);
-    }
-
-    return byColor.map(({ color, totalCases }) => {
-      const entries = varietiesByColor.get(color) ?? [];
-      const rowCount = entries.reduce((sum, v) => sum + v.sampledRowCount, 0);
-      const varietyText = entries.map((v) => v.varietyName).join(", ");
-      return {
-        color,
-        label: cap(color),
-        rowCount,
-        totalCases,
-        varietyText,
-        accentColor: colorAccents[color] ?? "#5c6b66"
-      };
-    });
-  }, [yieldProjection]);
-
   const greenhouseSnapshotRows = useMemo(
     () => buildBalancedRows(visibleGreenhouseSnapshots),
     [visibleGreenhouseSnapshots]
@@ -1213,26 +1193,6 @@ export function DashboardPage() {
           <p>Greenhouse operations overview — irrigation, crop yield, and analytics.</p>
         </div>
 
-        {projectionRows ? (
-          <div className="dashboard-yield-projection-inline">
-            {projectionRows.map((row) => (
-              <div
-                key={row.color}
-                className="dashboard-yield-projection-row"
-                style={{ borderLeftColor: row.accentColor }}
-              >
-                <span className="dyp-label">{row.label}</span>
-                <span className="dyp-sep">·</span>
-                <span>{row.rowCount} rows</span>
-                <span className="dyp-sep">·</span>
-                <span>{Math.round(row.totalCases).toLocaleString()} cases</span>
-                <span className="dyp-sep">·</span>
-                <span className="dyp-varieties">{row.varietyText}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
         <button
           type="button"
           className="dashboard-edit-button"
@@ -1437,6 +1397,72 @@ export function DashboardPage() {
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {yieldProjection?.hasProjection ? (
+        <div className="coming-soon-card dashboard-daily-yield-projection-card">
+          <h2>Daily Yield Projection</h2>
+          <p className="dashboard-section-subtitle">
+            Estimated cases from mobile bin sampling — Week {yieldProjection.sessionWeek}, {yieldProjection.sessionYear}.
+            Not recorded/actual yield.
+          </p>
+
+          <div className="dashboard-daily-yield-projection-grid">
+            {yieldProjection.byVariety.map((entry) => {
+              const isProjectionReady = entry.sampledRowCount >= RECOMMENDED_MINIMUM_SAMPLE_COUNT;
+              const rowsNeeded = RECOMMENDED_MINIMUM_SAMPLE_COUNT - entry.sampledRowCount;
+
+              return (
+                <div
+                  key={entry.varietyId}
+                  className="dyp-card"
+                  style={{ borderLeftColor: COLOR_STROKES[entry.color as VarietyColor] ?? "#5c6b66" }}
+                >
+                  <div className="dyp-card-header">
+                    <span className={`color-badge ${entry.color}`}>{entry.varietyName}</span>
+                    <span className="dyp-card-sample-count">
+                      {entry.sampledRowCount} sampled {entry.sampledRowCount === 1 ? "row" : "rows"}
+                    </span>
+                  </div>
+
+                  <div className="dyp-card-metrics">
+                    <div className="dyp-card-metric">
+                      <span className="dyp-card-metric-value">
+                        {Math.round(entry.projectedKg).toLocaleString()} kg
+                      </span>
+                      <span className="dyp-card-metric-label">Projected kg</span>
+                    </div>
+                    <div className="dyp-card-metric">
+                      <span className="dyp-card-metric-value">
+                        {Math.round(entry.projectedCases).toLocaleString()} cases
+                      </span>
+                      <span className="dyp-card-metric-label">Projected cases</span>
+                    </div>
+                  </div>
+
+                  {isProjectionReady ? (
+                    <p className="dyp-card-status dyp-card-status-ready">✓ Projection Ready</p>
+                  ) : (
+                    <p className="dyp-card-status dyp-card-status-preliminary">
+                      ⚠ Preliminary Projection
+                      <br />
+                      Sample {rowsNeeded} more {rowsNeeded === 1 ? "row" : "rows"} for a more reliable estimate.
+                    </p>
+                  )}
+
+                  <p className="dyp-card-meta">
+                    Last sample: {entry.lastUpdatedAt ? formatSampleTimestamp(entry.lastUpdatedAt) : "—"}
+                    {entry.lastEnteredByName ? ` · ${entry.lastEnteredByName}` : ""}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+
+          <Link className="dashboard-daily-yield-view-samples-link" to="/yield/daily-yield-samples">
+            View Samples →
+          </Link>
         </div>
       ) : null}
 
@@ -1690,14 +1716,11 @@ export function DashboardPage() {
       ) : null}
 
       {isCustomizeOpen ? (
-        <div className="modal-overlay" role="presentation" onClick={closeCustomizeModal}>
-          <div
-            className="variety-modal dashboard-customize-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dashboard-customize-title"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <ModalOverlay
+          onClose={closeCustomizeModal}
+          contentClassName="variety-modal dashboard-customize-modal"
+          titleId="dashboard-customize-title"
+        >
             <h2 id="dashboard-customize-title">Customize Dashboard</h2>
             <p className="dashboard-customize-copy">
               Choose which sections appear on the desktop dashboard.
@@ -1899,8 +1922,7 @@ export function DashboardPage() {
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

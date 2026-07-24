@@ -1,4 +1,5 @@
 import { FormEvent, CSSProperties, useEffect, useMemo, useState } from "react";
+import { ModalOverlay } from "../components/ModalOverlay";
 import { apiFetch } from "../lib/api";
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -1275,10 +1276,13 @@ export function PayrollPage() {
 
       {/* ── Edit Modal ────────────────────────────────────────────────────── */}
       {selectedLog && (
-        <div style={modalOverlayStyle} onClick={closeEditModal}>
-          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay
+          onClose={closeEditModal}
+          contentStyle={modalStyle}
+          titleId="payroll-edit-modal-title"
+        >
             <div style={modalHeaderStyle}>
-              <h3 style={modalTitleStyle}>Edit Time Log</h3>
+              <h3 id="payroll-edit-modal-title" style={modalTitleStyle}>Edit Time Log</h3>
               <button type="button" onClick={closeEditModal} style={modalCloseStyle}>
                 ✕
               </button>
@@ -1370,22 +1374,18 @@ export function PayrollPage() {
                 {editSaving ? "Saving…" : "Save Changes"}
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* ── Delete Confirmation Modal ─────────────────────────────────────── */}
       {deleteTarget && (
-        <div
-          style={modalOverlayStyle}
-          onClick={() => !deleting && setDeleteTarget(null)}
+        <ModalOverlay
+          onClose={() => !deleting && setDeleteTarget(null)}
+          contentStyle={{ ...modalStyle, width: "min(380px, 95vw)" }}
+          titleId="payroll-delete-modal-title"
         >
-          <div
-            style={{ ...modalStyle, width: "min(380px, 95vw)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
             <div style={modalHeaderStyle}>
-              <h3 style={modalTitleStyle}>Delete Time Log?</h3>
+              <h3 id="payroll-delete-modal-title" style={modalTitleStyle}>Delete Time Log?</h3>
               <button
                 type="button"
                 onClick={() => setDeleteTarget(null)}
@@ -1422,8 +1422,7 @@ export function PayrollPage() {
                 {deleting ? "Deleting…" : "Yes, Delete"}
               </button>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );
@@ -1699,16 +1698,6 @@ const editedBadgeStyle: CSSProperties = {
   ...badge("#eff6ff", "#1d4ed8", "#bfdbfe"),
   marginLeft: "0.4rem",
   cursor: "help",
-};
-
-const modalOverlayStyle: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.45)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
 };
 
 const modalStyle: CSSProperties = {

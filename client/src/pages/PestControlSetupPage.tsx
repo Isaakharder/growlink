@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type CalibrationRecord = {
   id: string;
@@ -193,20 +194,6 @@ export function PestControlSetupPage() {
     void fetchData();
   }, []);
 
-  useEffect(() => {
-    if (!isSprayerModalOpen && !isTankModalOpen && !isCalModalOpen) return;
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        if (isSprayerModalOpen) closeSprayerModal();
-        if (isTankModalOpen) closeTankModal();
-        if (isCalModalOpen) closeCalModal();
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, [isSprayerModalOpen, isTankModalOpen, isCalModalOpen]);
 
   // ── Sprayer modal helpers ──────────────────────────────────────────────────
 
@@ -643,9 +630,8 @@ export function PestControlSetupPage() {
 
       {/* ── Sprayer modal ──────────────────────────────────────────────────── */}
       {isSprayerModalOpen ? (
-        <div className="modal-overlay" onClick={closeSprayerModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingSprayerId ? "Edit Sprayer" : "Add Sprayer"}</h2>
+        <ModalOverlay onClose={closeSprayerModal} contentClassName="variety-modal" titleId="pest-sprayer-modal-title">
+            <h2 id="pest-sprayer-modal-title">{editingSprayerId ? "Edit Sprayer" : "Add Sprayer"}</h2>
 
             <form className="varieties-form" onSubmit={(e) => void handleSprayerSubmit(e)}>
               <label>
@@ -790,15 +776,13 @@ export function PestControlSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {/* ── Calibration modal ─────────────────────────────────────────────── */}
       {isCalModalOpen && calSprayerId ? (
-        <div className="modal-overlay" onClick={closeCalModal}>
-          <div className="variety-modal cal-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>Calibrate Sprayer</h2>
+        <ModalOverlay onClose={closeCalModal} contentClassName="variety-modal cal-modal" titleId="pest-cal-modal-title">
+            <h2 id="pest-cal-modal-title">Calibrate Sprayer</h2>
             <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: "0.3rem 0 1.1rem" }}>
               Run the sprayer and measure output from the same 3 nozzles at each pressure.
               Enter the collected volume (mL/min) for each nozzle.
@@ -864,15 +848,13 @@ export function PestControlSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {/* ── Tank modal ─────────────────────────────────────────────────────── */}
       {isTankModalOpen ? (
-        <div className="modal-overlay" onClick={closeTankModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingTankId ? "Edit Tank" : "Add Tank"}</h2>
+        <ModalOverlay onClose={closeTankModal} contentClassName="variety-modal" titleId="pest-tank-modal-title">
+            <h2 id="pest-tank-modal-title">{editingTankId ? "Edit Tank" : "Add Tank"}</h2>
 
             <form className="varieties-form" onSubmit={(e) => void handleTankSubmit(e)}>
               <label>
@@ -927,8 +909,7 @@ export function PestControlSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

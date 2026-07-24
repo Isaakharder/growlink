@@ -1,16 +1,6 @@
 import { supabase } from "../../../config/supabase";
-import { computePeriodKey, type ChecklistPeriodType } from "./checklistPeriod";
-
-type ChecklistRow = {
-  id: string;
-  period_type: ChecklistPeriodType;
-  period_key: string;
-  status: "incomplete" | "complete";
-  completed_at: string | null;
-  completed_by_user_id: string | null;
-  completed_by_name: string | null;
-  completed_by_initials: string | null;
-};
+import { getCurrentChecklistsForLocation } from "./currentChecklists";
+import type { ChecklistPeriodType } from "./checklistPeriod";
 
 type ItemRow = {
   checklist_id: string;
@@ -26,14 +16,14 @@ type ItemRow = {
   checked_by_initials: string | null;
 };
 
-// Called after any successful checklist-item response. If the location's
-// entire current-period set of checklists (across every frequency currently
-// in use there) is now complete, creates one immutable report row plus its
-// task snapshots. Safe to call unconditionally and repeatedly: a unique
+// Called after "Complete Location" succeeds. If the location's entire
+// current-period set of checklists (across every frequency currently in use
+// there) is now complete, creates one immutable report row plus its task
+// snapshots. Safe to call unconditionally and repeatedly: a unique
 // constraint on (location_id, period_signature) makes the report insert
 // idempotent, and this is a no-op whenever the location isn't fully
-// complete yet. Never throws — a failure here must never break the
-// check/uncheck/respond response it runs alongside.
+// complete. Never throws — a failure here must never break the
+// complete-location response it runs alongside.
 export async function maybeCreateReport(organizationId: string, locationId: string): Promise<void> {
   try {
     const { data: location, error: locationError } = await supabase
@@ -45,28 +35,7 @@ export async function maybeCreateReport(organizationId: string, locationId: stri
 
     if (locationError || !location) return;
 
-    const now = new Date();
-    const periodKeyByType: Record<ChecklistPeriodType, string> = {
-      daily: computePeriodKey("daily", now),
-      weekly: computePeriodKey("weekly", now),
-      monthly: computePeriodKey("monthly", now),
-      annually: computePeriodKey("annually", now)
-    };
-
-    const { data: checklists, error: checklistsError } = await supabase
-      .from("food_safety_cleaning_checklists")
-      .select(
-        "id, period_type, period_key, status, completed_at, completed_by_user_id, completed_by_name, completed_by_initials"
-      )
-      .eq("organization_id", organizationId)
-      .eq("location_id", locationId)
-      .in("period_key", Array.from(new Set(Object.values(periodKeyByType))));
-
-    if (checklistsError || !checklists) return;
-
-    const currentChecklists = (checklists as ChecklistRow[]).filter(
-      (c) => c.period_key === periodKeyByType[c.period_type]
-    );
+    const currentChecklists = await getCurrentChecklistsForLocation(organizationId, locationId);
 
     // No currently-due checklists, or at least one still incomplete — the
     // location isn't fully done yet, nothing to report.
@@ -105,7 +74,7 @@ export async function maybeCreateReport(organizationId: string, locationId: stri
           location_area_snapshot: location.area,
           period_signature: periodSignature,
           task_count: items.length,
-          completed_at: lastCompleted?.completed_at ?? now.toISOString(),
+          completed_at: lastCompleted?.completed_at ?? new Date().toISOString(),
           completed_by_user_id: lastCompleted?.completed_by_user_id ?? null,
           completed_by_name: lastCompleted?.completed_by_name ?? "Unknown",
           completed_by_initials: lastCompleted?.completed_by_initials ?? "—"

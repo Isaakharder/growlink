@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ModalOverlay } from "../components/ModalOverlay";
 
 type GroupType = "phase" | "zone" | "color";
 type StatusType = "active" | "inactive";
@@ -155,27 +156,6 @@ export function IrrigationSetupPage() {
   useEffect(() => {
     localStorage.setItem(TRACK_TYPE_STORAGE_KEY, trackType);
   }, [trackType]);
-
-  useEffect(() => {
-    if (!groupModalOpen && !feedModalOpen && !drainModalOpen) {
-      return;
-    }
-
-    function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closeAllModals();
-      }
-    }
-
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, [groupModalOpen, feedModalOpen, drainModalOpen]);
-
-  function closeAllModals() {
-    closeGroupModal();
-    closeFeedModal();
-    closeDrainModal();
-  }
 
   function closeGroupModal() {
     setGroupModalOpen(false);
@@ -705,9 +685,8 @@ export function IrrigationSetupPage() {
       </div>
 
       {groupModalOpen ? (
-        <div className="modal-overlay" onClick={closeGroupModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingGroupId ? "Edit Group" : `Add ${titleCaseType(trackType)}`}</h2>
+        <ModalOverlay onClose={closeGroupModal} contentClassName="variety-modal" titleId="irrigation-group-modal-title">
+            <h2 id="irrigation-group-modal-title">{editingGroupId ? "Edit Group" : `Add ${titleCaseType(trackType)}`}</h2>
 
             <form className="varieties-form" onSubmit={submitGroup}>
               <label>
@@ -747,14 +726,12 @@ export function IrrigationSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {feedModalOpen ? (
-        <div className="modal-overlay" onClick={closeFeedModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingFeedValveId ? "Edit Feed Valve" : "Add Feed Valve"}</h2>
+        <ModalOverlay onClose={closeFeedModal} contentClassName="variety-modal" titleId="irrigation-feed-modal-title">
+            <h2 id="irrigation-feed-modal-title">{editingFeedValveId ? "Edit Feed Valve" : "Add Feed Valve"}</h2>
 
             <form className="varieties-form" onSubmit={submitFeedValve}>
               <label>
@@ -827,14 +804,12 @@ export function IrrigationSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {drainModalOpen ? (
-        <div className="modal-overlay" onClick={closeDrainModal}>
-          <div className="variety-modal" onClick={(event) => event.stopPropagation()}>
-            <h2>{editingDrainBucketId ? "Edit Drain Bucket" : "Add Drain Bucket"}</h2>
+        <ModalOverlay onClose={closeDrainModal} contentClassName="variety-modal" titleId="irrigation-drain-modal-title">
+            <h2 id="irrigation-drain-modal-title">{editingDrainBucketId ? "Edit Drain Bucket" : "Add Drain Bucket"}</h2>
 
             <form className="varieties-form" onSubmit={submitDrainBucket}>
               <label>
@@ -907,8 +882,7 @@ export function IrrigationSetupPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );
