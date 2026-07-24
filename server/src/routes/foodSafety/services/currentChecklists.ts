@@ -12,16 +12,20 @@ export type CurrentChecklistRow = {
   completed_by_initials: string | null;
 };
 
-// The set of checklists for one location whose period_key matches *today's*
-// period for their own period_type — i.e. the ones actually due right now,
-// across every frequency the location currently has tasks for. Shared by
-// report generation and the "Complete Location" endpoint so both agree on
-// exactly which checklists a single completion action covers.
+// The set of checklists for one location whose period_key matches the given
+// reference date's period for their own period_type — i.e. the ones due on
+// that date, across every frequency the location currently has tasks for.
+// Defaults to "now" (today), the normal live-completion case; the mobile
+// long-press date selector passes a backdated referenceDate instead so a
+// worker can retroactively fill out and complete a past day's checklist.
+// Shared by report generation and the "Complete Location" endpoint so both
+// agree on exactly which checklists a single completion action covers.
 export async function getCurrentChecklistsForLocation(
   organizationId: string,
-  locationId: string
+  locationId: string,
+  referenceDate: Date = new Date()
 ): Promise<CurrentChecklistRow[]> {
-  const now = new Date();
+  const now = referenceDate;
   const periodKeyByType: Record<ChecklistPeriodType, string> = {
     daily: computePeriodKey("daily", now),
     weekly: computePeriodKey("weekly", now),

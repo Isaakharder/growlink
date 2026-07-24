@@ -5,13 +5,15 @@ import { requirePermission } from "../../middleware/requirePermission";
 import { resolveActor } from "./services/actorIdentity";
 import { computePeriodKey, type ChecklistPeriodType } from "./services/checklistPeriod";
 import { getCurrentChecklistsForLocation } from "./services/currentChecklists";
-import { maybeCreateReport } from "./services/reportGeneration";
+import { maybeCreateReport, reportAlreadyExistsForPeriod } from "./services/reportGeneration";
+import { validateReportDate } from "./services/reportDate";
 
 type LocationRow = {
   id: string;
   name: string;
   area: string;
   frequency: ChecklistPeriodType;
+  mobile_instructions: string | null;
 };
 
 type ChecklistRow = {
@@ -46,6 +48,7 @@ type LocationCard = {
   id: string;
   name: string;
   area: string;
+  mobileInstructions: string | null;
   isComplete: boolean;
   completedAt: string | null;
   completedByName: string | null;
@@ -66,10 +69,16 @@ type LocationCard = {
   }[];
 };
 
-// Ensures the one checklist for each location's current period (its own
-// frequency) exists, creating any missing ones via the atomic RPC.
-async function ensureChecklists(organizationId: string, locations: LocationRow[]): Promise<void> {
-  const now = new Date();
+// Ensures the one checklist for each location's period (its own frequency)
+// for `referenceDate` exists, creating any missing ones via the atomic RPC.
+// Defaults to "now" (today); the mobile long-press date selector passes a
+// backdated referenceDate so a worker can retroactively fill out a past day.
+async function ensureChecklists(
+  organizationId: string,
+  locations: LocationRow[],
+  referenceDate: Date = new Date()
+): Promise<void> {
+  const now = referenceDate;
 
   for (const location of locations) {
     const periodKey = computePeriodKey(location.frequency, now);
@@ -86,10 +95,14 @@ async function ensureChecklists(organizationId: string, locations: LocationRow[]
   }
 }
 
-async function loadLocationCards(organizationId: string, locationIds?: string[]): Promise<LocationCard[]> {
+async function loadLocationCards(
+  organizationId: string,
+  locationIds?: string[],
+  referenceDate: Date = new Date()
+): Promise<LocationCard[]> {
   let locationQuery = supabase
     .from("food_safety_cleaning_locations")
-    .select("id, name, area, frequency")
+    .select("id, name, area, frequency, mobile_instructions")
     .eq("organization_id", organizationId)
     .eq("is_active", true);
 
@@ -106,9 +119,9 @@ async function loadLocationCards(organizationId: string, locationIds?: string[])
   const activeLocations = (locations ?? []) as LocationRow[];
   if (activeLocations.length === 0) return [];
 
-  await ensureChecklists(organizationId, activeLocations);
+  await ensureChecklists(organizationId, activeLocations, referenceDate);
 
-  const now = new Date();
+  const now = referenceDate;
   const periodKeyByType: Record<ChecklistPeriodType, string> = {
     daily: computePeriodKey("daily", now),
     weekly: computePeriodKey("weekly", now),
@@ -195,6 +208,7 @@ async function loadLocationCards(organizationId: string, locationIds?: string[])
       id: location.id,
       name: location.name,
       area: location.area,
+      mobileInstructions: location.mobile_instructions,
       isComplete,
       completedAt: isComplete ? lastCompleted?.completed_at ?? null : null,
       completedByName: isComplete ? lastCompleted?.completed_by_name ?? null : null,
@@ -202,6 +216,36 @@ async function loadLocationCards(organizationId: string, locationIds?: string[])
       items
     };
   });
+}
+
+// Looks up the location's own frequency (needed to build the exact
+// period_signature a report for this date would use), then checks whether a
+// report already exists for that period — via either the live-completion
+// path's own format or the unrelated admin backfill path's format. Used to
+// reject entry into (GET) or completion of (complete) an already-reported
+// backdated day before any checklist rows get created for it. Returns false
+// (rather than throwing) if the location itself can't be found, since the
+// normal load path already handles a missing/inactive location correctly.
+async function reportAlreadyExistsForBackdatedDate(
+  organizationId: string,
+  locationId: string,
+  referenceDate: Date,
+  dailyDateKey: string
+): Promise<boolean> {
+  const { data: location, error } = await supabase
+    .from("food_safety_cleaning_locations")
+    .select("frequency")
+    .eq("id", locationId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!location) return false;
+
+  const frequency = (location as { frequency: ChecklistPeriodType }).frequency;
+  const periodKey = computePeriodKey(frequency, referenceDate);
+
+  return reportAlreadyExistsForPeriod(organizationId, locationId, frequency, periodKey, dailyDateKey);
 }
 
 const mobileCleaningChecklistRouter = Router();
@@ -213,9 +257,37 @@ mobileCleaningChecklistRouter.get(
   canUseMobileFoodSafety,
   async (req, res) => {
     const locationId = typeof req.query.locationId === "string" ? req.query.locationId : undefined;
+    // reportDate only means anything for a single-location request (the
+    // detail page's long-press date selector) — the multi-location list view
+    // never sends it, and it's ignored if it somehow did.
+    const rawReportDate = locationId && typeof req.query.reportDate === "string" ? req.query.reportDate : undefined;
+
+    let referenceDate: Date | undefined;
+
+    if (rawReportDate) {
+      let validated;
+      try {
+        validated = validateReportDate(rawReportDate);
+      } catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
+      }
+
+      if (validated.isBackdated) {
+        try {
+          const exists = await reportAlreadyExistsForBackdatedDate(req.organizationId, locationId as string, validated.referenceDate, validated.dateStr);
+          if (exists) {
+            return res.status(409).json({ message: "A report already exists for this location and date." });
+          }
+        } catch (error) {
+          return sendSafeError(res, 500, "Failed to check existing reports for this date.", "Backdate duplicate-check error:", error);
+        }
+      }
+
+      referenceDate = validated.referenceDate;
+    }
 
     try {
-      const cards = await loadLocationCards(req.organizationId, locationId ? [locationId] : undefined);
+      const cards = await loadLocationCards(req.organizationId, locationId ? [locationId] : undefined, referenceDate);
       return res.json({ locations: cards });
     } catch (error) {
       return sendSafeError(res, 500, "Failed to load cleaning checklists.", "Cleaning checklist load error:", error);
@@ -242,10 +314,11 @@ async function respondWithReloadedLocation(
   req: Request,
   res: Response,
   organizationId: string,
-  locationId: string
+  locationId: string,
+  referenceDate?: Date
 ) {
   try {
-    const cards = await loadLocationCards(organizationId, [locationId]);
+    const cards = await loadLocationCards(organizationId, [locationId], referenceDate);
     return res.json({ location: cards[0] ?? null });
   } catch (error) {
     return sendSafeError(res, 500, "Failed to load the updated location.", "Cleaning checklist reload error:", error);
@@ -254,9 +327,23 @@ async function respondWithReloadedLocation(
 
 // Sets a task's response value / checked state. Never finalizes the
 // checklist by itself — only the explicit "Complete Location" action does.
+// Accepts an optional reportDate (re-validated here, never trusted as-is) so
+// that after this edit, reloading the location shows the SAME backdated
+// period the client is working on instead of silently snapping back to
+// today's checklist.
 async function handleSetItemResponse(req: Request, res: Response, responseValue: string | null) {
   const organizationId = req.organizationId;
   const { itemId } = req.params;
+  const rawReportDate = (req.body as Record<string, unknown> | undefined)?.reportDate;
+
+  let referenceDate: Date | undefined;
+  if (typeof rawReportDate === "string") {
+    try {
+      referenceDate = validateReportDate(rawReportDate).referenceDate;
+    } catch (error) {
+      return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
+    }
+  }
 
   const actor = await resolveRequestActor(req, res);
   if (!actor) return;
@@ -285,7 +372,7 @@ async function handleSetItemResponse(req: Request, res: Response, responseValue:
     return sendSafeError(res, 500, "Failed to load the updated location.", "Checklist RPC result missing location_id:", checklist);
   }
 
-  return respondWithReloadedLocation(req, res, organizationId, locationId);
+  return respondWithReloadedLocation(req, res, organizationId, locationId, referenceDate);
 }
 
 mobileCleaningChecklistRouter.post(
@@ -314,22 +401,51 @@ mobileCleaningChecklistRouter.post(
 );
 
 // "Complete Location" — the only way a checklist is ever finalized. No
-// validation: whatever is currently checked/unchecked across every
-// currently-due item (across every frequency in use at this location) is
-// what gets locked in and reported.
+// validation of checkbox state: whatever is currently checked/unchecked
+// across every currently-due item (across every frequency in use at this
+// location) is what gets locked in and reported. An optional reportDate
+// (the mobile long-press date selector's choice) is re-validated here from
+// scratch — the client's date is never trusted — and, when it names a past
+// day, is re-checked for an already-existing report immediately before
+// finalizing, closing the race where another device/admin reported that same
+// day between this device's initial GET and this Complete tap.
 mobileCleaningChecklistRouter.post(
   "/food-safety/mobile/cleaning-checklist/locations/:locationId/complete",
   canUseMobileFoodSafety,
   async (req, res) => {
     const organizationId = req.organizationId;
     const locationId = String(req.params.locationId);
+    const rawReportDate = (req.body as Record<string, unknown> | undefined)?.reportDate;
+
+    let referenceDate: Date | undefined;
+    if (typeof rawReportDate === "string") {
+      let validated;
+      try {
+        validated = validateReportDate(rawReportDate);
+      } catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
+      }
+
+      if (validated.isBackdated) {
+        try {
+          const exists = await reportAlreadyExistsForBackdatedDate(organizationId, locationId, validated.referenceDate, validated.dateStr);
+          if (exists) {
+            return res.status(409).json({ message: "A report already exists for this location and date." });
+          }
+        } catch (error) {
+          return sendSafeError(res, 500, "Failed to check existing reports for this date.", "Backdate duplicate-check error:", error);
+        }
+      }
+
+      referenceDate = validated.referenceDate;
+    }
 
     const actor = await resolveRequestActor(req, res);
     if (!actor) return;
 
     let currentChecklists;
     try {
-      currentChecklists = await getCurrentChecklistsForLocation(organizationId, locationId);
+      currentChecklists = await getCurrentChecklistsForLocation(organizationId, locationId, referenceDate);
     } catch (error) {
       return sendSafeError(res, 500, "Failed to load this location's checklists.", "Complete-location checklist lookup error:", error);
     }
@@ -350,9 +466,9 @@ mobileCleaningChecklistRouter.post(
       return sendSafeError(res, 500, "Failed to complete this location.", "Complete-location error:", rpcError);
     }
 
-    await maybeCreateReport(organizationId, locationId);
+    await maybeCreateReport(organizationId, locationId, referenceDate);
 
-    return respondWithReloadedLocation(req, res, organizationId, locationId);
+    return respondWithReloadedLocation(req, res, organizationId, locationId, referenceDate);
   }
 );
 

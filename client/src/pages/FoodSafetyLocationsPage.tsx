@@ -20,6 +20,7 @@ type CleaningLocation = {
   area: string;
   frequency: CleaningLocationFrequency;
   notes: string | null;
+  mobile_instructions: string | null;
   tasks: CleaningTask[];
 };
 
@@ -47,12 +48,14 @@ const RESPONSE_TYPE_LABELS: Record<CleaningTaskResponseType, string> = {
 };
 
 const MAX_NOTES_LENGTH = 2000;
+const MAX_MOBILE_INSTRUCTIONS_LENGTH = 1000;
 
 type LocationFormState = {
   name: string;
   area: string;
   frequency: CleaningLocationFrequency;
   notes: string;
+  mobileInstructions: string;
   tasks: TaskFormRow[];
 };
 
@@ -75,7 +78,7 @@ function newTaskRow(): TaskFormRow {
 }
 
 function emptyForm(): LocationFormState {
-  return { name: "", area: "", frequency: "daily", notes: "", tasks: [newTaskRow()] };
+  return { name: "", area: "", frequency: "daily", notes: "", mobileInstructions: "", tasks: [newTaskRow()] };
 }
 
 function toFormState(location: CleaningLocation): LocationFormState {
@@ -84,6 +87,7 @@ function toFormState(location: CleaningLocation): LocationFormState {
     area: location.area,
     frequency: location.frequency,
     notes: location.notes ?? "",
+    mobileInstructions: location.mobile_instructions ?? "",
     tasks: location.tasks.map((task) => ({
       key: crypto.randomUUID(),
       name: task.name,
@@ -234,6 +238,7 @@ export function FoodSafetyLocationsPage() {
     const name = form.name.trim();
     const area = form.area.trim();
     const notes = form.notes.trim();
+    const mobileInstructions = form.mobileInstructions.trim();
 
     if (!name) {
       setFormError("Location name is required.");
@@ -247,6 +252,11 @@ export function FoodSafetyLocationsPage() {
 
     if (notes.length > MAX_NOTES_LENGTH) {
       setFormError(`Notes cannot exceed ${MAX_NOTES_LENGTH} characters.`);
+      return;
+    }
+
+    if (mobileInstructions.length > MAX_MOBILE_INSTRUCTIONS_LENGTH) {
+      setFormError(`Mobile instructions cannot exceed ${MAX_MOBILE_INSTRUCTIONS_LENGTH} characters.`);
       return;
     }
 
@@ -271,6 +281,7 @@ export function FoodSafetyLocationsPage() {
       area,
       frequency: form.frequency,
       notes: notes.length > 0 ? notes : null,
+      mobileInstructions: mobileInstructions.length > 0 ? mobileInstructions : null,
       tasks: form.tasks.map((task) => ({
         name: task.name.trim(),
         responseType: task.responseType,
@@ -372,6 +383,12 @@ export function FoodSafetyLocationsPage() {
                   <span>{location.tasks.length} cleaning task{location.tasks.length === 1 ? "" : "s"}</span>
                   <span>{FREQUENCY_LABELS[location.frequency]}</span>
                 </div>
+                {location.mobile_instructions ? (
+                  <div className="cleaning-location-card-mobile-instructions">
+                    <span className="cleaning-location-card-mobile-instructions-label">Mobile Instructions</span>
+                    <p>{location.mobile_instructions}</p>
+                  </div>
+                ) : null}
               </div>
 
               {canEdit && (
@@ -449,6 +466,22 @@ export function FoodSafetyLocationsPage() {
                   maxLength={MAX_NOTES_LENGTH}
                   rows={4}
                 />
+              </label>
+
+              <label className="cleaning-location-mobile-instructions-field">
+                Mobile Instructions
+                <textarea
+                  value={form.mobileInstructions}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, mobileInstructions: event.target.value }))
+                  }
+                  placeholder="Check both sinks for hot and cold water. Refill soap and toilet paper where needed. Report any leaks or damage to the supervisor."
+                  maxLength={MAX_MOBILE_INSTRUCTIONS_LENGTH}
+                  rows={4}
+                />
+                <span className="cleaning-location-mobile-instructions-counter">
+                  {form.mobileInstructions.trim().length} / {MAX_MOBILE_INSTRUCTIONS_LENGTH}
+                </span>
               </label>
 
               <div className="cleaning-tasks-section">

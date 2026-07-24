@@ -29,6 +29,10 @@ function getIsoWeek(parts: ZonedDateParts): { isoYear: number; week: number } {
   return { isoYear: d.getUTCFullYear(), week };
 }
 
+export function todayInOrgTimezone(timeZone: string = DEFAULT_ORG_TIMEZONE): string {
+  return computePeriodKey("daily", new Date(), timeZone);
+}
+
 export function computePeriodKey(
   periodType: ChecklistPeriodType,
   now: Date = new Date(),

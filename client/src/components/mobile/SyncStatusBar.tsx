@@ -3,11 +3,12 @@ import type { SyncStatus } from "../../hooks/useOfflineQueue";
 type Props = {
   queuePending: number;
   queueFailed: number;
+  failureReasons: string[];
   syncStatus: SyncStatus;
   onClearFailed: () => void;
 };
 
-export function SyncStatusBar({ queuePending, queueFailed, syncStatus, onClearFailed }: Props) {
+export function SyncStatusBar({ queuePending, queueFailed, failureReasons, syncStatus, onClearFailed }: Props) {
   if (syncStatus === "syncing") {
     return (
       <div className="sync-status-bar sync-status-bar--syncing">
@@ -19,7 +20,8 @@ export function SyncStatusBar({ queuePending, queueFailed, syncStatus, onClearFa
   if (queueFailed > 0) {
     return (
       <div className="sync-status-bar sync-status-bar--failed">
-        {queueFailed} change{queueFailed !== 1 ? "s" : ""} could not sync.{" "}
+        {queueFailed} change{queueFailed !== 1 ? "s" : ""} could not sync
+        {failureReasons.length > 0 ? `: ${failureReasons.join("; ")}` : "."}{" "}
         <button
           type="button"
           onClick={onClearFailed}

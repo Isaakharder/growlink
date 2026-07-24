@@ -18,7 +18,7 @@ const MOBILE_PERMISSIONS = [
 
 function MobileLayoutInner() {
   const { loading, canAny } = usePermissions();
-  const { queuePending, queueFailed, syncStatus, clearFailed } = useOfflineQueue();
+  const { queuePending, queueFailed, failureReasons, syncStatus, clearFailed } = useOfflineQueue();
 
   const nav = (
     <nav
@@ -48,6 +48,7 @@ function MobileLayoutInner() {
         <SyncStatusBar
           queuePending={queuePending}
           queueFailed={queueFailed}
+          failureReasons={failureReasons}
           syncStatus={syncStatus}
           onClearFailed={() => void clearFailed()}
         />

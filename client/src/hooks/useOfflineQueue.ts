@@ -3,6 +3,7 @@ import {
   enqueue as dbEnqueue,
   syncQueue,
   getQueueCounts,
+  getAllItems,
   onQueueChange,
   clearFailed,
   type QueueItem,
@@ -14,6 +15,11 @@ export type SyncStatus = "idle" | "syncing" | "error";
 export type OfflineQueueHook = {
   queuePending: number;
   queueFailed: number;
+  // Distinct failure reasons currently reported by failed queue items (e.g.
+  // "A report already exists for this location and date."), so the sync
+  // status bar can show the user WHY a change couldn't sync instead of just
+  // a bare count -- see SyncStatusBar.tsx.
+  failureReasons: string[];
   syncStatus: SyncStatus;
   enqueue: (item: {
     module: QueueModule;
@@ -28,6 +34,7 @@ export type OfflineQueueHook = {
 export function useOfflineQueue(): OfflineQueueHook {
   const [queuePending, setQueuePending] = useState(0);
   const [queueFailed, setQueueFailed] = useState(0);
+  const [failureReasons, setFailureReasons] = useState<string[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const syncingRef = useRef(false);
 
@@ -36,6 +43,16 @@ export function useOfflineQueue(): OfflineQueueHook {
       const counts = await getQueueCounts();
       setQueuePending(counts.pending);
       setQueueFailed(counts.failed);
+
+      if (counts.failed > 0) {
+        const items = await getAllItems();
+        const reasons = Array.from(
+          new Set(items.filter((i) => i.status === "failed" && i.failureReason).map((i) => i.failureReason as string))
+        );
+        setFailureReasons(reasons);
+      } else {
+        setFailureReasons([]);
+      }
     } catch {
       // IDB unavailable in some private browsing modes — ignore
     }
@@ -90,6 +107,7 @@ export function useOfflineQueue(): OfflineQueueHook {
   return {
     queuePending,
     queueFailed,
+    failureReasons,
     syncStatus,
     enqueue,
     triggerSync,

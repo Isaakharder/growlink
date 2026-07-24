@@ -9,6 +9,7 @@ type CleaningTaskResponseType = "checkbox" | "number" | "short_text" | "long_tex
 const FREQUENCY_VALUES: CleaningLocationFrequency[] = ["daily", "weekly", "monthly", "annually"];
 const RESPONSE_TYPE_VALUES: CleaningTaskResponseType[] = ["checkbox", "number", "short_text", "long_text"];
 const MAX_NOTES_LENGTH = 2000;
+const MAX_MOBILE_INSTRUCTIONS_LENGTH = 1000;
 
 type CleaningTaskPayload = {
   name: string;
@@ -21,6 +22,7 @@ type CleaningLocationPayload = {
   area: string;
   frequency: CleaningLocationFrequency;
   notes: string | null;
+  mobileInstructions: string | null;
   tasks: CleaningTaskPayload[];
 };
 
@@ -51,6 +53,12 @@ function validatePayload(input: unknown): CleaningLocationPayload {
     throw new Error(`Notes cannot exceed ${MAX_NOTES_LENGTH} characters`);
   }
   const notes = rawNotes.length > 0 ? rawNotes : null;
+
+  const rawMobileInstructions = typeof body.mobileInstructions === "string" ? body.mobileInstructions.trim() : "";
+  if (rawMobileInstructions.length > MAX_MOBILE_INSTRUCTIONS_LENGTH) {
+    throw new Error(`Mobile instructions cannot exceed ${MAX_MOBILE_INSTRUCTIONS_LENGTH} characters`);
+  }
+  const mobileInstructions = rawMobileInstructions.length > 0 ? rawMobileInstructions : null;
 
   if (!Array.isArray(body.tasks) || body.tasks.length === 0) {
     throw new Error("At least one cleaning task is required");
@@ -89,7 +97,7 @@ function validatePayload(input: unknown): CleaningLocationPayload {
     };
   });
 
-  return { name, area, frequency: frequency as CleaningLocationFrequency, notes, tasks };
+  return { name, area, frequency: frequency as CleaningLocationFrequency, notes, mobileInstructions, tasks };
 }
 
 const cleaningLocationsRouter = Router();
@@ -144,6 +152,7 @@ cleaningLocationsRouter.post("/food-safety/cleaning-locations", canEdit, async (
       area: payload.area,
       frequency: payload.frequency,
       notes: payload.notes,
+      mobile_instructions: payload.mobileInstructions,
       created_by: req.userId ?? null
     })
     .select("*")
@@ -198,6 +207,7 @@ cleaningLocationsRouter.put("/food-safety/cleaning-locations/:id", canEdit, asyn
       area: payload.area,
       frequency: payload.frequency,
       notes: payload.notes,
+      mobile_instructions: payload.mobileInstructions,
       updated_at: new Date().toISOString()
     })
     .eq("id", id)

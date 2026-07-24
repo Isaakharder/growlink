@@ -4703,6 +4703,44 @@ body {
   font-family: inherit;
 }
 
+.cleaning-location-mobile-instructions-field {
+  grid-column: 1 / -1;
+}
+
+.cleaning-location-mobile-instructions-field textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.cleaning-location-mobile-instructions-counter {
+  align-self: flex-end;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.cleaning-location-card-mobile-instructions {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.cleaning-location-card-mobile-instructions-label {
+  display: block;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.7rem;
+  margin-bottom: 0.15rem;
+}
+
+.cleaning-location-card-mobile-instructions p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .cleaning-tasks-section {
   grid-column: 1 / -1;
   margin-top: 0.4rem;
@@ -4884,6 +4922,78 @@ body {
   color: var(--text-muted);
 }
 
+.cleaning-checklist-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.cleaning-checklist-header-row h2 {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cleaning-checklist-header-date {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: right;
+  white-space: nowrap;
+  /* Deliberately not clickable-looking (no pointer cursor, underline, border,
+     background, or icon) -- it's a hidden long-press control, not a visible
+     button. Also suppresses the native long-press text-selection/callout
+     that would otherwise interrupt the 3-second press gesture on mobile. */
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  outline-offset: 2px;
+}
+
+.cleaning-checklist-backdate-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.cleaning-checklist-return-today-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--brand);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cleaning-checklist-date-picker-modal {
+  width: min(360px, 100%);
+}
+
+.cleaning-checklist-date-picker-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.cleaning-checklist-date-picker-field input[type="date"] {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .cleaning-checklist-card-progress {
   font-size: 0.88rem;
   color: var(--text);
@@ -4966,6 +5076,32 @@ body {
   font-weight: 500;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.cleaning-checklist-instructions-panel {
+  margin: 0.6rem 0 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.cleaning-checklist-instructions-panel h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.cleaning-checklist-instructions-panel p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .cleaning-checklist-task-list {

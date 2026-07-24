@@ -4,7 +4,7 @@ import { supabase } from "../../config/supabase";
 import { sendSafeError } from "../../utils/safeError";
 import { requirePermission } from "../../middleware/requirePermission";
 import { resolveActor } from "./services/actorIdentity";
-import { computePeriodKey } from "./services/checklistPeriod";
+import { todayInOrgTimezone } from "./services/checklistPeriod";
 import { DEFAULT_ORG_TIMEZONE } from "../../config/orgTimezone";
 import {
   buildColumns,
@@ -50,10 +50,6 @@ type BackfillRequestBody = {
 
 function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
-function todayInOrgTimezone(): string {
-  return computePeriodKey("daily", new Date(), DEFAULT_ORG_TIMEZONE);
 }
 
 function validateBody(input: unknown): BackfillRequestBody {

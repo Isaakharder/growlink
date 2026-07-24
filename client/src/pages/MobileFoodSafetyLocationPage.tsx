@@ -1,8 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { apiFetch, apiUrl } from "../lib/api";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { enqueue, onQueueChange } from "../services/offlineQueue";
+import { ModalOverlay } from "../components/ModalOverlay";
+
+// How far back a worker may backdate a checklist completion via the
+// long-press date selector below — mirrors MAX_BACKDATE_DAYS in
+// server/src/routes/foodSafety/services/reportDate.ts, which is the
+// authoritative check (this constant only drives the date picker's min
+// bound; the server re-validates every request regardless of what the
+// client sends).
+const MAX_BACKDATE_DAYS = 300;
+const LONG_PRESS_MS = 3000;
 
 type ChecklistFrequency = "daily" | "weekly" | "monthly" | "annually";
 type ChecklistResponseType = "checkbox" | "number" | "short_text" | "long_text";
@@ -26,6 +36,7 @@ type LocationCard = {
   id: string;
   name: string;
   area: string;
+  mobileInstructions: string | null;
   isComplete: boolean;
   completedAt: string | null;
   completedByName: string | null;
@@ -34,6 +45,48 @@ type LocationCard = {
 };
 
 const API_BASE = apiUrl("/api/food-safety/mobile/cleaning-checklist");
+
+// Local calendar-day helpers for the report-date long-press selector. These
+// intentionally use the device's own local calendar day (not the
+// organization timezone the server anchors to) -- the server re-validates
+// every request from scratch (see reportDate.ts's "never trust the client
+// date"), so the client's date is only ever a UX convenience, never trusted.
+function todayDateString(): string {
+  return dateToLocalIsoString(new Date());
+}
+
+function dateToLocalIsoString(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// Parses a plain "YYYY-MM-DD" string as a LOCAL calendar date (never via
+// `new Date(isoString)`, which parses as UTC midnight and can land on the
+// wrong day once shifted back to local time).
+function parseLocalIsoDate(dateStr: string): Date {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function minSelectableDateString(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - MAX_BACKDATE_DAYS);
+  return dateToLocalIsoString(d);
+}
+
+// "Jul 24, 2026" -- the visible short format. Locale pinned to en-US so the
+// format is guaranteed regardless of the device's regional settings (locale
+// only affects punctuation/ordering, never the timezone).
+function formatDisplayDate(dateStr: string): string {
+  return parseLocalIsoDate(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// "July 24, 2026" -- the long format used only in the accessible label.
+function formatDisplayDateLong(dateStr: string): string {
+  return parseLocalIsoDate(dateStr).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
 
 function formatCompletedAt(iso: string): string {
   const date = new Date(iso);
@@ -86,8 +139,34 @@ export function MobileFoodSafetyLocationPage() {
   const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(new Set());
   const [completing, setCompleting] = useState(false);
 
+  // The report date this location's checklist is being filled out for --
+  // defaults to today. Changed only via the hidden long-press date selector.
+  const [reportDate, setReportDate] = useState<string>(todayDateString);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerValue, setPickerValue] = useState<string>(reportDate);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  // Set when a NEWLY selected date is rejected by the server (already
+  // reported, or a bounds violation the client's own check somehow missed).
+  // Deliberately separate from `error` -- a rejected selection triggers an
+  // automatic rollback-and-refetch of the last good date below, and that
+  // refetch's own success would otherwise clear `error` before the user had
+  // a chance to read why their selection didn't apply.
+  const [dateSelectionError, setDateSelectionError] = useState<string | null>(null);
+
   const isOnlineRef = useRef(isOnline);
   isOnlineRef.current = isOnline;
+
+  // The reportDate that `location` actually reflects (i.e. the last one that
+  // successfully loaded). Used to roll back a rejected date selection (future/
+  // too-old/already-reported) without leaving the header claiming to show a
+  // date whose checklist failed to load.
+  const activeReportDateRef = useRef(reportDate);
+
+  // The date-control element that opens the picker, so focus can be
+  // restored to it whenever the picker closes (Cancel, Escape, backdrop, or
+  // a successful "Use Selected Date").
+  const dateTriggerRef = useRef<HTMLSpanElement | null>(null);
+  const pressTimerRef = useRef<number | null>(null);
 
   // Guards against an older fetchLocation() call (superseded by a newer one
   // from a fast location-to-location navigation, an offline-queue resync, or
@@ -100,6 +179,8 @@ export function MobileFoodSafetyLocationPage() {
   async function fetchLocation() {
     if (!locationId) return;
 
+    const requestedDate = reportDate;
+
     fetchAbortRef.current?.abort();
     const controller = new AbortController();
     fetchAbortRef.current = controller;
@@ -108,19 +189,34 @@ export function MobileFoodSafetyLocationPage() {
     setError(null);
 
     try {
-      const res = await apiFetch(`${API_BASE}?locationId=${encodeURIComponent(locationId)}`, {
-        signal: controller.signal
-      });
+      const url = `${API_BASE}?locationId=${encodeURIComponent(locationId)}&reportDate=${encodeURIComponent(requestedDate)}`;
+      const res = await apiFetch(url, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      if (!res.ok) throw new Error("Failed to load this location's checklist");
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to load this location's checklist");
+      }
       const data = (await res.json()) as { locations: LocationCard[] };
       if (controller.signal.aborted) return;
       setLocation(data.locations?.[0] ?? null);
       setCheckboxOverrides({});
       setQueuedItemIds(new Set());
+      activeReportDateRef.current = requestedDate;
     } catch (err) {
       if (controller.signal.aborted) return;
-      setError(err instanceof Error ? err.message : "Failed to load this location's checklist");
+      const message = err instanceof Error ? err.message : "Failed to load this location's checklist";
+
+      if (requestedDate !== activeReportDateRef.current) {
+        // A rejected NEW date selection -- surface this durably (see
+        // dateSelectionError's definition) and roll back to the last date
+        // that actually loaded successfully. The currently-displayed
+        // `location` data (still valid for the rolled-back date) is left
+        // untouched.
+        setDateSelectionError(message);
+        setReportDate(activeReportDateRef.current);
+      } else {
+        setError(message);
+      }
     } finally {
       // Only the still-current request gets to clear the loading flag --
       // an older, already-superseded request's finally block must not hide
@@ -137,14 +233,22 @@ export function MobileFoodSafetyLocationPage() {
       fetchAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId]);
+  }, [locationId, reportDate]);
 
   useEffect(() => {
     return onQueueChange(() => {
       if (isOnlineRef.current) void fetchLocation();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId]);
+  }, [locationId, reportDate]);
+
+  useEffect(() => {
+    return () => {
+      if (pressTimerRef.current !== null) {
+        window.clearTimeout(pressTimerRef.current);
+      }
+    };
+  }, []);
 
   async function submitResponse(itemId: string, url: string, body: string) {
     if (pendingItemIds.has(itemId)) return;
@@ -213,7 +317,7 @@ export function MobileFoodSafetyLocationPage() {
     setCheckboxOverrides((prev) => ({ ...prev, [itemId]: nextValue }));
 
     const url = `${API_BASE}/items/${itemId}/${nextValue ? "check" : "uncheck"}`;
-    await submitResponse(itemId, url, "{}");
+    await submitResponse(itemId, url, JSON.stringify({ reportDate }));
     // Deliberately no override-clearing here anymore -- submitResponse
     // itself decides, based on the real outcome (server-confirmed vs.
     // queued vs. failed), whether the optimistic value should be kept.
@@ -225,7 +329,7 @@ export function MobileFoodSafetyLocationPage() {
 
   async function saveDraft(itemId: string, value: string) {
     const url = `${API_BASE}/items/${itemId}/respond`;
-    await submitResponse(itemId, url, JSON.stringify({ value }));
+    await submitResponse(itemId, url, JSON.stringify({ value, reportDate }));
   }
 
   async function handleCompleteLocation() {
@@ -235,19 +339,20 @@ export function MobileFoodSafetyLocationPage() {
     setCompleting(true);
 
     const url = `${API_BASE}/locations/${location.id}/complete`;
+    const body = JSON.stringify({ reportDate });
 
     try {
       if (!isOnline) {
-        await enqueue({ module: "food_safety", url, method: "POST", body: "{}" });
+        await enqueue({ module: "food_safety", url, method: "POST", body });
         setInfoMessage("Saved offline — will complete once connected.");
         return;
       }
 
-      const res = await apiFetch(url, { method: "POST", body: "{}" });
+      const res = await apiFetch(url, { method: "POST", body });
 
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { message?: string } | null;
-        throw new Error(body?.message ?? "Failed to complete this location");
+        const errorBody = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(errorBody?.message ?? "Failed to complete this location");
       }
 
       const data = (await res.json()) as { location: LocationCard | null };
@@ -257,6 +362,73 @@ export function MobileFoodSafetyLocationPage() {
     } finally {
       setCompleting(false);
     }
+  }
+
+  function startPressTimer() {
+    if (pressTimerRef.current !== null) return; // already timing -- ignore a duplicate start
+    pressTimerRef.current = window.setTimeout(() => {
+      pressTimerRef.current = null;
+      openPicker();
+    }, LONG_PRESS_MS);
+  }
+
+  function cancelPressTimer() {
+    if (pressTimerRef.current !== null) {
+      window.clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  }
+
+  function handleDatePointerDown(event: PointerEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    startPressTimer();
+  }
+
+  function handleDateKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
+    if ((event.key === "Enter" || event.key === " ") && !event.repeat) {
+      event.preventDefault();
+      startPressTimer();
+    }
+  }
+
+  function handleDateKeyUp(event: KeyboardEvent<HTMLSpanElement>) {
+    if (event.key === "Enter" || event.key === " ") {
+      cancelPressTimer();
+    }
+  }
+
+  function openPicker() {
+    setPickerValue(reportDate);
+    setPickerError(null);
+    setDateSelectionError(null);
+    setPickerOpen(true);
+  }
+
+  function closePicker() {
+    setPickerOpen(false);
+    dateTriggerRef.current?.focus();
+  }
+
+  function confirmPicker() {
+    const min = minSelectableDateString();
+    const max = todayDateString();
+    if (pickerValue > max) {
+      setPickerError("Report date cannot be in the future.");
+      return;
+    }
+    if (pickerValue < min) {
+      setPickerError(`Report date cannot be more than ${MAX_BACKDATE_DAYS} days in the past.`);
+      return;
+    }
+    setDateSelectionError(null);
+    setReportDate(pickerValue);
+    setPickerOpen(false);
+    dateTriggerRef.current?.focus();
+  }
+
+  function returnToToday() {
+    setDateSelectionError(null);
+    setReportDate(todayDateString());
   }
 
   if (loading) {
@@ -291,11 +463,47 @@ export function MobileFoodSafetyLocationPage() {
         ‹ Food Safety
       </Link>
 
-      <h2>{location.name}</h2>
+      <div className="cleaning-checklist-header-row">
+        <h2>{location.name}</h2>
+        <span
+          ref={dateTriggerRef}
+          className="cleaning-checklist-header-date"
+          role="button"
+          tabIndex={0}
+          aria-label={`Current report date ${formatDisplayDateLong(reportDate)}. Press and hold for three seconds to choose another reporting date.`}
+          onPointerDown={handleDatePointerDown}
+          onPointerUp={cancelPressTimer}
+          onPointerLeave={cancelPressTimer}
+          onPointerCancel={cancelPressTimer}
+          onKeyDown={handleDateKeyDown}
+          onKeyUp={handleDateKeyUp}
+        >
+          {formatDisplayDate(reportDate)}
+        </span>
+      </div>
+
+      {reportDate !== todayDateString() ? (
+        <div className="cleaning-checklist-backdate-notice">
+          <span>Logging for: {formatDisplayDate(reportDate)}</span>
+          <button type="button" className="cleaning-checklist-return-today-link" onClick={returnToToday}>
+            Return to Today
+          </button>
+        </div>
+      ) : null}
+
+      {dateSelectionError ? <p className="form-error">{dateSelectionError}</p> : null}
+
       <p className="cleaning-checklist-card-area">{location.area}</p>
       <p className="cleaning-checklist-card-progress">
         {completedCount} of {total} complete
       </p>
+
+      {location.mobileInstructions ? (
+        <div className="cleaning-checklist-instructions-panel">
+          <h3>Instructions</h3>
+          <p>{location.mobileInstructions}</p>
+        </div>
+      ) : null}
 
       {error ? <p className="form-error">{error}</p> : null}
       {infoMessage ? <p className="form-success">{infoMessage}</p> : null}
@@ -418,6 +626,38 @@ export function MobileFoodSafetyLocationPage() {
             {completing ? "Completing…" : "Complete Location"}
           </button>
         </div>
+      ) : null}
+
+      {pickerOpen ? (
+        <ModalOverlay
+          onClose={closePicker}
+          contentClassName="cleaning-checklist-date-picker-modal"
+          titleId="report-date-picker-title"
+        >
+          <h3 id="report-date-picker-title">Choose Reporting Date</h3>
+          <label className="cleaning-checklist-date-picker-field">
+            Reporting date
+            <input
+              type="date"
+              value={pickerValue}
+              min={minSelectableDateString()}
+              max={todayDateString()}
+              onChange={(event) => {
+                setPickerValue(event.target.value);
+                setPickerError(null);
+              }}
+            />
+          </label>
+          {pickerError ? <p className="form-error">{pickerError}</p> : null}
+          <div className="form-actions">
+            <button type="button" onClick={confirmPicker}>
+              Use Selected Date
+            </button>
+            <button type="button" className="secondary" onClick={closePicker}>
+              Cancel
+            </button>
+          </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

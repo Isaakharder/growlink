@@ -1,6 +1,8 @@
 import { supabase } from "../../../config/supabase";
 import { getCurrentChecklistsForLocation } from "./currentChecklists";
-import type { ChecklistPeriodType } from "./checklistPeriod";
+import { computePeriodKey, todayInOrgTimezone, type ChecklistPeriodType } from "./checklistPeriod";
+import { DEFAULT_ORG_TIMEZONE } from "../../../config/orgTimezone";
+import { getZonedParts, zonedTimeToUtc } from "../../../utils/zonedTime";
 
 type ItemRow = {
   checklist_id: string;
@@ -16,6 +18,35 @@ type ItemRow = {
   checked_by_initials: string | null;
 };
 
+// The exact set of period_signature values that would collide with a report
+// for `dailyDateKey`/`periodKey`/`frequency` — covers both the live-completion
+// path's own format ("{frequency}:{periodKey}") and the unrelated admin
+// backfill path's format ("backfill:YYYY-MM-DD", see migration 0095 and
+// backfill.ts) so a day already reported via EITHER path is caught. Exported
+// for the mobile route to pre-check before letting a worker start filling out
+// a backdated day that's already been reported.
+export async function reportAlreadyExistsForPeriod(
+  organizationId: string,
+  locationId: string,
+  frequency: ChecklistPeriodType,
+  periodKey: string,
+  dailyDateKey: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("food_safety_cleaning_reports")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("location_id", locationId)
+    .in("period_signature", [`${frequency}:${periodKey}`, `backfill:${dailyDateKey}`])
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []).length > 0;
+}
+
 // Called after "Complete Location" succeeds. If the location's entire
 // current-period set of checklists (across every frequency currently in use
 // there) is now complete, creates one immutable report row plus its task
@@ -24,7 +55,25 @@ type ItemRow = {
 // idempotent, and this is a no-op whenever the location isn't fully
 // complete. Never throws — a failure here must never break the
 // complete-location response it runs alongside.
-export async function maybeCreateReport(organizationId: string, locationId: string): Promise<void> {
+//
+// referenceDate, when given, is the mobile long-press date selector's chosen
+// report date (see MobileFoodSafetyLocationPage.tsx / reportDate.ts) — undefined
+// means "today", the ordinary live-completion case, and changes nothing below.
+// When it names a different calendar day than today (org timezone), the
+// report is being backdated: completed_at is set to that selected day (at
+// the real current time-of-day) so the report reads as belonging to the day
+// it's FOR, while generated_at/generated_by_user_id separately preserve the
+// real moment and actor of this actual submission — the same
+// report-date-vs-actual-submission split migration 0095 already established
+// for admin backfills, just with a real (not random) time-of-day since a
+// genuine completion event just happened. Nothing is faked: completed_at
+// truthfully reads as "this day, around this time", and generated_at
+// truthfully preserves exactly when the submission really occurred.
+export async function maybeCreateReport(
+  organizationId: string,
+  locationId: string,
+  referenceDate?: Date
+): Promise<void> {
   try {
     const { data: location, error: locationError } = await supabase
       .from("food_safety_cleaning_locations")
@@ -35,7 +84,7 @@ export async function maybeCreateReport(organizationId: string, locationId: stri
 
     if (locationError || !location) return;
 
-    const currentChecklists = await getCurrentChecklistsForLocation(organizationId, locationId);
+    const currentChecklists = await getCurrentChecklistsForLocation(organizationId, locationId, referenceDate);
 
     // No currently-due checklists, or at least one still incomplete — the
     // location isn't fully done yet, nothing to report.
@@ -64,6 +113,21 @@ export async function maybeCreateReport(organizationId: string, locationId: stri
 
     if (itemsError || !items) return;
 
+    let completedAt = lastCompleted?.completed_at ?? new Date().toISOString();
+    let generatedAt: string | null = null;
+    let generatedByUserId: string | null = null;
+
+    if (referenceDate) {
+      const targetDailyKey = computePeriodKey("daily", referenceDate, DEFAULT_ORG_TIMEZONE);
+      if (targetDailyKey !== todayInOrgTimezone(DEFAULT_ORG_TIMEZONE)) {
+        const realNow = getZonedParts(new Date(), DEFAULT_ORG_TIMEZONE);
+        const [year, month, day] = targetDailyKey.split("-").map(Number);
+        completedAt = zonedTimeToUtc(year, month, day, realNow.hour, realNow.minute, DEFAULT_ORG_TIMEZONE).toISOString();
+        generatedAt = new Date().toISOString();
+        generatedByUserId = lastCompleted?.completed_by_user_id ?? null;
+      }
+    }
+
     const { data: insertedReports, error: reportError } = await supabase
       .from("food_safety_cleaning_reports")
       .upsert(
@@ -74,10 +138,12 @@ export async function maybeCreateReport(organizationId: string, locationId: stri
           location_area_snapshot: location.area,
           period_signature: periodSignature,
           task_count: items.length,
-          completed_at: lastCompleted?.completed_at ?? new Date().toISOString(),
+          completed_at: completedAt,
           completed_by_user_id: lastCompleted?.completed_by_user_id ?? null,
           completed_by_name: lastCompleted?.completed_by_name ?? "Unknown",
-          completed_by_initials: lastCompleted?.completed_by_initials ?? "—"
+          completed_by_initials: lastCompleted?.completed_by_initials ?? "—",
+          generated_at: generatedAt,
+          generated_by_user_id: generatedByUserId
         },
         { onConflict: "location_id,period_signature", ignoreDuplicates: true }
       )
