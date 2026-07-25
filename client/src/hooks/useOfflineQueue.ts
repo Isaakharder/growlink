@@ -3,7 +3,7 @@ import {
   enqueue as dbEnqueue,
   syncQueue,
   getQueueCounts,
-  getAllItems,
+  getVisibleItems,
   onQueueChange,
   clearFailed,
   type QueueItem,
@@ -45,7 +45,7 @@ export function useOfflineQueue(): OfflineQueueHook {
       setQueueFailed(counts.failed);
 
       if (counts.failed > 0) {
-        const items = await getAllItems();
+        const items = await getVisibleItems();
         const reasons = Array.from(
           new Set(items.filter((i) => i.status === "failed" && i.failureReason).map((i) => i.failureReason as string))
         );

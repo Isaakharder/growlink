@@ -1,5 +1,8 @@
 import { type CSSProperties, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { useMembership } from "../contexts/MembershipContext";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -13,9 +16,16 @@ type Employee = {
 // ── component ─────────────────────────────────────────────────────────────────
 
 export function MobilePayrollPage() {
+  const navigate = useNavigate();
+  const { role, permissions } = useMembership();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Distinct from `error` (used by handleClockAction on the detail screen)
+  // -- specifically whether the initial employee-list load failed, so
+  // "No active employees found" is never shown as if it were a genuine
+  // empty result when the request actually failed.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [acting, setActing] = useState(false);
 
@@ -23,19 +33,31 @@ export function MobilePayrollPage() {
     void loadEmployees();
   }, []);
 
+  // Session expired or permissions changed while this page was open -- leave
+  // immediately for the user's normal authorized landing page rather than
+  // get stuck showing a load error. Same pattern as
+  // MobileIrrigationLogPage.tsx's fetchLogData().
+  function redirectUnauthorized() {
+    navigate(getDefaultRoute(role, permissions), { replace: true });
+  }
+
   async function loadEmployees() {
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     try {
       const res = await apiFetch("/api/payroll/employees");
+      if (res.status === 401 || res.status === 403) {
+        redirectUnauthorized();
+        return;
+      }
       const body = (await res.json().catch(() => ({}))) as { employees?: Employee[]; message?: string };
       if (!res.ok) {
-        setError(body.message ?? "Failed to load employees.");
+        setLoadError(body.message ?? "Unable to load employees. Please check your connection and try again.");
         return;
       }
       setEmployees((body.employees ?? []).filter((e) => e.active));
     } catch {
-      setError("Network error. Please try again.");
+      setLoadError("Unable to load employees. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -108,6 +130,13 @@ export function MobilePayrollPage() {
 
       {loading ? (
         <p style={mutedStyle}>Loading…</p>
+      ) : loadError ? (
+        <div>
+          <p style={errorStyle}>{loadError}</p>
+          <button type="button" onClick={() => void loadEmployees()}>
+            Retry
+          </button>
+        </div>
       ) : employees.length === 0 ? (
         <p style={mutedStyle}>No active employees found. Ask your manager to add you in the Payroll settings.</p>
       ) : (

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { enqueue } from "../services/offlineQueue";
+import { useMembership } from "../contexts/MembershipContext";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 type CheckType = "winding_pruning" | "picking_peppers";
 
@@ -74,12 +77,19 @@ function safeNum(v: unknown): number {
 
 export function MobileQualityCheckPage() {
   const { isOnline } = useOnlineStatus();
+  const navigate = useNavigate();
+  const { role, permissions } = useMembership();
   const [groups, setGroups] = useState<SetupGroup[]>([]);
   const [allRows, setAllRows] = useState<SetupRow[]>([]);
   const [employees, setEmployees] = useState<QualityEmployee[]>([]);
   const [metrics, setMetrics] = useState<QualityMetric[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Distinct from `error` (used by handleSave below) -- specifically
+  // whether the initial setup/employees/metrics/checks load failed, so
+  // "No active phases"/"No active employees"/etc. are never shown as if
+  // they were a genuine empty result when the request actually failed.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Selection state
   const [checkType, setCheckType] = useState<CheckType | "">("");
@@ -99,39 +109,58 @@ export function MobileQualityCheckPage() {
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState("");
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const [setupRes, empRes, metRes, chkRes] = await Promise.all([
-          apiFetch("/api/greenhouse-setup"),
-          apiFetch("/api/quality/employees"),
-          apiFetch("/api/quality/metrics"),
-          apiFetch("/api/quality/checks")
-        ]);
-        if (!setupRes.ok || !empRes.ok || !metRes.ok || !chkRes.ok) {
-          throw new Error("Failed to load data");
-        }
-        const setupData = (await setupRes.json()) as { groups: SetupGroup[]; rows: SetupRow[] };
-        const empData = (await empRes.json()) as QualityEmployee[];
-        const metData = (await metRes.json()) as QualityMetric[];
-        const chkData = (await chkRes.json()) as QualityCheck[];
+  // Session expired or permissions changed while this page was open -- leave
+  // immediately for the user's normal authorized landing page rather than
+  // get stuck showing a load error. Same pattern as
+  // MobileIrrigationLogPage.tsx's fetchLogData().
+  function redirectUnauthorized() {
+    navigate(getDefaultRoute(role, permissions), { replace: true });
+  }
 
-        setGroups(setupData.groups ?? []);
-        setAllRows(setupData.rows ?? []);
-        setEmployees(empData);
-        setMetrics(metData.filter((m) => m.active));
+  async function load() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [setupRes, empRes, metRes, chkRes] = await Promise.all([
+        apiFetch("/api/greenhouse-setup"),
+        apiFetch("/api/quality/employees"),
+        apiFetch("/api/quality/metrics"),
+        apiFetch("/api/quality/checks")
+      ]);
 
-        const now = new Date();
-        setWeekChecks(chkData.filter((c) => isSameISOWeek(new Date(c.checked_at), now)));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load data");
-      } finally {
-        setLoading(false);
+      const unauthorizedRes = [setupRes, empRes, metRes, chkRes].find(
+        (res) => res.status === 401 || res.status === 403
+      );
+      if (unauthorizedRes) {
+        redirectUnauthorized();
+        return;
       }
+
+      if (!setupRes.ok || !empRes.ok || !metRes.ok || !chkRes.ok) {
+        throw new Error("Failed to load data");
+      }
+      const setupData = (await setupRes.json()) as { groups: SetupGroup[]; rows: SetupRow[] };
+      const empData = (await empRes.json()) as QualityEmployee[];
+      const metData = (await metRes.json()) as QualityMetric[];
+      const chkData = (await chkRes.json()) as QualityCheck[];
+
+      setGroups(setupData.groups ?? []);
+      setAllRows(setupData.rows ?? []);
+      setEmployees(empData);
+      setMetrics(metData.filter((m) => m.active));
+
+      const now = new Date();
+      setWeekChecks(chkData.filter((c) => isSameISOWeek(new Date(c.checked_at), now)));
+    } catch {
+      setLoadError("Unable to load quality check data. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
     }
+  }
+
+  useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const phases = useMemo(
@@ -303,6 +332,20 @@ export function MobileQualityCheckPage() {
       <section className="mobile-page">
         <h2>Quality Check</h2>
         <p>Loading…</p>
+      </section>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <section className="mobile-page">
+        <h2>Quality Check</h2>
+        <div className="mobile-yield-card">
+          <p className="form-error" style={{ margin: 0 }}>{loadError}</p>
+          <button type="button" style={{ marginTop: "0.6rem" }} onClick={() => void load()}>
+            Retry
+          </button>
+        </div>
       </section>
     );
   }

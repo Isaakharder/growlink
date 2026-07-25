@@ -1,7 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { enqueue } from "../services/offlineQueue";
+import { useMembership } from "../contexts/MembershipContext";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 type GroupType = "phase" | "zone" | "color";
 
@@ -47,6 +50,20 @@ type IrrigationLogResponse = {
   tracking_mode: GroupType | null;
   groups: IrrigationLogGroup[];
 };
+
+// A single discriminated state instead of separate loading/error/groups
+// booleans+arrays -- structurally guarantees only one of loading/loaded/error
+// is ever "current" at once, so a failed or in-flight request can never be
+// mistaken for a genuine zero-groups response (the bug this replaces: groups
+// previously stayed [] on error, which the empty-state card couldn't tell
+// apart from a real empty setup).
+type PageState =
+  | { status: "loading" }
+  | { status: "loaded"; trackingMode: GroupType | null; groups: IrrigationLogGroup[] }
+  | { status: "error"; message: string };
+
+const LOAD_ERROR_MESSAGE = "Unable to load irrigation groups. Please check your connection and try again.";
+const EMPTY_SETUP_MESSAGE = "No active irrigation groups have been set up yet.";
 
 type GroupDraft = {
   feed_ph: string;
@@ -161,12 +178,18 @@ function formatMetric(value: number | null, decimals = 2) {
 
 export function MobileIrrigationLogPage() {
   const { isOnline } = useOnlineStatus();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [trackingMode, setTrackingMode] = useState<GroupType | null>(null);
+  const navigate = useNavigate();
+  const { role, permissions } = useMembership();
+  const [pageState, setPageState] = useState<PageState>({ status: "loading" });
+  // Save-time errors (validation, PUT failures) are a distinct concern from
+  // the page's load state above -- kept separate so a save error can never
+  // be confused with (or hide/be hidden by) the load error/empty states.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [logDate, setLogDate] = useState(() => toDateString(new Date()));
-  const [groups, setGroups] = useState<IrrigationLogGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState("");
+
+  const groups = pageState.status === "loaded" ? pageState.groups : [];
+  const trackingMode = pageState.status === "loaded" ? pageState.trackingMode : null;
   const [draft, setDraft] = useState<GroupDraft>({
     feed_ph: "",
     feed_ec: "",
@@ -285,42 +308,50 @@ export function MobileIrrigationLogPage() {
     };
   }
 
-  useEffect(() => {
-    async function fetchLogData() {
-      setLoading(true);
-      setError(null);
+  async function fetchLogData() {
+    setPageState({ status: "loading" });
 
-      try {
-        const params = new URLSearchParams({ log_date: logDate });
-        const response = await apiFetch(`${IRRIGATION_LOG_URL}?${params.toString()}`);
+    try {
+      const params = new URLSearchParams({ log_date: logDate });
+      const response = await apiFetch(`${IRRIGATION_LOG_URL}?${params.toString()}`);
 
-        if (!response.ok) {
-          const body = (await response.json().catch(() => null)) as { message?: string } | null;
-          throw new Error(body?.message ?? `Failed to load irrigation log (${response.status})`);
+      if (response.status === 401 || response.status === 403) {
+        // Permissions changed (or the session expired) while this page was
+        // open. Never show stale groups or the empty-state card here --
+        // clear to a neutral loading state and leave immediately for the
+        // user's normal authorized landing page (there is no permissions
+        // refetch/invalidation mechanism in this app yet to attempt instead
+        // -- see MembershipContext.tsx).
+        setPageState({ status: "loading" });
+        navigate(getDefaultRoute(role, permissions), { replace: true });
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("request-failed");
+      }
+
+      const data = (await response.json()) as IrrigationLogResponse;
+      const nextGroups = data.groups ?? [];
+
+      setPageState({ status: "loaded", trackingMode: data.tracking_mode ?? null, groups: nextGroups });
+
+      setSelectedGroupId((current) => {
+        if (current && nextGroups.some((group) => group.id === current)) {
+          return current;
         }
 
-        const data = (await response.json()) as IrrigationLogResponse;
-
-        setTrackingMode(data.tracking_mode ?? null);
-        const nextGroups = data.groups ?? [];
-        setGroups(nextGroups);
-
-        setSelectedGroupId((current) => {
-          if (current && nextGroups.some((group) => group.id === current)) {
-            return current;
-          }
-
-          return nextGroups[0]?.id ?? "";
-        });
-        setSavedMessage("");
-      } catch (fetchError) {
-        setError(fetchError instanceof Error ? fetchError.message : "Failed to load irrigation log");
-      } finally {
-        setLoading(false);
-      }
+        return nextGroups[0]?.id ?? "";
+      });
+      setSavedMessage("");
+    } catch {
+      setPageState({ status: "error", message: LOAD_ERROR_MESSAGE });
     }
+  }
 
+  useEffect(() => {
     void fetchLogData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logDate]);
 
   useEffect(() => {
@@ -342,15 +373,15 @@ export function MobileIrrigationLogPage() {
 
   async function saveGroupLog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
+    setSaveError(null);
 
     if (!trackingMode) {
-      setError("No irrigation tracking mode is configured yet.");
+      setSaveError("No irrigation tracking mode is configured yet.");
       return;
     }
 
     if (!selectedGroup) {
-      setError("Please select a tracking group.");
+      setSaveError("Please select a tracking group.");
       return;
     }
 
@@ -365,7 +396,7 @@ export function MobileIrrigationLogPage() {
       drainPh = parseOptionalNonNegativeNumber(draft.drain_ph, "Drain pH");
       drainEc = parseOptionalNonNegativeNumber(draft.drain_ec, "Drain EC");
     } catch (parseError) {
-      setError(parseError instanceof Error ? parseError.message : "Invalid irrigation value");
+      setSaveError(parseError instanceof Error ? parseError.message : "Invalid irrigation value");
       return;
     }
 
@@ -393,7 +424,7 @@ export function MobileIrrigationLogPage() {
         };
       });
     } catch (parseError) {
-      setError(parseError instanceof Error ? parseError.message : "Invalid volume value");
+      setSaveError(parseError instanceof Error ? parseError.message : "Invalid volume value");
       return;
     }
 
@@ -438,17 +469,20 @@ export function MobileIrrigationLogPage() {
 
       const saved = (await response.json()) as ExistingLog;
 
-      setGroups((current) =>
-        current.map((entry) =>
-          entry.id === selectedGroup.id
-            ? { ...entry, existingLog: saved }
-            : entry
-        )
+      setPageState((current) =>
+        current.status === "loaded"
+          ? {
+              ...current,
+              groups: current.groups.map((entry) =>
+                entry.id === selectedGroup.id ? { ...entry, existingLog: saved } : entry
+              )
+            }
+          : current
       );
 
       setSavedMessage(`Saved ${selectedGroup.name} for ${logDate}`);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Failed to save irrigation log");
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save irrigation log");
     } finally {
       setSaving(false);
     }
@@ -463,14 +497,27 @@ export function MobileIrrigationLogPage() {
       {trackingModeLabel ? <p>Tracking by {trackingModeLabel}</p> : null}
       <p>Log date: {logDate}</p>
 
-      {error ? <p className="form-error">{error}</p> : null}
-      {loading ? <p>Loading...</p> : null}
+      {/* Exactly one of loading / error / empty-setup / loaded-with-groups
+          renders at a time -- pageState.status is a single discriminant, so
+          none of these branches can ever appear alongside another. */}
+      {pageState.status === "loading" ? <p>Loading...</p> : null}
 
-      {!loading && groups.length === 0 ? (
+      {pageState.status === "error" ? (
         <div className="mobile-yield-card">
-          <p>No active irrigation groups found. Add active groups in Irrigation Setup first.</p>
+          <p className="form-error">{pageState.message}</p>
+          <button type="button" onClick={() => void fetchLogData()}>
+            Retry
+          </button>
         </div>
       ) : null}
+
+      {pageState.status === "loaded" && groups.length === 0 ? (
+        <div className="mobile-yield-card">
+          <p>{EMPTY_SETUP_MESSAGE}</p>
+        </div>
+      ) : null}
+
+      {saveError ? <p className="form-error">{saveError}</p> : null}
 
       {groups.length > 0 ? (
         <article className="mobile-yield-card mobile-irrigation-card">

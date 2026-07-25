@@ -1,4 +1,5 @@
 import { apiFetch } from "../lib/api";
+import { supabase } from "../lib/supabase";
 
 const DB_NAME = "growlink_offline";
 const DB_VERSION = 1;
@@ -16,6 +17,14 @@ export type QueueItem = {
   status: "pending" | "failed";
   failureReason?: string;
   attempts: number;
+  // Who was actually signed in when this action was queued -- captured so a
+  // later sync can refuse to submit it under a DIFFERENT identity. Two
+  // workers can share one device; without this, an action queued by Worker A
+  // could be silently synced under Worker B's session the next time the app
+  // comes online after B logs in. Optional only so old queue rows written
+  // before this field existed don't hard-fail to read -- see
+  // belongsToIdentity below.
+  ownerUserId?: string;
 };
 
 // Dispatched whenever the queue changes so subscribers can refresh counts.
@@ -28,6 +37,29 @@ function notifyChange() {
 export function onQueueChange(handler: () => void): () => void {
   window.addEventListener(QUEUE_CHANGE_EVENT, handler);
   return () => window.removeEventListener(QUEUE_CHANGE_EVENT, handler);
+}
+
+// ── Identity ─────────────────────────────────────────────────────────────────
+
+// Deliberately reads the LOCAL session (no network round-trip), the same
+// way apiFetch() resolves its auth header — unlike supabase.auth.getUser(),
+// which revalidates against the server and therefore fails while offline.
+// Identity tagging has to work precisely while offline, since that's the
+// only time an item sits in the queue at all.
+async function getCurrentUserId(): Promise<string | null> {
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
+  return session?.user?.id ?? null;
+}
+
+// Old queue rows written before ownerUserId existed have it unset --
+// treated as belonging to whoever is currently signed in (the same
+// device/session that queued them, before this fix shipped), not silently
+// hidden or blocked.
+function belongsToCurrentUser(item: QueueItem, currentUserId: string | null): boolean {
+  if (!item.ownerUserId) return true;
+  return item.ownerUserId === currentUserId;
 }
 
 // ── IndexedDB helpers ────────────────────────────────────────────────────────
@@ -68,12 +100,14 @@ function tx<T>(
 export async function enqueue(
   item: Pick<QueueItem, "module" | "url" | "method" | "body">
 ): Promise<QueueItem> {
+  const userId = await getCurrentUserId();
   const db = await openDB();
   const full: QueueItem = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     status: "pending",
     attempts: 0,
+    ownerUserId: userId ?? undefined,
     ...item,
   };
   await tx(db, "readwrite", (store) => store.add(full));
@@ -81,14 +115,25 @@ export async function enqueue(
   return full;
 }
 
+// Every item in IndexedDB, regardless of who queued it -- for diagnostics
+// only. UI-facing code should use getVisibleItems()/getQueueCounts() instead
+// so a shared device never shows or counts another identity's queue.
 export async function getAllItems(): Promise<QueueItem[]> {
   const db = await openDB();
   const items = await tx<QueueItem[]>(db, "readonly", (store) => store.getAll());
   return items.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export async function getQueueCounts(): Promise<{ pending: number; failed: number }> {
+// Items belonging to whoever is currently signed in -- what the UI (badges,
+// counts, failure messages) should always read from.
+export async function getVisibleItems(): Promise<QueueItem[]> {
+  const userId = await getCurrentUserId();
   const items = await getAllItems();
+  return items.filter((item) => belongsToCurrentUser(item, userId));
+}
+
+export async function getQueueCounts(): Promise<{ pending: number; failed: number }> {
+  const items = await getVisibleItems();
   return {
     pending: items.filter((i) => i.status === "pending").length,
     failed: items.filter((i) => i.status === "failed").length,
@@ -102,10 +147,15 @@ export async function syncQueue(): Promise<{ succeeded: number; failed: number }
   let succeeded = 0;
   let failed = 0;
 
+  const userId = await getCurrentUserId();
   const db = await openDB();
   const all = await tx<QueueItem[]>(db, "readonly", (store) => store.getAll());
   const pending = all
     .filter((i) => i.status === "pending")
+    // Never submit another user's queued action under the current session --
+    // it stays untouched in IndexedDB until that original user is signed in
+    // again on this device.
+    .filter((i) => belongsToCurrentUser(i, userId))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   for (const item of pending) {
@@ -140,9 +190,12 @@ export async function syncQueue(): Promise<{ succeeded: number; failed: number }
 }
 
 export async function clearFailed(): Promise<void> {
+  const userId = await getCurrentUserId();
   const db = await openDB();
   const items = await tx<QueueItem[]>(db, "readonly", (store) => store.getAll());
-  const failedIds = items.filter((i) => i.status === "failed").map((i) => i.id);
+  const failedIds = items
+    .filter((i) => i.status === "failed" && belongsToCurrentUser(i, userId))
+    .map((i) => i.id);
   for (const id of failedIds) {
     await tx(db, "readwrite", (store) => store.delete(id));
   }

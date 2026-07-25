@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { enqueue } from "../services/offlineQueue";
+import { useMembership } from "../contexts/MembershipContext";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 // ── Snapshot types ────────────────────────────────────────────────────────────
 
@@ -181,9 +184,16 @@ function formatTime(iso: string): string {
 
 export function MobilePestLogPage() {
   const { isOnline } = useOnlineStatus();
+  const navigate = useNavigate();
+  const { role, permissions } = useMembership();
   const [todos, setTodos] = useState<PestTodo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Distinct from `error` (shared by progress/delete/complete actions below)
+  // -- specifically whether the initial todo list load failed, so "No
+  // pending plans" is never shown as if it were a genuine empty result when
+  // the request actually failed.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
@@ -215,15 +225,27 @@ export function MobilePestLogPage() {
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
+  // Session expired or permissions changed while this page was open -- leave
+  // immediately for the user's normal authorized landing page rather than
+  // get stuck showing a load error. Same pattern as
+  // MobileIrrigationLogPage.tsx's fetchLogData().
+  function redirectUnauthorized() {
+    navigate(getDefaultRoute(role, permissions), { replace: true });
+  }
+
   async function fetchTodos() {
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     try {
       const res = await apiFetch("/api/pest/todos?status=active");
+      if (res.status === 401 || res.status === 403) {
+        redirectUnauthorized();
+        return;
+      }
       if (!res.ok) throw new Error("Failed to load pest log");
       setTodos((await res.json()) as PestTodo[]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load pest log");
+    } catch {
+      setLoadError("Unable to load the pest log. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -293,12 +315,26 @@ export function MobilePestLogPage() {
 
     setLoadingProgress(true);
 
-    apiFetch("/api/greenhouse-setup")
+    // Cancelled below whenever selectedId changes again (a newer plan was
+    // opened) or this page unmounts -- without this, quickly switching
+    // between two never-yet-opened plans could let an older response land
+    // after a newer plan's progress has already been initialized, silently
+    // overwriting it. Same pattern as MobileFoodSafetyLocationPage.tsx.
+    const controller = new AbortController();
+
+    apiFetch("/api/greenhouse-setup", { signal: controller.signal })
       .then((res) => {
+        if (controller.signal.aborted) return null;
+        if (res.status === 401 || res.status === 403) {
+          redirectUnauthorized();
+          return null;
+        }
         if (!res.ok) throw new Error("Failed to load greenhouse rows");
         return res.json() as Promise<{ rows: SetupRow[] }>;
       })
       .then((setupData) => {
+        if (controller.signal.aborted || !setupData) return;
+
         const phases: ProgressPhase[] = groupIds.map((groupId, idx) => {
           const groupRows = (setupData.rows ?? [])
             .filter((r) => r.group_id === groupId)
@@ -324,9 +360,14 @@ export function MobilePestLogPage() {
         void patchProgress(todo.id, newSnap, false);
       })
       .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : "Failed to load rows");
         setLoadingProgress(false);
       });
+
+    return () => {
+      controller.abort();
+    };
   }, [selectedId]);
 
   // ── Progress persistence ───────────────────────────────────────────────────
@@ -1321,9 +1362,18 @@ export function MobilePestLogPage() {
       ) : null}
       {loading ? <p>Loading…</p> : null}
 
+      {!loading && loadError ? (
+        <div className="mobile-yield-card">
+          <p className="form-error" style={{ margin: 0 }}>{loadError}</p>
+          <button type="button" style={{ marginTop: "0.6rem" }} onClick={() => void fetchTodos()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+
       <h3 style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>To Do ({pendingTodos.length})</h3>
 
-      {!loading && pendingTodos.length === 0 ? (
+      {!loading && !loadError && pendingTodos.length === 0 ? (
         <div className="mobile-yield-card">
           <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.88em" }}>
             No pending plans. Use the Pest Control Planner on desktop to create one.

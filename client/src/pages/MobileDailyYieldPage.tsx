@@ -1,7 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { enqueue } from "../services/offlineQueue";
+import { useMembership } from "../contexts/MembershipContext";
+import { getDefaultRoute } from "../utils/getDefaultRoute";
 
 type VarietyOption = {
   id: string;
@@ -156,8 +159,19 @@ function buildLinkedRowsByVariety(rows: MobileOptionsRow[]): Record<string, Link
 
 export function MobileDailyYieldPage() {
   const { isOnline } = useOnlineStatus();
+  const navigate = useNavigate();
+  const { role, permissions } = useMembership();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Distinct from `error` (used by save/validation actions below) --
+  // specifically tracks whether the INITIAL options/settings load failed, so
+  // "no active varieties" (an empty-option render, further down) is never
+  // shown as if it were a genuine empty result when the request actually
+  // failed. See MobileIrrigationLogPage.tsx for the fuller version of this
+  // same fix.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Same distinction for the per-variety saved-samples fetch.
+  const [samplesLoadError, setSamplesLoadError] = useState<string | null>(null);
 
   const [varieties, setVarieties] = useState<VarietyOption[]>([]);
   const [linkedRowsByVarietyId, setLinkedRowsByVarietyId] = useState<
@@ -180,6 +194,7 @@ export function MobileDailyYieldPage() {
   const [casesSectionExpanded, setCasesSectionExpanded] = useState(false);
   const [casesPerBinDraft, setCasesPerBinDraft] = useState("38");
   const [savingCasesPerBin, setSavingCasesPerBin] = useState(false);
+  const [casesPerBinSavedMessage, setCasesPerBinSavedMessage] = useState("");
 
   // Raw weekly samples for every variety — drives the per-color totals card.
   // Keyed by variety_id, values are PersistedSample[] for the current week.
@@ -374,16 +389,29 @@ export function MobileDailyYieldPage() {
       .sort((a, b) => a.color.localeCompare(b.color));
   }, [allWeekSamples, varieties, linkedRowsByVarietyId, kgPerFullBin, kgPerCase, casesPerBin]);
 
-  useEffect(() => {
-    async function fetchData() {
-      setLoading(true);
-      setError(null);
+  // Session expired or permissions changed while this page was open -- leave
+  // immediately for the user's normal authorized landing page rather than
+  // get stuck showing a load error. Same pattern as
+  // MobileIrrigationLogPage.tsx's fetchLogData().
+  function redirectUnauthorized() {
+    navigate(getDefaultRoute(role, permissions), { replace: true });
+  }
 
-      try {
+  async function fetchData() {
+    setLoading(true);
+    setLoadError(null);
+
+    try {
+      {
         const [optionsRes, settingsRes] = await Promise.all([
           apiFetch(OPTIONS_URL),
           apiFetch(SETTINGS_URL)
         ]);
+
+        if (optionsRes.status === 401 || optionsRes.status === 403) {
+          redirectUnauthorized();
+          return;
+        }
 
         if (!optionsRes.ok) {
           throw new Error(`Failed to load daily yield options (${optionsRes.status})`);
@@ -449,14 +477,21 @@ export function MobileDailyYieldPage() {
           }
         }
         setAllWeekSamples(weekMap);
-      } catch (fetchError) {
-        setError(fetchError instanceof Error ? fetchError.message : "Failed to load data");
-      } finally {
-        setLoading(false);
       }
+    } catch (fetchError) {
+      setLoadError(
+        fetchError instanceof Error
+          ? fetchError.message
+          : "Unable to load daily yield data. Please check your connection and try again."
+      );
+    } finally {
+      setLoading(false);
     }
+  }
 
+  useEffect(() => {
     void fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -475,17 +510,16 @@ export function MobileDailyYieldPage() {
     });
   }, [filteredRows]);
 
-  useEffect(() => {
-    async function loadSavedSamples() {
-      if (!selectedVarietyId) {
-        setSamples([]);
-        return;
-      }
+  async function loadSavedSamples() {
+    if (!selectedVarietyId) {
+      setSamples([]);
+      return;
+    }
 
-      setSamplesLoading(true);
-      setError(null);
+    setSamplesLoading(true);
+    setSamplesLoadError(null);
 
-      try {
+    try {
         const params = new URLSearchParams({
           variety_id: selectedVarietyId,
           session_year: String(sessionYear),
@@ -493,6 +527,11 @@ export function MobileDailyYieldPage() {
         });
 
         const response = await apiFetch(`${SAMPLES_URL}?${params.toString()}`);
+
+        if (response.status === 401 || response.status === 403) {
+          redirectUnauthorized();
+          return;
+        }
 
         if (!response.ok) {
           throw new Error(`Failed to load saved samples (${response.status})`);
@@ -528,23 +567,28 @@ export function MobileDailyYieldPage() {
           })
         );
         // Keep allWeekSamples in sync for color totals.
-        setAllWeekSamples((prev) => ({ ...prev, [selectedVarietyId]: data }));
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error ? loadError.message : "Failed to load saved samples"
-        );
-        setSamples([]);
-      } finally {
-        setSamplesLoading(false);
-      }
+      setAllWeekSamples((prev) => ({ ...prev, [selectedVarietyId]: data }));
+    } catch (fetchError) {
+      setSamplesLoadError(
+        fetchError instanceof Error
+          ? fetchError.message
+          : "Unable to load saved samples. Please check your connection and try again."
+      );
+      setSamples([]);
+    } finally {
+      setSamplesLoading(false);
     }
+  }
 
+  useEffect(() => {
     void loadSavedSamples();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowsById, selectedVarietyId, sessionWeek, sessionYear]);
 
   async function saveCasesPerBin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setCasesPerBinSavedMessage("");
 
     const parsedValue = Number(casesPerBinDraft);
     if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
@@ -562,6 +606,7 @@ export function MobileDailyYieldPage() {
           method: "PUT",
           body: JSON.stringify({ cases_per_bin: parsedValue }),
         });
+        setCasesPerBinSavedMessage("Saved offline — will sync when connected.");
         return;
       }
 
@@ -576,6 +621,8 @@ export function MobileDailyYieldPage() {
           | null;
         throw new Error(responseBody?.message ?? "Failed to save cases per bin");
       }
+
+      setCasesPerBinSavedMessage("Cases per bin saved.");
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "Failed to save cases per bin"
@@ -802,6 +849,15 @@ export function MobileDailyYieldPage() {
       {error ? <p className="form-error">{error}</p> : null}
       {loading ? <p>Loading...</p> : null}
 
+      {!loading && loadError ? (
+        <div className="mobile-yield-card">
+          <p className="form-error">Unable to load daily yield data. Please check your connection and try again.</p>
+          <button type="button" onClick={() => void fetchData()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+
       <div className="mobile-yield-card">
         <button
           type="button"
@@ -824,9 +880,12 @@ export function MobileDailyYieldPage() {
                 required
               />
             </label>
-            <button type="submit" disabled={!isOnline || savingCasesPerBin}>
+            <button type="submit" disabled={savingCasesPerBin}>
               {savingCasesPerBin ? "Saving..." : "Save"}
             </button>
+            {casesPerBinSavedMessage ? (
+              <p className="mobile-irrigation-saved">{casesPerBinSavedMessage}</p>
+            ) : null}
           </form>
         ) : null}
       </div>
@@ -842,7 +901,9 @@ export function MobileDailyYieldPage() {
               onChange={(event) => setSelectedVarietyId(event.target.value)}
               required
             >
-              {varieties.length === 0 ? <option value="">No active varieties</option> : null}
+              {varieties.length === 0 ? (
+                <option value="">{loadError ? "Unable to load varieties" : "No active varieties"}</option>
+              ) : null}
               {varieties.map((variety) => (
                 <option key={variety.id} value={variety.id}>
                   {variety.name}
@@ -916,7 +977,16 @@ export function MobileDailyYieldPage() {
 
         {samplesLoading ? <p>Loading saved samples...</p> : null}
 
-        {!samplesLoading && samples.length === 0 ? <p>No samples added yet.</p> : null}
+        {!samplesLoading && samplesLoadError ? (
+          <div className="mobile-yield-card">
+            <p className="form-error">{samplesLoadError}</p>
+            <button type="button" onClick={() => void loadSavedSamples()}>
+              Retry
+            </button>
+          </div>
+        ) : null}
+
+        {!samplesLoading && !samplesLoadError && samples.length === 0 ? <p>No samples added yet.</p> : null}
 
         {samples.length > 0 ? (
           <ul className="mobile-sample-list">

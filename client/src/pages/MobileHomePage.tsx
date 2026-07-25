@@ -1,6 +1,15 @@
 import { Link } from "react-router-dom";
+import { usePermissions } from "../hooks/usePermissions";
+
+const IRRIGATION_PERMISSIONS = ["mobile:irrigation", "irrigation:view", "irrigation:edit"];
 
 export function MobileHomePage() {
+  // canAny is optimistically true while membership is loading (see
+  // usePermissions.ts) so this card doesn't flash-appear/disappear for the
+  // common (authorized) case -- it's simply present from first render.
+  const { canAny } = usePermissions();
+  const canUseIrrigation = canAny(IRRIGATION_PERMISSIONS);
+
   return (
     <section className="mobile-page">
       <h2>Mobile Logging</h2>
@@ -15,9 +24,11 @@ export function MobileHomePage() {
           Quality Check
         </Link>
 
-        <Link className="mobile-card-button" to="/mobile/irrigation-log">
-          Irrigation Log
-        </Link>
+        {canUseIrrigation ? (
+          <Link className="mobile-card-button" to="/mobile/irrigation-log">
+            Irrigation Log
+          </Link>
+        ) : null}
 
         <Link className="mobile-card-button" to="/mobile/pest-log">
           Pest Log

@@ -1613,8 +1613,13 @@ pestControlRouter.get("/pest/records", canMobileView, async (req, res) => {
   return res.json(data ?? []);
 });
 
-// DELETE /pest/todos/:id — only allows deleting pending/in-progress todos
-pestControlRouter.delete("/pest/todos/:id", canEdit, async (req, res) => {
+// DELETE /pest/todos/:id — only allows deleting pending/in-progress todos.
+// canMobileWrite (not canEdit): MobilePestLogPage's long-press delete is
+// presented to anyone who can open the mobile page (canMobileView), so a
+// mobile:pest-only worker must actually be able to complete the action they
+// were shown — the same permission-key mismatch class as the Irrigation Log
+// bug, just for a write action instead of a read.
+pestControlRouter.delete("/pest/todos/:id", canMobileWrite, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
 

@@ -5,18 +5,23 @@ import { useMembership } from "../../contexts/MembershipContext";
 import { getDefaultRoute } from "../../utils/getDefaultRoute";
 
 type Props = {
-  permission: string;
+  // A single required permission, or a list where holding ANY one of them
+  // grants access (mirrors the server's requireAnyPermission/canAny pattern
+  // — e.g. mobile irrigation access is granted by mobile:irrigation OR
+  // irrigation:view OR irrigation:edit).
+  permission: string | string[];
   children: ReactNode;
 };
 
-// Renders children when the current user holds the required permission.
+// Renders children when the current user holds the required permission(s).
 // Returns null while membership is loading to avoid a flash of restricted
 // content; shows Unauthorized once loaded if access is denied.
 export function RequirePermission({ permission, children }: Props) {
-  const { loading, can } = usePermissions();
+  const { loading, can, canAny } = usePermissions();
 
   if (loading) return null;
-  if (!can(permission)) return <Unauthorized />;
+  const allowed = Array.isArray(permission) ? canAny(permission) : can(permission);
+  if (!allowed) return <Unauthorized />;
   return <>{children}</>;
 }
 

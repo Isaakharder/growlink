@@ -353,7 +353,19 @@ async function upsertRowsFromSection(
 
 const greenhouseSetupRouter = Router();
 
-const canView = requireAnyPermission(["greenhouse_setup:view", "greenhouse_setup:edit"]);
+// mobile:quality and mobile:pest are included because MobileQualityCheckPage
+// and MobilePestLogPage both read this endpoint directly (phase/row data)
+// even though they hold no desktop greenhouse_setup:* permission -- the
+// same permission-key mismatch class as the Irrigation Log bug: a
+// mobile-only worker (granted only "Mobile — Quality"/"Mobile — Pest" in
+// Settings) must not be blocked by an unrelated desktop permission on a
+// dependency this data happens to live behind.
+const canView = requireAnyPermission([
+  "greenhouse_setup:view",
+  "greenhouse_setup:edit",
+  "mobile:quality",
+  "mobile:pest"
+]);
 const canEdit = requirePermission("greenhouse_setup:edit");
 
 // ── Full setup read ───────────────────────────────────────────────────────────

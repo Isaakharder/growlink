@@ -321,7 +321,7 @@ export const appRouter = createBrowserRouter([
           {
             path: "irrigation-log",
             element: (
-              <RequirePermission permission="mobile:irrigation">
+              <RequirePermission permission={["mobile:irrigation", "irrigation:view", "irrigation:edit"]}>
                 <MobileIrrigationLogPage />
               </RequirePermission>
             )

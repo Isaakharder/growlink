@@ -189,8 +189,17 @@ function resolveTrackingMode(groups: IrrigationGroup[]): GroupType | null {
 
 const mobileIrrigationLogRouter = Router();
 
-const canView = requireAnyPermission(["irrigation:view", "irrigation:edit"]);
-const canEdit = requirePermission("irrigation:edit");
+// Mirrors every other mobile module's pattern (mobileDailyYield.ts,
+// pestControl.ts, quality.ts, payroll.ts): a mobile-only worker is granted
+// the mobile:X permission key via Settings and must be let in on that key
+// alone, without also needing the desktop irrigation:view/edit permission.
+// This file previously omitted "mobile:irrigation" from both checks below,
+// which meant a user granted ONLY "Mobile — Irrigation" in Settings could
+// open the mobile page (gated client-side on mobile:irrigation) but every
+// API call here returned 403, leaving the page stuck showing "No active
+// irrigation groups found" even though valves were fully configured.
+const canView = requireAnyPermission(["mobile:irrigation", "irrigation:view", "irrigation:edit"]);
+const canEdit = requireAnyPermission(["mobile:irrigation", "irrigation:edit"]);
 
 mobileIrrigationLogRouter.get("/irrigation/logs", canView, async (req, res) => {
   const organizationId = req.organizationId;
