@@ -48,11 +48,19 @@ type LocationCard = {
   id: string;
   name: string;
   area: string;
+  frequency: ChecklistPeriodType;
   mobileInstructions: string | null;
   isComplete: boolean;
   completedAt: string | null;
   completedByName: string | null;
   completedByInitials: string | null;
+  // The most recent FINALIZED report for this location (from
+  // food_safety_cleaning_reports, never the in-progress checklist) --
+  // distinct from completedAt/completedByInitials above, which only ever
+  // reflect the CURRENT period's cycle and are null while it's incomplete.
+  // Powers the "Last: Jul 22, 3:41 PM" footer on the mobile location list.
+  lastCompletedAt: string | null;
+  lastCompletedByInitials: string | null;
   items: {
     id: string;
     name: string;
@@ -95,6 +103,42 @@ async function ensureChecklists(
   }
 }
 
+type LatestReportRow = {
+  location_id: string;
+  completed_at: string;
+  completed_by_initials: string | null;
+};
+
+type LatestReportInfo = { completedAt: string; completedByInitials: string | null };
+
+// One query for the whole list (via food_safety_latest_reports_for_locations,
+// migration 0100) instead of one query per location -- returns the most
+// recent FINALIZED report per location_id, reading only
+// food_safety_cleaning_reports (immutable, completed reports), never the
+// live/in-progress food_safety_cleaning_checklists.
+async function loadLatestReportsByLocation(
+  organizationId: string,
+  locationIds: string[]
+): Promise<Map<string, LatestReportInfo>> {
+  const map = new Map<string, LatestReportInfo>();
+  if (locationIds.length === 0) return map;
+
+  const { data, error } = await supabase.rpc("food_safety_latest_reports_for_locations", {
+    p_organization_id: organizationId,
+    p_location_ids: locationIds
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  for (const row of (data ?? []) as LatestReportRow[]) {
+    map.set(row.location_id, { completedAt: row.completed_at, completedByInitials: row.completed_by_initials });
+  }
+
+  return map;
+}
+
 async function loadLocationCards(
   organizationId: string,
   locationIds?: string[],
@@ -129,12 +173,17 @@ async function loadLocationCards(
     annually: computePeriodKey("annually", now)
   };
 
-  const { data: checklists, error: checklistsError } = await supabase
-    .from("food_safety_cleaning_checklists")
-    .select("id, location_id, status, completed_at, completed_by_name, completed_by_initials, period_type, period_key")
-    .eq("organization_id", organizationId)
-    .in("location_id", activeLocations.map((l) => l.id))
-    .in("period_key", Array.from(new Set(Object.values(periodKeyByType))));
+  const locationIdList = activeLocations.map((l) => l.id);
+
+  const [{ data: checklists, error: checklistsError }, latestReportsByLocation] = await Promise.all([
+    supabase
+      .from("food_safety_cleaning_checklists")
+      .select("id, location_id, status, completed_at, completed_by_name, completed_by_initials, period_type, period_key")
+      .eq("organization_id", organizationId)
+      .in("location_id", locationIdList)
+      .in("period_key", Array.from(new Set(Object.values(periodKeyByType)))),
+    loadLatestReportsByLocation(organizationId, locationIdList)
+  ]);
 
   if (checklistsError) {
     throw new Error(checklistsError.message);
@@ -204,15 +253,20 @@ async function loadLocationCards(
       .filter((c) => c.status === "complete" && c.completed_at)
       .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""))[0];
 
+    const latestReport = latestReportsByLocation.get(location.id);
+
     return {
       id: location.id,
       name: location.name,
       area: location.area,
+      frequency: location.frequency,
       mobileInstructions: location.mobile_instructions,
       isComplete,
       completedAt: isComplete ? lastCompleted?.completed_at ?? null : null,
       completedByName: isComplete ? lastCompleted?.completed_by_name ?? null : null,
       completedByInitials: isComplete ? lastCompleted?.completed_by_initials ?? null : null,
+      lastCompletedAt: latestReport?.completedAt ?? null,
+      lastCompletedByInitials: latestReport?.completedByInitials ?? null,
       items
     };
   });

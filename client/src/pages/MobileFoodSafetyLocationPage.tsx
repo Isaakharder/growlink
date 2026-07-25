@@ -36,6 +36,7 @@ type LocationCard = {
   id: string;
   name: string;
   area: string;
+  frequency: ChecklistFrequency | null;
   mobileInstructions: string | null;
   isComplete: boolean;
   completedAt: string | null;
@@ -464,7 +465,12 @@ export function MobileFoodSafetyLocationPage() {
       </Link>
 
       <div className="cleaning-checklist-header-row">
-        <h2>{location.name}</h2>
+        <div className="cleaning-checklist-header-title-group">
+          <h2>{location.name}</h2>
+          {location.frequency ? (
+            <span className="cleaning-checklist-frequency-badge">{location.frequency.toUpperCase()}</span>
+          ) : null}
+        </div>
         <span
           ref={dateTriggerRef}
           className="cleaning-checklist-header-date"
