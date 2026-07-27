@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildTaskColumnsAndChecks,
+  buildTaskColumnsAndValues,
+  formatTaskCellValue,
   type ReportItemRow,
   type ReportRow,
   type TaskRow
@@ -61,70 +62,70 @@ const ALL_ITEMS: ReportItemRow[] = [
 
 const ALL_REPORTS = [R1, R2, R3, R4];
 
-function checksByLabel(taskColumns: { key: string; label: string }[], taskChecks: Record<string, boolean>) {
-  const byLabel: Record<string, boolean> = {};
+function valuesByLabel(taskColumns: { key: string; label: string }[], taskValues: Record<string, { display: string; isCheckmark: boolean }>) {
+  const byLabel: Record<string, { display: string; isCheckmark: boolean }> = {};
   for (const col of taskColumns) {
-    byLabel[col.label] = taskChecks[col.key] ?? false;
+    byLabel[col.label] = taskValues[col.key] ?? { display: "", isCheckmark: false };
   }
   return byLabel;
 }
 
-test("a report's checked state is identical whether it's fetched alone (date-filtered) or alongside the full history (unfiltered)", () => {
-  const unfiltered = buildTaskColumnsAndChecks(ALL_REPORTS, ALL_ITEMS, TASKS);
+test("a report's cell values are identical whether it's fetched alone (date-filtered) or alongside the full history (unfiltered)", () => {
+  const unfiltered = buildTaskColumnsAndValues(ALL_REPORTS, ALL_ITEMS, TASKS);
 
   // Simulate a date-range filter that only pulls reports r2 and r3 — and,
   // just like the real route, only fetches items scoped to those report IDs.
   const filteredReports = [R2, R3];
   const filteredReportIds = new Set(filteredReports.map((r) => r.id));
   const filteredItems = ALL_ITEMS.filter((i) => filteredReportIds.has(i.report_id));
-  const filtered = buildTaskColumnsAndChecks(filteredReports, filteredItems, TASKS);
+  const filtered = buildTaskColumnsAndValues(filteredReports, filteredItems, TASKS);
 
   for (const r of filteredReports) {
     const unfilteredRow = unfiltered.reports.find((row) => row.id === r.id)!;
     const filteredRow = filtered.reports.find((row) => row.id === r.id)!;
 
-    const unfilteredChecks = checksByLabel(unfiltered.taskColumns, unfilteredRow.taskChecks);
-    const filteredChecks = checksByLabel(filtered.taskColumns, filteredRow.taskChecks);
+    const unfilteredValues = valuesByLabel(unfiltered.taskColumns, unfilteredRow.taskValues);
+    const filteredValues = valuesByLabel(filtered.taskColumns, filteredRow.taskValues);
 
     assert.deepEqual(
-      filteredChecks,
-      unfilteredChecks,
-      `report ${r.id} checked-state mismatch between filtered and unfiltered results`
+      filteredValues,
+      unfilteredValues,
+      `report ${r.id} cell values mismatch between filtered and unfiltered results`
     );
   }
 });
 
 test("every item for a report appears as a column, even when the containing task is no longer part of the current config", () => {
-  const { taskColumns, reports } = buildTaskColumnsAndChecks([R1], ALL_ITEMS.filter((i) => i.report_id === "r1"), TASKS);
+  const { taskColumns, reports } = buildTaskColumnsAndValues([R1], ALL_ITEMS.filter((i) => i.report_id === "r1"), TASKS);
 
   assert.equal(taskColumns.length, 5, "Checked, Disposable Paper Towels, Floors, Water Source Operating (Hot, Cold)");
   const r1Row = reports.find((r) => r.id === "r1")!;
-  assert.equal(Object.keys(r1Row.taskChecks).length, 5);
+  assert.equal(Object.keys(r1Row.taskValues).length, 5);
 
-  const checked = checksByLabel(taskColumns, r1Row.taskChecks);
-  assert.equal(checked["Checked"], true);
-  assert.equal(checked["Water Source Operating — Hot"], false);
-  assert.equal(checked["Water Source Operating — Cold"], false);
+  const values = valuesByLabel(taskColumns, r1Row.taskValues);
+  assert.equal(values["Checked"].display, "✓");
+  assert.equal(values["Water Source Operating — Hot"].display, "");
+  assert.equal(values["Water Source Operating — Cold"].display, "");
 });
 
-test("excluding a report from the query never changes another report's own taskChecks", () => {
-  const withAllFour = buildTaskColumnsAndChecks(ALL_REPORTS, ALL_ITEMS, TASKS);
-  const withoutR1 = buildTaskColumnsAndChecks(
+test("excluding a report from the query never changes another report's own taskValues", () => {
+  const withAllFour = buildTaskColumnsAndValues(ALL_REPORTS, ALL_ITEMS, TASKS);
+  const withoutR1 = buildTaskColumnsAndValues(
     [R2, R3, R4],
     ALL_ITEMS.filter((i) => i.report_id !== "r1"),
     TASKS
   );
 
   for (const r of [R2, R3, R4]) {
-    const a = checksByLabel(withAllFour.taskColumns, withAllFour.reports.find((row) => row.id === r.id)!.taskChecks);
-    const b = checksByLabel(withoutR1.taskColumns, withoutR1.reports.find((row) => row.id === r.id)!.taskChecks);
+    const a = valuesByLabel(withAllFour.taskColumns, withAllFour.reports.find((row) => row.id === r.id)!.taskValues);
+    const b = valuesByLabel(withoutR1.taskColumns, withoutR1.reports.find((row) => row.id === r.id)!.taskValues);
     assert.deepEqual(b, a, `report ${r.id} should be unaffected by whether r1 is in the query set`);
   }
 });
 
-test("a report with no items at all still renders with every column false, not missing", () => {
+test("a report with no items at all still renders with every column blank, not missing", () => {
   const reportWithNoItems = report("r5", "2026-05-01T12:00:00Z");
-  const { taskColumns, reports } = buildTaskColumnsAndChecks(
+  const { taskColumns, reports } = buildTaskColumnsAndValues(
     [R2, reportWithNoItems],
     ALL_ITEMS.filter((i) => i.report_id === "r2"),
     TASKS
@@ -133,6 +134,104 @@ test("a report with no items at all still renders with every column false, not m
   const row = reports.find((r) => r.id === "r5")!;
   assert.ok(row, "report with zero items must still appear in the result");
   for (const col of taskColumns) {
-    assert.equal(row.taskChecks[col.key], undefined, "no items means no keys are set for this row, which the UI renders as unchecked");
+    assert.equal(row.taskValues[col.key], undefined, "no items means no keys are set for this row, which the UI renders as blank");
   }
+});
+
+// ── formatTaskCellValue: the single formatting rule shared by the on-screen
+// report table and the printed report (both render `.display` verbatim). ──
+
+function checkboxItem(value: string | null): ReportItemRow {
+  return {
+    report_id: "r",
+    task_name_snapshot: "Checked",
+    action_label_snapshot: null,
+    response_type_snapshot: "checkbox",
+    response_value: value,
+    sort_order: 0
+  };
+}
+
+function typedItem(responseType: string, value: string | null): ReportItemRow {
+  return {
+    report_id: "r",
+    task_name_snapshot: "Maintenance Required",
+    action_label_snapshot: null,
+    response_type_snapshot: responseType,
+    response_value: value,
+    sort_order: 0
+  };
+}
+
+test("checked checkbox renders a checkmark", () => {
+  const cell = formatTaskCellValue(checkboxItem("true"));
+  assert.equal(cell.display, "✓");
+  assert.equal(cell.isCheckmark, true);
+});
+
+test("unchecked checkbox renders blank", () => {
+  const cell = formatTaskCellValue(checkboxItem(null));
+  assert.equal(cell.display, "");
+  assert.equal(cell.isCheckmark, false);
+});
+
+test("long-text value renders the exact saved text, not a checkmark", () => {
+  const text = "Loose caulking around the west window frame; requested maintenance follow-up before next inspection.";
+  const cell = formatTaskCellValue(typedItem("long_text", text));
+  assert.equal(cell.display, text);
+  assert.equal(cell.isCheckmark, false);
+});
+
+test("empty long-text value renders blank", () => {
+  const cell = formatTaskCellValue(typedItem("long_text", null));
+  assert.equal(cell.display, "");
+  assert.equal(cell.isCheckmark, false);
+});
+
+test("short-text value renders the exact saved text", () => {
+  const cell = formatTaskCellValue(typedItem("short_text", "West door"));
+  assert.equal(cell.display, "West door");
+  assert.equal(cell.isCheckmark, false);
+});
+
+test('numeric zero renders as "0", not blank', () => {
+  const cell = formatTaskCellValue(typedItem("number", "0"));
+  assert.equal(cell.display, "0");
+  assert.equal(cell.isCheckmark, false);
+});
+
+test("a non-zero number renders its exact saved value", () => {
+  const cell = formatTaskCellValue(typedItem("number", "21.5"));
+  assert.equal(cell.display, "21.5");
+});
+
+test("an unrecognized/future response type renders its stored value verbatim instead of collapsing to a checkmark", () => {
+  const cell = formatTaskCellValue(typedItem("future_type", "some answer"));
+  assert.equal(cell.display, "some answer");
+  assert.equal(cell.isCheckmark, false);
+});
+
+test("historical rows defaulted to response_type_snapshot='checkbox' (pre-migration-0087 data) still render exactly as before", () => {
+  const cell = formatTaskCellValue(checkboxItem("true"));
+  assert.equal(cell.display, "✓");
+  assert.equal(cell.isCheckmark, true);
+});
+
+test("buildTaskColumnsAndValues carries a long-text answer through to the report row's cell, unmodified", () => {
+  const longText = "Ceiling tile stained near the drain; needs replacing.";
+  const longTextItem: ReportItemRow = {
+    report_id: "r10",
+    task_name_snapshot: "Maintenance Required",
+    action_label_snapshot: null,
+    response_type_snapshot: "long_text",
+    response_value: longText,
+    sort_order: 0
+  };
+  const r10 = report("r10", "2026-07-20T12:00:00Z");
+  const { taskColumns, reports } = buildTaskColumnsAndValues([r10], [longTextItem], []);
+  const row = reports.find((r) => r.id === "r10")!;
+  const col = taskColumns.find((c) => c.label === "Maintenance Required")!;
+
+  assert.equal(row.taskValues[col.key].display, longText);
+  assert.equal(row.taskValues[col.key].isCheckmark, false);
 });

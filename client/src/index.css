@@ -5492,6 +5492,24 @@ textarea.cleaning-checklist-response-input {
   min-width: 130px;
 }
 
+/* Number/short-text/long-text task answers -- unlike a checkmark, these can
+   run to several sentences, so this cell (unlike every other cell in the
+   table) must be allowed to wrap and grow taller instead of forcing a single
+   nowrap line. min/max-width keep one long answer from either collapsing to
+   nothing or ballooning to dominate the whole table; overflow-wrap/word-break
+   guarantee a single unbroken long word still wraps instead of overflowing
+   into the next column. */
+.cleaning-reports-table td.cleaning-reports-text-cell {
+  min-width: 160px;
+  max-width: 320px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.4;
+}
+
 .cleaning-reports-checkmark {
   color: var(--brand);
   font-weight: 800;
@@ -5629,6 +5647,16 @@ textarea.cleaning-checklist-response-input {
 
 .food-safety-print-measure .food-safety-print-check-cell {
   font-weight: 700;
+}
+
+.food-safety-print-measure .food-safety-print-text-cell {
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+  min-width: 25mm;
+  max-width: 60mm;
 }
 
 .food-safety-print-measure .food-safety-print-signature {
@@ -5809,6 +5837,23 @@ textarea.cleaning-checklist-response-input {
 
   .food-safety-print-check-cell {
     font-weight: 700;
+  }
+
+  /* Mirrors .food-safety-print-measure .food-safety-print-text-cell above --
+     must stay in sync with it (see that rule's comment). Long answers wrap
+     and grow the row instead of being clamped to one nowrap line, which is
+     what silently turned every non-checkbox answer into "just print a
+     checkmark" in the first place. No text-overflow/ellipsis is set
+     anywhere here, deliberately -- a printed food-safety record must never
+     silently drop part of what an employee wrote. */
+  .food-safety-print-text-cell {
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    vertical-align: top;
+    min-width: 25mm;
+    max-width: 60mm;
   }
 
   .food-safety-print-signature {

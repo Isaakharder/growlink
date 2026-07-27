@@ -4,7 +4,7 @@ import { sendSafeError } from "../../utils/safeError";
 import { requireAnyPermission } from "../../middleware/requirePermission";
 import { zonedTimeToUtc } from "../../utils/zonedTime";
 import { DEFAULT_ORG_TIMEZONE } from "../../config/orgTimezone";
-import { buildTaskColumnsAndChecks, type ReportItemRow, type ReportRow, type TaskRow } from "../../utils/foodSafetyReportCard";
+import { buildTaskColumnsAndValues, type ReportItemRow, type ReportRow, type TaskRow } from "../../utils/foodSafetyReportCard";
 
 const RECENT_REPORTS_LIMIT = 28;
 
@@ -151,7 +151,7 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
           items = (itemsData ?? []) as ReportItemRow[];
         }
 
-        const { taskColumns, reports: reportsWithChecks } = buildTaskColumnsAndChecks(
+        const { taskColumns, reports: reportsWithValues } = buildTaskColumnsAndValues(
           reports,
           items,
           (tasksResult.data ?? []) as TaskRow[]
@@ -169,7 +169,7 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
           mostRecentCompletedAt: mostRecent?.completed_at ?? null,
           mostRecentCompletedByInitials: mostRecent?.completed_by_initials ?? null,
           taskColumns,
-          reports: reportsWithChecks
+          reports: reportsWithValues
         };
       })
     );

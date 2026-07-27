@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { apiFetch, apiUrl } from "../../lib/api";
 import { PrintableLocationReport, type PrintReportData } from "./PrintableLocationReport";
+import { resolveTaskCell, type TaskCellValue } from "./taskCellFormat";
 
 type ReportSummary = {
   id: string;
   completedAt: string;
   completedByName: string;
   completedByInitials: string;
-  taskChecks: Record<string, boolean>;
+  taskValues: Record<string, TaskCellValue>;
 };
 
 type TaskColumn = {
@@ -176,7 +177,7 @@ export function FoodSafetyLocationReportPage() {
         id: r.id,
         completedAt: r.completedAt,
         completedByInitials: r.completedByInitials,
-        taskChecks: r.taskChecks
+        taskValues: r.taskValues
       }))
     });
   }
@@ -298,15 +299,23 @@ export function FoodSafetyLocationReportPage() {
                       {card.reports.map((report) => (
                         <tr key={report.id}>
                           <td className="cleaning-reports-col-date">{formatDate(report.completedAt)}</td>
-                          {card.taskColumns.map((column) => (
-                            <td key={column.key} className="cleaning-reports-check-cell">
-                              {report.taskChecks[column.key] ? (
-                                <span className="cleaning-reports-checkmark" aria-label="Checked">
-                                  ✓
-                                </span>
-                              ) : null}
-                            </td>
-                          ))}
+                          {card.taskColumns.map((column) => {
+                            const cell = resolveTaskCell(report.taskValues, column.key);
+                            return (
+                              <td
+                                key={column.key}
+                                className={cell.isCheckmark ? "cleaning-reports-check-cell" : "cleaning-reports-text-cell"}
+                              >
+                                {cell.isCheckmark ? (
+                                  <span className="cleaning-reports-checkmark" aria-label="Checked">
+                                    ✓
+                                  </span>
+                                ) : (
+                                  cell.display
+                                )}
+                              </td>
+                            );
+                          })}
                           <td className="cleaning-reports-col-employee">
                             {report.completedByName} ({report.completedByInitials})
                           </td>

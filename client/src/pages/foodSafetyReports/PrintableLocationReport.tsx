@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { resolveTaskCell, type TaskCellValue } from "./taskCellFormat";
 
 // Landscape Letter content box: (11in - 2*10mm margin) x (8.5in - 2*10mm
 // margin), matching the @page rule in index.css. Confirmed empirically (a
@@ -43,7 +44,7 @@ export type PrintReportRow = {
   id: string;
   completedAt: string;
   completedByInitials: string;
-  taskChecks: Record<string, boolean>;
+  taskValues: Record<string, TaskCellValue>;
 };
 
 export type PrintReportData = {
@@ -74,6 +75,24 @@ function tableClassFor(taskColumns: PrintTaskColumn[]): string {
   return `food-safety-print-table${isCompact(taskColumns) ? " food-safety-print-table-compact" : ""}`;
 }
 
+// A checkbox task's cell is always "" or "✓" -- one line, height never
+// varies. A number/text task's cell can be several sentences of wrapped
+// text, so the tallest actual saved answer in a given column drives that
+// column's row height far more than the column count does. Picking the
+// single longest cell (by character count, a reasonable proxy for wrapped
+// line count at a fixed column width) per column and combining them into one
+// synthetic row gives measureRowsPerPage a same-or-taller-than-any-real-row
+// sample to measure -- rowsPerPage then comes out same-or-lower than the true
+// max, so pages under-fill in the rare worst case instead of overflowing.
+function longestCellForColumn(reports: PrintReportRow[], columnKey: string): TaskCellValue {
+  let longest: TaskCellValue = { display: "", isCheckmark: false };
+  for (const report of reports) {
+    const cell = resolveTaskCell(report.taskValues, columnKey);
+    if (cell.display.length > longest.display.length) longest = cell;
+  }
+  return longest;
+}
+
 // Column count alone doesn't capture what actually drives row height (font
 // tier) or header height (whether labels are long enough to wrap at this
 // location's actual column widths, or whether a notes line adds a 3rd header
@@ -81,9 +100,14 @@ function tableClassFor(taskColumns: PrintTaskColumn[]): string {
 // different row counts, and reusing one's cached count for the other would
 // silently overflow (or under-fill) the page. Notes are included by value,
 // not just presence, since a longer note could wrap onto more lines than a
-// short one at the same column layout.
-function layoutSignatureFor(taskColumns: PrintTaskColumn[], locationNotes: string | null): string {
-  return `${isCompact(taskColumns) ? "compact" : "normal"}::${taskColumns.map((c) => c.label).join("|")}::notes=${locationNotes ?? ""}`;
+// short one at the same column layout. The per-column longest-cell lengths
+// are included too -- report content (e.g. a location with unusually long
+// Maintenance Required notes) changes the tallest possible row just as much
+// as the column layout does, so the cache must not reuse a row-height
+// measurement taken against shorter text.
+function layoutSignatureFor(taskColumns: PrintTaskColumn[], locationNotes: string | null, reports: PrintReportRow[]): string {
+  const longestLengths = taskColumns.map((c) => longestCellForColumn(reports, c.key).display.length).join(",");
+  return `${isCompact(taskColumns) ? "compact" : "normal"}::${taskColumns.map((c) => c.label).join("|")}::notes=${locationNotes ?? ""}::lens=${longestLengths}`;
 }
 
 // Shared by the measurement instance and every real page so the two never
@@ -172,7 +196,7 @@ export function PrintableLocationReport({
   const [rowsPerPage, setRowsPerPage] = useState<number | null>(null);
   const readyFiredForRef = useRef<PrintReportData | null>(null);
 
-  const signature = data ? layoutSignatureFor(data.taskColumns, data.locationNotes) : null;
+  const signature = data ? layoutSignatureFor(data.taskColumns, data.locationNotes, data.reports) : null;
 
   useLayoutEffect(() => {
     if (!data || !signature) {
@@ -261,11 +285,17 @@ export function PrintableLocationReport({
           <tbody>
             <tr>
               <td className="food-safety-print-col-date">1 January 2026</td>
-              {data.taskColumns.map((col) => (
-                <td key={col.key} className="food-safety-print-check-cell">
-                  ✓
-                </td>
-              ))}
+              {data.taskColumns.map((col) => {
+                const cell = longestCellForColumn(data.reports, col.key);
+                return (
+                  <td
+                    key={col.key}
+                    className={cell.isCheckmark ? "food-safety-print-check-cell" : "food-safety-print-text-cell"}
+                  >
+                    {cell.display || "✓"}
+                  </td>
+                );
+              })}
               <td className="food-safety-print-col-initials">XX</td>
             </tr>
           </tbody>
@@ -307,11 +337,17 @@ export function PrintableLocationReport({
                 {pageReports.map((report) => (
                   <tr key={report.id}>
                     <td className="food-safety-print-col-date">{formatPrintDate(report.completedAt)}</td>
-                    {data.taskColumns.map((col) => (
-                      <td key={col.key} className="food-safety-print-check-cell">
-                        {report.taskChecks[col.key] ? "✓" : ""}
-                      </td>
-                    ))}
+                    {data.taskColumns.map((col) => {
+                      const cell = resolveTaskCell(report.taskValues, col.key);
+                      return (
+                        <td
+                          key={col.key}
+                          className={cell.isCheckmark ? "food-safety-print-check-cell" : "food-safety-print-text-cell"}
+                        >
+                          {cell.display}
+                        </td>
+                      );
+                    })}
                     <td className="food-safety-print-col-initials">{report.completedByInitials}</td>
                   </tr>
                 ))}

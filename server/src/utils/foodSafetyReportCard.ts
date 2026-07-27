@@ -25,12 +25,23 @@ export type TaskColumn = {
   label: string;
 };
 
-export type ReportWithChecks = {
+// What a report table cell (screen or print) should render for one item.
+// `display` is the exact, final text -- both renderers show it verbatim, so
+// screen and print can never disagree on formatting. `isCheckmark` exists
+// only so a checked checkbox can get checkmark-specific styling (color/size)
+// without the renderer needing to re-derive "is this a checkmark" from the
+// display string's content.
+export type TaskCellValue = {
+  display: string;
+  isCheckmark: boolean;
+};
+
+export type ReportWithValues = {
   id: string;
   completedAt: string;
   completedByName: string;
   completedByInitials: string;
-  taskChecks: Record<string, boolean>;
+  taskValues: Record<string, TaskCellValue>;
 };
 
 type ColumnDef = {
@@ -49,6 +60,32 @@ export function isItemChecked(item: ReportItemRow): boolean {
   return item.response_value !== null && item.response_value.trim() !== "";
 }
 
+// The single source of truth for "what does this saved answer look like in a
+// report cell" -- used to build both the on-screen report table and the
+// printed report, so the two can never drift apart. A checkbox still renders
+// as a checkmark (or blank); every other response type renders its actual
+// stored text/number verbatim, blank only when nothing was ever saved.
+// response_type_snapshot defaults to 'checkbox' for items created before
+// response types existed (migration 0087), so pre-existing historical rows
+// keep rendering exactly as they always have -- nothing here reinterprets
+// stored data, it only stops discarding it.
+export function formatTaskCellValue(item: ReportItemRow): TaskCellValue {
+  const value = item.response_value;
+
+  if (item.response_type_snapshot === "checkbox") {
+    return value === "true" ? { display: "✓", isCheckmark: true } : { display: "", isCheckmark: false };
+  }
+
+  if (value === null || value.trim() === "") {
+    return { display: "", isCheckmark: false };
+  }
+
+  // number / short_text / long_text / any future type: the raw saved value,
+  // untouched -- including a numeric "0", and including internal line breaks
+  // or spacing a long-text answer may contain.
+  return { display: value, isCheckmark: false };
+}
+
 // One of three independent "expand tasks into columns" implementations in
 // the Food Safety module (see backfillGeneration.ts's buildColumns for the
 // full picture) -- this one is the odd one out by necessity: it builds
@@ -63,18 +100,18 @@ export function isItemChecked(item: ReportItemRow): boolean {
 // requests or against backfillGeneration.ts's `taskId::actionLabel` keys.
 // Do not assume the two key formats are interchangeable.
 //
-// Builds the task-column set and per-report checked/unchecked cells from
-// whatever reports + items are handed in — the caller (the /food-safety/reports
+// Builds the task-column set and per-report cell values from whatever
+// reports + items are handed in — the caller (the /food-safety/reports
 // route) is responsible for fetching items scoped to exactly the report IDs
 // it passes here. Column identity is derived only from the given items, so
 // this function makes no assumption about whether `reports` is a date-filtered
-// subset or the full recent set; a report's taskChecks depend only on that
+// subset or the full recent set; a report's taskValues depend only on that
 // report's own items, never on which other reports happened to be included.
-export function buildTaskColumnsAndChecks(
+export function buildTaskColumnsAndValues(
   reports: ReportRow[],
   items: ReportItemRow[],
   tasks: TaskRow[]
-): { taskColumns: TaskColumn[]; reports: ReportWithChecks[] } {
+): { taskColumns: TaskColumn[]; reports: ReportWithValues[] } {
   const itemsByReport = new Map<string, ReportItemRow[]>();
   for (const item of items) {
     const list = itemsByReport.get(item.report_id) ?? [];
@@ -148,16 +185,16 @@ export function buildTaskColumnsAndChecks(
   return {
     taskColumns: orderedColumns.map((column) => ({ key: column.key, label: column.label })),
     reports: reports.map((r) => {
-      const taskChecks: Record<string, boolean> = {};
+      const taskValues: Record<string, TaskCellValue> = {};
       for (const item of itemsByReport.get(r.id) ?? []) {
-        taskChecks[columnKeyFor(item)] = isItemChecked(item);
+        taskValues[columnKeyFor(item)] = formatTaskCellValue(item);
       }
       return {
         id: r.id,
         completedAt: r.completed_at,
         completedByName: r.completed_by_name,
         completedByInitials: r.completed_by_initials,
-        taskChecks
+        taskValues
       };
     })
   };
