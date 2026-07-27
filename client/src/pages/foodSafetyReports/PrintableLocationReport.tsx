@@ -313,7 +313,7 @@ export function PrintableLocationReport({
         </div>
       </div>
 
-      <div className="food-safety-print-report">
+      <div className="food-safety-print-report" data-print-root="true">
         {(pages ?? []).map((pageReports, pageIndex) => (
           <div className="food-safety-print-page" key={pageIndex}>
             <PrintHeaderBlock

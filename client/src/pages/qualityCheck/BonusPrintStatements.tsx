@@ -69,23 +69,20 @@ function buildWeekExplanation(group: BonusWeekGroup): string {
 }
 
 // Self-contained print CSS, injected into <head> only while a print job is
-// active and removed immediately after. Kept out of index.css on purpose:
-// this statement needs a portrait letter @page, while the existing H1 print
-// styles need landscape — @page rules aren't selector-scoped, so the two
-// must never both be present in the stylesheet at the same time.
+// active and removed immediately after. Showing/hiding the rest of the page
+// is handled by the shared [data-print-root] rule in index.css (the
+// .bonus-print-root element below carries that attribute) — this stylesheet
+// only needs its own @page and layout rules. It's still injected at print
+// time rather than living in index.css because it needs a portrait letter
+// @page while Food Safety/H1 printing need landscape; @page rules aren't
+// selector-scoped, so this one is only ever present in the document while a
+// bonus print job is actually running, and wins the cascade for @page's
+// size/margin (last declared in source order) over index.css's landscape
+// default for that duration.
 export const BONUS_PRINT_CSS = `
 @page {
   size: letter portrait;
   margin: 0.6in;
-}
-
-body * {
-  visibility: hidden !important;
-}
-
-.bonus-print-root,
-.bonus-print-root * {
-  visibility: visible !important;
 }
 
 .bonus-print-root {
@@ -247,12 +244,13 @@ type BonusPrintStatementsProps = {
 
 export function BonusPrintStatements({ groups, dateRangeLabel, jobLabel }: BonusPrintStatementsProps) {
   // Portalled directly onto <body> so this content sits outside every app
-  // layout container (sidebar flex/grid, page-shell width, etc.) — those
-  // ancestors stay in the DOM (visibility: hidden, not display: none) during
-  // print, and any positioned/overflow-constrained ancestor could otherwise
-  // clip or reposition an absolutely-positioned descendant.
+  // layout container (sidebar flex/grid, page-shell width, etc.) — the shared
+  // [data-print-root] print rule (index.css) removes those sibling
+  // containers from the print entirely via display:none, so a positioned or
+  // overflow-constrained ancestor never gets a chance to clip or reposition
+  // this absolutely-positioned descendant.
   return createPortal(
-    <div className="bonus-print-root">
+    <div className="bonus-print-root" data-print-root="true">
       {groups.map((group, idx) => (
         <section
           key={group.employeeId}

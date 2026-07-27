@@ -150,6 +150,7 @@ export function H1SheetPreview({ logs, onEditLog }: Props) {
   return (
     <div
       className="h1-sheet-preview"
+      data-print-root="true"
       style={{
         background: "#fff",
         color: "#000",
