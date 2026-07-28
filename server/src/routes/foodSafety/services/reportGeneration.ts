@@ -18,35 +18,6 @@ type ItemRow = {
   checked_by_initials: string | null;
 };
 
-// The exact set of period_signature values that would collide with a report
-// for `dailyDateKey`/`periodKey`/`frequency` — covers both the live-completion
-// path's own format ("{frequency}:{periodKey}") and the unrelated admin
-// backfill path's format ("backfill:YYYY-MM-DD", see migration 0095 and
-// backfill.ts) so a day already reported via EITHER path is caught. Exported
-// for the mobile route to pre-check before letting a worker start filling out
-// a backdated day that's already been reported.
-export async function reportAlreadyExistsForPeriod(
-  organizationId: string,
-  locationId: string,
-  frequency: ChecklistPeriodType,
-  periodKey: string,
-  dailyDateKey: string
-): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("food_safety_cleaning_reports")
-    .select("id")
-    .eq("organization_id", organizationId)
-    .eq("location_id", locationId)
-    .in("period_signature", [`${frequency}:${periodKey}`, `backfill:${dailyDateKey}`])
-    .limit(1);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return (data ?? []).length > 0;
-}
-
 // Deterministic identity for "the exact set of checklist attempts that
 // produced this report" -- the upsert conflict target for report creation
 // (see maybeCreateReport below). Sorted so the same set of checklists always

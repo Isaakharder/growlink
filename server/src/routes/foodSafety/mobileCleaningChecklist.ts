@@ -5,7 +5,7 @@ import { requirePermission } from "../../middleware/requirePermission";
 import { resolveActor } from "./services/actorIdentity";
 import { computePeriodKey, type ChecklistPeriodType } from "./services/checklistPeriod";
 import { getCurrentChecklistsForLocation, reduceToLatestAttempts } from "./services/currentChecklists";
-import { maybeCreateReport, reportAlreadyExistsForPeriod } from "./services/reportGeneration";
+import { maybeCreateReport } from "./services/reportGeneration";
 import { validateReportDate } from "./services/reportDate";
 
 type LocationRow = {
@@ -345,36 +345,6 @@ async function loadLocationCards(
   });
 }
 
-// Looks up the location's own frequency (needed to build the exact
-// period_signature a report for this date would use), then checks whether a
-// report already exists for that period — via either the live-completion
-// path's own format or the unrelated admin backfill path's format. Used to
-// reject entry into (GET) or completion of (complete) an already-reported
-// backdated day before any checklist rows get created for it. Returns false
-// (rather than throwing) if the location itself can't be found, since the
-// normal load path already handles a missing/inactive location correctly.
-async function reportAlreadyExistsForBackdatedDate(
-  organizationId: string,
-  locationId: string,
-  referenceDate: Date,
-  dailyDateKey: string
-): Promise<boolean> {
-  const { data: location, error } = await supabase
-    .from("food_safety_cleaning_locations")
-    .select("frequency")
-    .eq("id", locationId)
-    .eq("organization_id", organizationId)
-    .maybeSingle();
-
-  if (error) throw new Error(error.message);
-  if (!location) return false;
-
-  const frequency = (location as { frequency: ChecklistPeriodType }).frequency;
-  const periodKey = computePeriodKey(frequency, referenceDate);
-
-  return reportAlreadyExistsForPeriod(organizationId, locationId, frequency, periodKey, dailyDateKey);
-}
-
 const mobileCleaningChecklistRouter = Router();
 
 const canUseMobileFoodSafety = requirePermission("mobile:food_safety");
@@ -392,25 +362,11 @@ mobileCleaningChecklistRouter.get(
     let referenceDate: Date | undefined;
 
     if (rawReportDate) {
-      let validated;
       try {
-        validated = validateReportDate(rawReportDate);
+        referenceDate = validateReportDate(rawReportDate).referenceDate;
       } catch (error) {
         return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
       }
-
-      if (validated.isBackdated) {
-        try {
-          const exists = await reportAlreadyExistsForBackdatedDate(req.organizationId, locationId as string, validated.referenceDate, validated.dateStr);
-          if (exists) {
-            return res.status(409).json({ message: "A report already exists for this location and date." });
-          }
-        } catch (error) {
-          return sendSafeError(res, 500, "Failed to check existing reports for this date.", "Backdate duplicate-check error:", error);
-        }
-      }
-
-      referenceDate = validated.referenceDate;
     }
 
     try {
@@ -528,15 +484,20 @@ mobileCleaningChecklistRouter.post(
 );
 
 // "Complete Another Report" — starts a fresh checklist attempt for a
-// location whose current period is already complete, so a second (or
-// third) full report can be logged for the same location/date (e.g. a
-// packline swab test that failed and needs a re-clean + re-test). Only
-// callable once the location's current attempt is actually complete; the
+// location whose current (or backdated) period is already complete, so a
+// second (or third) full report can be logged for the same location/date
+// (e.g. a packline swab test that failed and needs a re-clean + re-test).
+// Only callable once that period's latest attempt is actually complete; the
 // underlying RPC enforces that itself (errcode GL002) even if two requests
-// race. reportDate handling mirrors /complete — re-validated from scratch,
-// never trusted from the client — but unlike /complete, a backdated day
-// that already has a report is still hard-blocked (unchanged, existing
-// behavior; only same-day/current-period resubmission is in scope here).
+// race. reportDate is re-validated from scratch here — the client's date is
+// never trusted — and works identically whether it names today or a past
+// period: there is no separate "already reported" hard block for backdated
+// dates (that used to 409 here and in GET/`/complete`, which meant simply
+// navigating the date picker into an already-completed week/month/year
+// bounced you straight back with no way to view or add to it — see the
+// weekly-frequency bug report this was fixed for). A location's period
+// identity (period_type + period_key) is derived the same way regardless of
+// how the date was reached, so this is exactly the same flow as "today".
 mobileCleaningChecklistRouter.post(
   "/food-safety/mobile/cleaning-checklist/locations/:locationId/new-attempt",
   canUseMobileFoodSafety,
@@ -547,25 +508,11 @@ mobileCleaningChecklistRouter.post(
 
     let referenceDate: Date | undefined;
     if (typeof rawReportDate === "string") {
-      let validated;
       try {
-        validated = validateReportDate(rawReportDate);
+        referenceDate = validateReportDate(rawReportDate).referenceDate;
       } catch (error) {
         return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
       }
-
-      if (validated.isBackdated) {
-        try {
-          const exists = await reportAlreadyExistsForBackdatedDate(organizationId, locationId, validated.referenceDate, validated.dateStr);
-          if (exists) {
-            return res.status(409).json({ message: "A report already exists for this location and date." });
-          }
-        } catch (error) {
-          return sendSafeError(res, 500, "Failed to check existing reports for this date.", "Backdate duplicate-check error:", error);
-        }
-      }
-
-      referenceDate = validated.referenceDate;
     }
 
     const { data: location, error: locationError } = await supabase
@@ -608,10 +555,11 @@ mobileCleaningChecklistRouter.post(
 // across every currently-due item (across every frequency in use at this
 // location) is what gets locked in and reported. An optional reportDate
 // (the mobile long-press date selector's choice) is re-validated here from
-// scratch — the client's date is never trusted — and, when it names a past
-// day, is re-checked for an already-existing report immediately before
-// finalizing, closing the race where another device/admin reported that same
-// day between this device's initial GET and this Complete tap.
+// scratch — the client's date is never trusted. Completing an already-
+// complete period (same-day resubmission or reaching a past period whose
+// latest attempt is already done) is a safe no-op here: both the RPC and
+// maybeCreateReport are idempotent per checklist attempt, not per date — see
+// /new-attempt above for how a genuinely new attempt gets created.
 mobileCleaningChecklistRouter.post(
   "/food-safety/mobile/cleaning-checklist/locations/:locationId/complete",
   canUseMobileFoodSafety,
@@ -627,17 +575,6 @@ mobileCleaningChecklistRouter.post(
         validated = validateReportDate(rawReportDate);
       } catch (error) {
         return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
-      }
-
-      if (validated.isBackdated) {
-        try {
-          const exists = await reportAlreadyExistsForBackdatedDate(organizationId, locationId, validated.referenceDate, validated.dateStr);
-          if (exists) {
-            return res.status(409).json({ message: "A report already exists for this location and date." });
-          }
-        } catch (error) {
-          return sendSafeError(res, 500, "Failed to check existing reports for this date.", "Backdate duplicate-check error:", error);
-        }
       }
 
       referenceDate = validated.referenceDate;
