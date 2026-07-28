@@ -27,6 +27,18 @@ export function buildChecklistSignature(checklistIds: string[]): string {
   return [...checklistIds].sort().join("|");
 }
 
+// True if any contributing checklist's report was deliberately deleted (see
+// food_safety_delete_report, migration 0102) -- when true, maybeCreateReport
+// must not regenerate it, even though the checklist itself is still
+// status='complete' and would otherwise look report-worthy. This is what
+// keeps an admin's deletion permanent against a repeat/offline-replayed
+// /complete call. A later "Complete Another Report" attempt is unaffected:
+// it's a brand-new checklist row with report_deleted_at still null. Exported
+// so it can be unit-tested without a live database.
+export function shouldSkipRegeneration(checklists: { report_deleted_at: string | null }[]): boolean {
+  return checklists.some((c) => c.report_deleted_at !== null);
+}
+
 // Called after "Complete Location" succeeds. If the location's entire
 // current-period set of checklists (across every frequency currently in use
 // there) is now complete, creates one immutable report row plus its task
@@ -74,6 +86,7 @@ export async function maybeCreateReport(
     // location isn't fully done yet, nothing to report.
     if (currentChecklists.length === 0) return;
     if (!currentChecklists.every((c) => c.status === "complete")) return;
+    if (shouldSkipRegeneration(currentChecklists)) return;
 
     const periodSignature = currentChecklists
       .map((c) => `${c.period_type}:${c.period_key}`)

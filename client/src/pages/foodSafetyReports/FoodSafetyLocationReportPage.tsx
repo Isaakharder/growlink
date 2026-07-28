@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { apiFetch, apiUrl } from "../../lib/api";
+import { usePermissions } from "../../hooks/usePermissions";
+import { ModalOverlay } from "../../components/ModalOverlay";
 import { PrintableLocationReport, type PrintReportData } from "./PrintableLocationReport";
 import { resolveTaskCell, type TaskCellValue } from "./taskCellFormat";
 
@@ -9,6 +11,7 @@ type ReportSummary = {
   completedAt: string;
   completedByName: string;
   completedByInitials: string;
+  attemptNumber: number | null;
   taskValues: Record<string, TaskCellValue>;
 };
 
@@ -42,6 +45,17 @@ const API_BASE = apiUrl("/api/food-safety/reports");
 
 const INITIAL_FILTER: FilterState = { startDate: "", endDate: "", applied: false, loading: false, error: null };
 
+// How long an authorized user must hold the Clear button before Record
+// Management (delete) Mode activates -- see the Clear button's pointer
+// handlers below. Unauthorized users never even get the timer wired up, so
+// holding does nothing for them, with no observable difference from a
+// normal press-and-release.
+const DELETE_MODE_HOLD_MS = 3000;
+// Delete mode exits itself if left idle this long, so a workstation left
+// unattended mid-deletion doesn't stay exposed indefinitely.
+const DELETE_MODE_INACTIVITY_MS = 2 * 60 * 1000;
+const MIN_DELETE_REASON_LENGTH = 5;
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
@@ -63,8 +77,27 @@ function formatDateTime(iso: string): string {
   return `${datePart} at ${timePart}`;
 }
 
+// Fetches one location's report card, optionally scoped to a date range —
+// shared by the initial load, the Apply-filter action, and the post-deletion
+// refresh, so all three ways of arriving at "the current view" agree on
+// exactly what a card looks like. Throws on failure; callers decide how to
+// surface that.
+async function fetchLocationCard(locationId: string, range?: { startDate: string; endDate: string }): Promise<LocationReportCard | null> {
+  const url = range
+    ? `${API_BASE}?location_id=${encodeURIComponent(locationId)}&start_date=${range.startDate}&end_date=${range.endDate}`
+    : `${API_BASE}?location_id=${encodeURIComponent(locationId)}`;
+  const res = await apiFetch(url);
+  if (!res.ok) {
+    throw new Error(range ? "Failed to load reports for the selected date range" : "Failed to load reports for this location");
+  }
+  const data = (await res.json()) as { locations: LocationReportCard[] };
+  return data.locations?.[0] ?? null;
+}
+
 export function FoodSafetyLocationReportPage() {
   const { locationId } = useParams<{ locationId: string }>();
+  const { can } = usePermissions();
+  const canDeleteReports = can("food_safety:delete_reports");
 
   const [card, setCard] = useState<LocationReportCard | null>(null);
   const [defaultCard, setDefaultCard] = useState<LocationReportCard | null>(null);
@@ -79,6 +112,25 @@ export function FoodSafetyLocationReportPage() {
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
+  // ── Record Management (delete) Mode ─────────────────────────────────────
+  // Entered only via a 3-second hold on the Clear button, and only for users
+  // holding food_safety:delete_reports — see the button's pointer handlers
+  // further down, which simply never start the timer for anyone else.
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [holding, setHolding] = useState(false);
+  const holdTimerRef = useRef<number | null>(null);
+  // Set only when the hold timer actually completes, so the button's own
+  // onClick (which always fires after pointerup, hold or not) can tell a
+  // completed hold apart from a normal short click and skip running Clear.
+  const holdFiredRef = useRef(false);
+  const inactivityTimerRef = useRef<number | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<ReportSummary | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
+  const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
+
   useEffect(() => {
     if (!locationId) return;
     let active = true;
@@ -87,10 +139,7 @@ export function FoodSafetyLocationReportPage() {
       setLoading(true);
       setLoadError(null);
       try {
-        const res = await apiFetch(`${API_BASE}?location_id=${encodeURIComponent(locationId!)}`);
-        if (!res.ok) throw new Error("Failed to load reports for this location");
-        const data = (await res.json()) as { locations: LocationReportCard[] };
-        const loaded = data.locations?.[0];
+        const loaded = await fetchLocationCard(locationId!);
         if (!active) return;
         if (!loaded) {
           setLoadError("This location was not found.");
@@ -110,6 +159,21 @@ export function FoodSafetyLocationReportPage() {
       active = false;
     };
   }, [locationId]);
+
+  // Cleans up any pending hold/inactivity timers on unmount so a lingering
+  // setTimeout never fires setState against an unmounted component.
+  useEffect(() => {
+    return () => {
+      if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current);
+      if (inactivityTimerRef.current !== null) window.clearTimeout(inactivityTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!deleteSuccessMessage) return;
+    const timer = window.setTimeout(() => setDeleteSuccessMessage(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [deleteSuccessMessage]);
 
   // Tracks whether the reports table currently overflows horizontally, and
   // in which direction(s) there's more to see — drives the scroll hint text
@@ -163,12 +227,7 @@ export function FoodSafetyLocationReportPage() {
 
     setFilter((f) => ({ ...f, loading: true, error: null }));
     try {
-      const res = await apiFetch(
-        `${API_BASE}?location_id=${encodeURIComponent(locationId)}&start_date=${filter.startDate}&end_date=${filter.endDate}`
-      );
-      if (!res.ok) throw new Error("Failed to load reports for the selected date range");
-      const data = (await res.json()) as { locations: LocationReportCard[] };
-      const loaded = data.locations?.[0];
+      const loaded = await fetchLocationCard(locationId, { startDate: filter.startDate, endDate: filter.endDate });
       if (!loaded) throw new Error("Location not found");
       setCard(loaded);
       setFilter((f) => ({ ...f, applied: true, loading: false }));
@@ -177,9 +236,157 @@ export function FoodSafetyLocationReportPage() {
     }
   }
 
+  // Normal Clear behavior — unchanged. Also reachable while delete mode is
+  // active is intentionally NOT wired to this; see handleClearButtonClick.
   function clearFilter() {
     setFilter(INITIAL_FILTER);
     setCard(defaultCard);
+  }
+
+  function resetInactivityTimer() {
+    if (inactivityTimerRef.current !== null) window.clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = window.setTimeout(() => {
+      exitDeleteMode();
+    }, DELETE_MODE_INACTIVITY_MS);
+  }
+
+  function enterDeleteMode() {
+    setDeleteMode(true);
+    resetInactivityTimer();
+  }
+
+  function exitDeleteMode() {
+    setDeleteMode(false);
+    setDeleteTarget(null);
+    setDeleteReason("");
+    setDeleteModalError(null);
+    if (inactivityTimerRef.current !== null) {
+      window.clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  }
+
+  function startHoldTimer() {
+    if (holdTimerRef.current !== null) return; // already timing -- ignore a duplicate start
+    setHolding(true);
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = null;
+      setHolding(false);
+      holdFiredRef.current = true;
+      enterDeleteMode();
+    }, DELETE_MODE_HOLD_MS);
+  }
+
+  function cancelHoldTimer() {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setHolding(false);
+  }
+
+  // Pointer Events cover mouse, touch, and pen with one code path, and fire
+  // pointercancel for interruptions (e.g. a touch scroll taking over) that
+  // pointerup would otherwise miss — mirrors the same pattern already used
+  // for the mobile long-press date selector (MobileFoodSafetyLocationPage.tsx).
+  // Deliberately never wired at all for a user without food_safety:delete_reports
+  // — holding the button then behaves exactly like holding any other native
+  // button: nothing happens until release, at which point onClick runs the
+  // normal Clear action. There is no code path that reveals delete mode
+  // exists to an unauthorized user.
+  function handleClearPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!canDeleteReports || deleteMode) return;
+    event.preventDefault();
+    startHoldTimer();
+  }
+
+  function handleClearPointerUp() {
+    cancelHoldTimer();
+  }
+
+  function handleClearPointerLeave() {
+    cancelHoldTimer();
+  }
+
+  function handleClearPointerCancel() {
+    cancelHoldTimer();
+  }
+
+  // The button's only click handler, for every user and every mode. A
+  // completed 3-second hold sets holdFiredRef just before onClick fires
+  // (pointerup precedes click), so this can tell "the hold just finished"
+  // apart from an ordinary press-and-release and skip Clear entirely for it.
+  function handleClearButtonClick() {
+    if (holdFiredRef.current) {
+      holdFiredRef.current = false;
+      return;
+    }
+    if (deleteMode) {
+      exitDeleteMode();
+      return;
+    }
+    clearFilter();
+  }
+
+  function openDeleteModal(report: ReportSummary) {
+    setDeleteTarget(report);
+    setDeleteReason("");
+    setDeleteModalError(null);
+    resetInactivityTimer();
+  }
+
+  function closeDeleteModal() {
+    setDeleteTarget(null);
+    setDeleteReason("");
+    setDeleteModalError(null);
+  }
+
+  async function confirmDeleteReport() {
+    if (!deleteTarget || deleting) return;
+    if (deleteReason.trim().length < MIN_DELETE_REASON_LENGTH) return;
+
+    setDeleting(true);
+    setDeleteModalError(null);
+
+    try {
+      const res = await apiFetch(`${API_BASE}/${deleteTarget.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({ reason: deleteReason.trim() })
+      });
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to delete this report");
+      }
+
+      setDeleteSuccessMessage("Report permanently deleted.");
+      closeDeleteModal();
+      exitDeleteMode();
+
+      // Refresh both the unfiltered default (so a later Clear shows accurate
+      // data) and the currently-applied filtered view, if any — preserves
+      // whatever date range the user had active.
+      if (locationId) {
+        try {
+          const [unfiltered, filtered] = await Promise.all([
+            fetchLocationCard(locationId),
+            filter.applied && filter.startDate && filter.endDate
+              ? fetchLocationCard(locationId, { startDate: filter.startDate, endDate: filter.endDate })
+              : Promise.resolve(null)
+          ]);
+          if (unfiltered) setDefaultCard(unfiltered);
+          setCard(filtered ?? unfiltered ?? null);
+        } catch (err) {
+          setLoadError(err instanceof Error ? err.message : "Deleted, but failed to refresh the report list.");
+        }
+      }
+    } catch (err) {
+      // Keep the modal open, preserve the reason, show the error — no
+      // optimistic row removal happened, so the table is already correct.
+      setDeleteModalError(err instanceof Error ? err.message : "Failed to delete this report");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function handlePrint() {
@@ -264,11 +471,18 @@ export function FoodSafetyLocationReportPage() {
                 </button>
                 <button
                   type="button"
-                  className="secondary"
-                  disabled={!filter.applied && !filter.startDate && !filter.endDate}
-                  onClick={clearFilter}
+                  className={`secondary cleaning-report-clear-button${deleteMode ? " delete-mode-active" : ""}`}
+                  disabled={!deleteMode && !filter.applied && !filter.startDate && !filter.endDate}
+                  onPointerDown={handleClearPointerDown}
+                  onPointerUp={handleClearPointerUp}
+                  onPointerLeave={handleClearPointerLeave}
+                  onPointerCancel={handleClearPointerCancel}
+                  onClick={handleClearButtonClick}
                 >
-                  Clear
+                  {holding ? (
+                    <span className="cleaning-report-clear-hold-progress" style={{ animationDuration: `${DELETE_MODE_HOLD_MS}ms` }} />
+                  ) : null}
+                  <span className="cleaning-report-clear-label">{deleteMode ? "Exit Delete Mode" : "Clear"}</span>
                 </button>
               </div>
             </div>
@@ -282,6 +496,12 @@ export function FoodSafetyLocationReportPage() {
               Print
             </button>
           </div>
+          {deleteMode ? (
+            <p className="form-error cleaning-report-delete-mode-banner" role="alert">
+              Delete mode is active. Deleted Food Safety records cannot be restored.
+            </p>
+          ) : null}
+          {deleteSuccessMessage ? <p className="form-success">{deleteSuccessMessage}</p> : null}
           {filter.error ? <p className="form-error">{filter.error}</p> : null}
           {filter.applied ? (
             <p className="form-hint">
@@ -310,6 +530,7 @@ export function FoodSafetyLocationReportPage() {
                           <th key={column.key}>{column.label}</th>
                         ))}
                         <th className="cleaning-reports-col-employee">Employee</th>
+                        {deleteMode ? <th className="cleaning-reports-col-delete">Delete</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -336,6 +557,17 @@ export function FoodSafetyLocationReportPage() {
                           <td className="cleaning-reports-col-employee">
                             {report.completedByName} ({report.completedByInitials})
                           </td>
+                          {deleteMode ? (
+                            <td className="cleaning-reports-col-delete">
+                              <button
+                                type="button"
+                                className="cleaning-report-delete-row-button"
+                                onClick={() => openDeleteModal(report)}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          ) : null}
                         </tr>
                       ))}
                     </tbody>
@@ -353,6 +585,72 @@ export function FoodSafetyLocationReportPage() {
             </>
           )}
         </div>
+      ) : null}
+
+      {deleteTarget && card ? (
+        <ModalOverlay
+          onClose={deleting ? () => {} : closeDeleteModal}
+          contentClassName="cleaning-report-delete-modal"
+          titleId="delete-report-modal-title"
+        >
+          <h3 id="delete-report-modal-title">Delete Food Safety Report?</h3>
+          <p className="form-error cleaning-report-delete-modal-warning">
+            This permanently removes this report and its recorded task results. This action cannot be undone.
+          </p>
+
+          <dl className="cleaning-report-delete-modal-details">
+            <dt>Location</dt>
+            <dd>{card.name}</dd>
+            <dt>Completed</dt>
+            <dd>{formatDateTime(deleteTarget.completedAt)}</dd>
+            <dt>Employee</dt>
+            <dd>
+              {deleteTarget.completedByName} ({deleteTarget.completedByInitials})
+            </dd>
+            {deleteTarget.attemptNumber !== null ? (
+              <>
+                <dt>Attempt</dt>
+                <dd>#{deleteTarget.attemptNumber}</dd>
+              </>
+            ) : null}
+            {card.taskColumns.map((column) => {
+              const cell = resolveTaskCell(deleteTarget.taskValues, column.key);
+              return (
+                <div key={column.key} className="cleaning-report-delete-modal-task-row">
+                  <dt>{column.label}</dt>
+                  <dd>{cell.isCheckmark ? "✓" : cell.display || "—"}</dd>
+                </div>
+              );
+            })}
+          </dl>
+
+          <label className="cleaning-report-delete-modal-reason-field">
+            Deletion reason
+            <textarea
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              rows={3}
+              placeholder="Why is this report being deleted?"
+              disabled={deleting}
+            />
+          </label>
+
+          {deleteModalError ? <p className="form-error">{deleteModalError}</p> : null}
+
+          <div className="form-actions">
+            <button
+              type="button"
+              className="primary-action-button cleaning-report-delete-modal-confirm"
+              disabled={deleting || deleteReason.trim().length < MIN_DELETE_REASON_LENGTH}
+              onClick={() => void confirmDeleteReport()}
+            >
+              {deleting ? "Deleting…" : "Permanently Delete Report"}
+            </button>
+            <button type="button" className="secondary" disabled={deleting} onClick={closeDeleteModal}>
+              Cancel
+            </button>
+          </div>
+        </ModalOverlay>
       ) : null}
 
       <PrintableLocationReport data={printData} onReady={() => window.print()} />

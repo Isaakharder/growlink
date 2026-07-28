@@ -11,6 +11,11 @@ export type CurrentChecklistRow = {
   completed_by_user_id: string | null;
   completed_by_name: string | null;
   completed_by_initials: string | null;
+  // Set once an admin deletes the report this checklist attempt produced
+  // (see food_safety_delete_report, migration 0102) -- null otherwise.
+  // maybeCreateReport() must never regenerate a report for a tombstoned
+  // attempt, even on a repeat/offline-replayed /complete call.
+  report_deleted_at: string | null;
 };
 
 // A location can now have more than one checklist row per (period_type,
@@ -56,7 +61,7 @@ export async function getCurrentChecklistsForLocation(
   const { data: checklists, error } = await supabase
     .from("food_safety_cleaning_checklists")
     .select(
-      "id, period_type, period_key, attempt_number, status, completed_at, completed_by_user_id, completed_by_name, completed_by_initials"
+      "id, period_type, period_key, attempt_number, status, completed_at, completed_by_user_id, completed_by_name, completed_by_initials, report_deleted_at"
     )
     .eq("organization_id", organizationId)
     .eq("location_id", locationId)

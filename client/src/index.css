@@ -5579,6 +5579,141 @@ textarea.cleaning-checklist-response-input {
   flex-shrink: 0;
 }
 
+/* ── Food Safety — controlled report deletion (Record Management Mode) ────── */
+
+.cleaning-report-clear-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.cleaning-report-clear-button.delete-mode-active {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+.cleaning-report-clear-label {
+  position: relative;
+  z-index: 1;
+}
+
+/* Fills left-to-right over the same duration as the hold-to-activate timer,
+   started fresh on every pointerdown (the element itself only exists while
+   holding) and simply removed if the press releases early -- no JS width
+   updates needed. */
+.cleaning-report-clear-hold-progress {
+  position: absolute;
+  inset: 0;
+  background: rgba(192, 57, 43, 0.22);
+  transform-origin: left;
+  animation-name: cleaning-report-hold-fill;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes cleaning-report-hold-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.cleaning-report-delete-mode-banner {
+  font-weight: 600;
+}
+
+.cleaning-reports-table th.cleaning-reports-col-delete,
+.cleaning-reports-col-delete {
+  text-align: center;
+  min-width: auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+.cleaning-report-delete-row-button {
+  border: 1px solid #c0392b;
+  background: #c0392b;
+  color: #fff;
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cleaning-report-delete-row-button:hover {
+  background: #a5311f;
+}
+
+.cleaning-report-delete-modal {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 1.15rem;
+}
+
+.cleaning-report-delete-modal h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1.05rem;
+}
+
+.cleaning-report-delete-modal-warning {
+  font-weight: 600;
+}
+
+.cleaning-report-delete-modal-details {
+  margin: 0.75rem 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+}
+
+.cleaning-report-delete-modal-details dt {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.cleaning-report-delete-modal-details dd {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.cleaning-report-delete-modal-task-row {
+  display: contents;
+}
+
+.cleaning-report-delete-modal-reason-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 0.75rem;
+}
+
+.cleaning-report-delete-modal-reason-field textarea {
+  font: inherit;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.cleaning-report-delete-modal-confirm {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+
+.cleaning-report-delete-modal-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Food Safety — Cleaning Log print report (screen: hidden) ─────────────── */
 
 .food-safety-print-report {

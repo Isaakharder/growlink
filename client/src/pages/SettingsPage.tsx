@@ -64,6 +64,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "payroll:edit",          label: "Payroll — Edit" },
       { key: "food_safety:view",      label: "Food Safety — View" },
       { key: "food_safety:edit",      label: "Food Safety — Edit" },
+      { key: "food_safety:delete_reports", label: "Food Safety — Delete Reports" },
     ],
   },
   {

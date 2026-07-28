@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { sendSafeError } from "../../utils/safeError";
-import { requireAnyPermission } from "../../middleware/requirePermission";
+import { requirePermission, requireAnyPermission } from "../../middleware/requirePermission";
 import { zonedTimeToUtc } from "../../utils/zonedTime";
 import { DEFAULT_ORG_TIMEZONE } from "../../config/orgTimezone";
 import { buildTaskColumnsAndValues, type ReportItemRow, type ReportRow, type TaskRow } from "../../utils/foodSafetyReportCard";
+import { resolveActor } from "./services/actorIdentity";
 
 const RECENT_REPORTS_LIMIT = 28;
 
@@ -35,12 +36,26 @@ type LocationRow = {
   is_active: boolean;
 };
 
+// Parses a checklist_signature (see reportGeneration.ts's buildChecklistSignature)
+// back into a single checklist id, when it unambiguously names exactly one --
+// null for legacy/backfill reports (no checklist at all) or the rare
+// multi-checklist combined-report case. Used only to look up that checklist's
+// attempt_number for display in the delete-confirmation modal; the deletion
+// RPC (food_safety_delete_report, migration 0102) does its own, authoritative
+// parsing in SQL and is not affected by anything here.
+function deriveSingleChecklistId(signature: string | null): string | null {
+  if (!signature || signature.startsWith("legacy:") || signature.startsWith("backfill:")) return null;
+  const ids = signature.split("|");
+  return ids.length === 1 ? ids[0] : null;
+}
+
 const reportsRouter = Router();
 
 // Mobile-only users (mobile:food_safety without the desktop food_safety:view
 // permission) must not reach these routes — reuses the exact same desktop
 // view gate as cleaning-locations.
 const canView = requireAnyPermission(["food_safety:view", "food_safety:edit"]);
+const canDeleteReports = requirePermission("food_safety:delete_reports");
 
 reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
   const organizationId = req.organizationId;
@@ -89,7 +104,7 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
         // sort by completed_at.
         let recentQuery = supabase
           .from("food_safety_cleaning_reports")
-          .select("id, completed_at, completed_by_name, completed_by_initials")
+          .select("id, completed_at, completed_by_name, completed_by_initials, checklist_signature")
           .eq("organization_id", organizationId)
           .eq("location_id", location.id)
           .order("completed_at", { ascending: false })
@@ -120,7 +135,7 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
         if (countResult.error) throw new Error(countResult.error.message);
         if (recentResult.error) throw new Error(recentResult.error.message);
 
-        const reports = (recentResult.data ?? []) as ReportRow[];
+        const reports = (recentResult.data ?? []) as (ReportRow & { checklist_signature: string | null })[];
 
         if (summaryOnly) {
           const mostRecent = reports[0] ?? null;
@@ -166,6 +181,42 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
           (tasksResult.data ?? []) as TaskRow[]
         );
 
+        // Attempt number, for the delete-confirmation modal ("if available").
+        // Looked up separately (not carried through buildTaskColumnsAndValues,
+        // which is a shared report-card utility with no concept of attempts)
+        // by resolving each report's checklist_signature back to a single
+        // checklist id and batching one query for the whole page.
+        const checklistIdByReportId = new Map<string, string>();
+        for (const report of reports) {
+          const checklistId = deriveSingleChecklistId(report.checklist_signature);
+          if (checklistId) checklistIdByReportId.set(report.id, checklistId);
+        }
+
+        const attemptNumberByReportId = new Map<string, number>();
+        const checklistIdsToLookup = Array.from(new Set(checklistIdByReportId.values()));
+        if (checklistIdsToLookup.length > 0) {
+          const { data: checklistRows, error: checklistLookupError } = await supabase
+            .from("food_safety_cleaning_checklists")
+            .select("id, attempt_number")
+            .eq("organization_id", organizationId)
+            .in("id", checklistIdsToLookup);
+
+          if (checklistLookupError) throw new Error(checklistLookupError.message);
+
+          const attemptNumberByChecklistId = new Map(
+            (checklistRows ?? []).map((row) => [row.id as string, row.attempt_number as number])
+          );
+          for (const [reportId, checklistId] of checklistIdByReportId) {
+            const attemptNumber = attemptNumberByChecklistId.get(checklistId);
+            if (attemptNumber !== undefined) attemptNumberByReportId.set(reportId, attemptNumber);
+          }
+        }
+
+        const reportsWithAttempt = reportsWithValues.map((report) => ({
+          ...report,
+          attemptNumber: attemptNumberByReportId.get(report.id) ?? null
+        }));
+
         const mostRecent = reports[0] ?? null;
 
         return {
@@ -178,7 +229,7 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
           mostRecentCompletedAt: mostRecent?.completed_at ?? null,
           mostRecentCompletedByInitials: mostRecent?.completed_by_initials ?? null,
           taskColumns,
-          reports: reportsWithValues
+          reports: reportsWithAttempt
         };
       })
     );
@@ -192,6 +243,61 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
   } catch (error) {
     return sendSafeError(res, 500, "Failed to load cleaning reports.", "Reports fetch error:", error);
   }
+});
+
+const MIN_DELETION_REASON_LENGTH = 5;
+
+// Controlled, audited deletion of a single report — the only way a Food
+// Safety report is ever removed (see food_safety_delete_report, migration
+// 0102). Gated by a permission dedicated to this action, never bundled with
+// food_safety:edit — a normal editor must not be able to delete records.
+reportsRouter.delete("/food-safety/reports/:reportId", canDeleteReports, async (req, res) => {
+  const organizationId = req.organizationId;
+  const reportId = String(req.params.reportId);
+  const rawReason = (req.body as Record<string, unknown> | undefined)?.reason;
+
+  const reason = typeof rawReason === "string" ? rawReason : "";
+  if (reason.trim().length < MIN_DELETION_REASON_LENGTH) {
+    return res.status(400).json({ message: `A deletion reason of at least ${MIN_DELETION_REASON_LENGTH} characters is required.` });
+  }
+
+  const userId = req.userId;
+  if (!userId) {
+    return res.status(401).json({ message: "Authentication is required." });
+  }
+
+  let deletedByName: string;
+  let deletedByEmail: string | null;
+  try {
+    const [actor, userResult] = await Promise.all([resolveActor(userId), supabase.auth.admin.getUserById(userId)]);
+    deletedByName = actor.name;
+    deletedByEmail = userResult.data?.user?.email ?? null;
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to resolve the logged-in user.", "Report deletion actor resolution error:", error);
+  }
+
+  const { error: rpcError } = await supabase.rpc("food_safety_delete_report", {
+    p_organization_id: organizationId,
+    p_report_id: reportId,
+    p_deleted_by_user_id: userId,
+    p_deleted_by_email: deletedByEmail ?? deletedByName,
+    p_deletion_reason: reason.trim()
+  });
+
+  if (rpcError) {
+    if (rpcError.code === "P0002") {
+      return res.status(404).json({ message: "This report could not be found." });
+    }
+    if (rpcError.code === "GL010") {
+      return res.status(400).json({ message: "A valid deletion reason is required." });
+    }
+    if (rpcError.code === "GL011") {
+      return res.status(409).json({ message: rpcError.message || "This report could not be safely deleted right now. Try again." });
+    }
+    return sendSafeError(res, 500, "Failed to delete this report.", "Report deletion error:", rpcError);
+  }
+
+  return res.status(204).send();
 });
 
 export { reportsRouter };

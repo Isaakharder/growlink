@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildChecklistSignature } from "../reportGeneration";
+import { buildChecklistSignature, shouldSkipRegeneration } from "../reportGeneration";
 
 // buildChecklistSignature is the upsert conflict target maybeCreateReport
 // uses instead of a per-day key — this is what lets a second/third "Complete
@@ -36,4 +36,36 @@ test("three separate attempts for the same location/date each get distinct signa
     buildChecklistSignature(["attempt-3-id"])
   ]);
   assert.equal(signatures.size, 3);
+});
+
+// shouldSkipRegeneration is what keeps an admin's deletion (food_safety_delete_report,
+// migration 0102) permanent against a repeat/offline-replayed /complete call:
+// the checklist itself stays status='complete' after its report is deleted,
+// so without this check maybeCreateReport would silently recreate it.
+
+test("a checklist whose report was never deleted does not skip regeneration", () => {
+  assert.equal(shouldSkipRegeneration([{ report_deleted_at: null }]), false);
+});
+
+test("a checklist tombstoned after its report was deleted skips regeneration", () => {
+  assert.equal(shouldSkipRegeneration([{ report_deleted_at: "2026-07-28T12:00:00.000Z" }]), true);
+});
+
+test("any tombstoned checklist in the set is enough to skip, even if others are not", () => {
+  assert.equal(
+    shouldSkipRegeneration([{ report_deleted_at: null }, { report_deleted_at: "2026-07-28T12:00:00.000Z" }]),
+    true
+  );
+});
+
+test("an empty checklist set never skips (maybeCreateReport already returns early for that case)", () => {
+  assert.equal(shouldSkipRegeneration([]), false);
+});
+
+test("a brand-new attempt started after the earlier one's report was deleted has its own null tombstone", () => {
+  // Simulates "Complete Another Report": the new checklist row is a fresh
+  // insert with report_deleted_at still null, independent of the prior
+  // attempt's tombstone -- it must be allowed to generate its own report.
+  const newAttempt = [{ report_deleted_at: null }];
+  assert.equal(shouldSkipRegeneration(newAttempt), false);
 });
