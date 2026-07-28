@@ -32,6 +32,23 @@ type ChecklistItem = {
   checkedByInitials: string | null;
 };
 
+type RecentCompletionRow = {
+  taskName: string;
+  displayValue: string;
+  isMissing: boolean;
+  sortOrder: number;
+};
+
+type RecentCompletionReport = {
+  id: string;
+  completedAt: string;
+  createdAt: string;
+  employeeName: string;
+  employeeInitials: string;
+  attemptNumber: number | null;
+  rows: RecentCompletionRow[];
+};
+
 type LocationCard = {
   id: string;
   name: string;
@@ -46,6 +63,16 @@ type LocationCard = {
   // (today, this week/month/year), regardless of which attempt is currently
   // displayed. Drives the "Report already logged today" confirmation dialog.
   reportAlreadyLoggedForPeriod: boolean;
+  // The newest EXISTING (immutable, never-deleted) report for this location,
+  // for the "Recent Completion" card -- sourced from the report/report-item
+  // tables, never the live checklist, so it keeps showing the previous
+  // report while a fresh "Complete Another Report" attempt is being filled,
+  // and correctly skips a deleted-and-tombstoned report in favor of the next
+  // newest real one. null means "no completed report yet", distinct from
+  // latestReportLoadFailed meaning "the fetch itself failed" -- the checklist
+  // above is unaffected either way.
+  latestReport: RecentCompletionReport | null;
+  latestReportLoadFailed: boolean;
   items: ChecklistItem[];
 };
 
@@ -98,6 +125,87 @@ function formatCompletedAt(iso: string): string {
   const datePart = date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
   const timePart = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   return `${datePart} at ${timePart}`;
+}
+
+// GrowLink's single organization timezone (see server/src/config/orgTimezone.ts
+// and the matching pattern in FoodSafetyLocationReportPage.tsx) -- the Recent
+// Completion card must show the same moment the organization actually
+// experienced, regardless of which device is viewing it.
+const RECENT_COMPLETION_TIMEZONE = "America/Toronto";
+
+function formatRecentCompletionDateTime(iso: string): string {
+  const date = new Date(iso);
+  const datePart = date.toLocaleDateString("en-US", { timeZone: RECENT_COMPLETION_TIMEZONE, month: "long", day: "numeric", year: "numeric" });
+  const timePart = date.toLocaleTimeString("en-US", { timeZone: RECENT_COMPLETION_TIMEZONE, hour: "numeric", minute: "2-digit" });
+  return `${datePart} at ${timePart}`;
+}
+
+const RECENT_COMPLETION_COLLAPSE_THRESHOLD = 10;
+
+// Immutable, always-rendered (never hidden) card showing the newest existing
+// report for this location -- see LocationCard.latestReport's own comment
+// for why it's sourced separately from the live checklist above it. The
+// expand/collapse of rows beyond the first 10 is pure client state; it never
+// refetches anything.
+function RecentCompletionCard({
+  latestReport,
+  latestReportLoadFailed
+}: {
+  latestReport: RecentCompletionReport | null;
+  latestReportLoadFailed: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const visibleRows =
+    latestReport && (expanded || latestReport.rows.length <= RECENT_COMPLETION_COLLAPSE_THRESHOLD)
+      ? latestReport.rows
+      : latestReport?.rows.slice(0, RECENT_COMPLETION_COLLAPSE_THRESHOLD) ?? [];
+
+  return (
+    <section className="cleaning-recent-completion-card" aria-labelledby="recent-completion-heading">
+      <h3 id="recent-completion-heading">Recent Completion</h3>
+      <p className="cleaning-recent-completion-subtitle">Most recent saved report for this location</p>
+
+      {latestReportLoadFailed ? (
+        <p className="form-error">Unable to load the recent report.</p>
+      ) : !latestReport ? (
+        <p className="cleaning-recent-completion-empty">No completed reports yet.</p>
+      ) : (
+        <>
+          <div className="cleaning-recent-completion-meta">
+            <span className="cleaning-recent-completion-datetime">{formatRecentCompletionDateTime(latestReport.completedAt)}</span>
+            <span className="cleaning-recent-completion-employee">
+              {latestReport.employeeName} ({latestReport.employeeInitials})
+              {latestReport.attemptNumber !== null ? ` · Attempt #${latestReport.attemptNumber}` : ""}
+            </span>
+          </div>
+
+          <ul className="cleaning-recent-completion-rows">
+            {visibleRows.map((row, index) => (
+              <li
+                key={`${row.taskName}-${index}`}
+                className={`cleaning-recent-completion-row${row.isMissing ? " cleaning-recent-completion-row-missing" : ""}`}
+              >
+                <span className="cleaning-recent-completion-row-task">{row.taskName}</span>
+                <span className="cleaning-recent-completion-row-value">{row.displayValue}</span>
+              </li>
+            ))}
+          </ul>
+
+          {latestReport.rows.length > RECENT_COMPLETION_COLLAPSE_THRESHOLD ? (
+            <button
+              type="button"
+              className="cleaning-recent-completion-toggle"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((prev) => !prev)}
+            >
+              {expanded ? "Show fewer details" : "Show all details"}
+            </button>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
 }
 
 type ItemGroup = { name: string; items: ChecklistItem[] };
@@ -581,15 +689,6 @@ export function MobileFoodSafetyLocationPage() {
           {location.completedAt ? (
             <span className="cleaning-checklist-completed-date">{formatCompletedAt(location.completedAt)}</span>
           ) : null}
-          <button
-            type="button"
-            className="secondary cleaning-checklist-new-attempt-button"
-            disabled={startingNewAttempt || !isOnline}
-            onClick={() => void handleStartNewAttempt()}
-          >
-            {startingNewAttempt ? "Starting…" : "Complete Another Report"}
-          </button>
-          {!isOnline ? <p className="cleaning-checklist-offline-notice">Connect to the internet to log another report.</p> : null}
         </div>
       ) : null}
 
@@ -691,8 +790,20 @@ export function MobileFoodSafetyLocationPage() {
         })}
       </div>
 
-      {!location.isComplete ? (
-        <div className="cleaning-checklist-complete-button-wrap">
+      <div className="cleaning-checklist-complete-button-wrap">
+        {location.isComplete ? (
+          <>
+            <button
+              type="button"
+              className="secondary cleaning-checklist-new-attempt-button"
+              disabled={startingNewAttempt || !isOnline}
+              onClick={() => void handleStartNewAttempt()}
+            >
+              {startingNewAttempt ? "Starting…" : "Complete Another Report"}
+            </button>
+            {!isOnline ? <p className="cleaning-checklist-offline-notice">Connect to the internet to log another report.</p> : null}
+          </>
+        ) : (
           <button
             type="button"
             className="primary-action-button cleaning-checklist-complete-button"
@@ -701,8 +812,10 @@ export function MobileFoodSafetyLocationPage() {
           >
             {completing ? "Completing…" : "Complete Location"}
           </button>
-        </div>
-      ) : null}
+        )}
+      </div>
+
+      <RecentCompletionCard latestReport={location.latestReport} latestReportLoadFailed={location.latestReportLoadFailed} />
 
       {confirmDuplicateOpen ? (
         <ModalOverlay

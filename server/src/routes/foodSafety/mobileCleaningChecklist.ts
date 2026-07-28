@@ -7,6 +7,11 @@ import { computePeriodKey, type ChecklistPeriodType } from "./services/checklist
 import { getCurrentChecklistsForLocation, reduceToLatestAttempts } from "./services/currentChecklists";
 import { maybeCreateReport } from "./services/reportGeneration";
 import { validateReportDate } from "./services/reportDate";
+import {
+  buildRecentCompletionRows,
+  deriveSingleChecklistId,
+  type RecentCompletionRow
+} from "../../utils/foodSafetyReportCard";
 
 type LocationRow = {
   id: string;
@@ -71,6 +76,19 @@ type LocationCard = {
   // "Complete Another Report" attempt so the dialog still fires when THAT
   // attempt is completed too.
   reportAlreadyLoggedForPeriod: boolean;
+  // Full detail on the newest EXISTING (immutable, never-deleted) report for
+  // this location, for the mobile "Recent Completion" card -- deliberately
+  // sourced from food_safety_cleaning_reports/_report_items, never from the
+  // live/editable checklist, so a deleted-and-tombstoned report is simply
+  // skipped in favor of whichever real report is now newest (see
+  // loadLatestReportForLocation). Only ever populated for a single-location
+  // request (the detail page) -- always null for the multi-location list
+  // view, which has no use for full report items. `latestReportLoadFailed`
+  // is true only when this specific sub-fetch itself threw -- distinct from
+  // "genuinely no report exists yet" -- and never blocks the rest of the
+  // location card (checklist tasks, Complete button) from loading normally.
+  latestReport: RecentCompletionReport | null;
+  latestReportLoadFailed: boolean;
   items: {
     id: string;
     name: string;
@@ -149,6 +167,92 @@ async function loadLatestReportsByLocation(
   return map;
 }
 
+type RecentCompletionReport = {
+  id: string;
+  completedAt: string;
+  createdAt: string;
+  employeeName: string;
+  employeeInitials: string;
+  attemptNumber: number | null;
+  rows: RecentCompletionRow[];
+};
+
+// Full detail for the mobile "Recent Completion" card -- the single newest
+// EXISTING report for one location, ordered exactly as specified
+// (completed_at desc, then created_at desc, then id desc as a fully
+// deterministic tiebreak — see reports.ts's identical ordering rationale).
+// A deleted report is simply absent from food_safety_cleaning_reports, so
+// "skip the deleted one, show the next newest" falls out of this ordering
+// for free — no tombstone-aware filtering needed. Only ever called for a
+// single-location request; the caller wraps this in its own try/catch so a
+// failure here can never block the rest of the location card from loading.
+async function loadLatestReportForLocation(
+  organizationId: string,
+  locationId: string
+): Promise<RecentCompletionReport | null> {
+  const { data: reportRow, error: reportError } = await supabase
+    .from("food_safety_cleaning_reports")
+    .select("id, completed_at, created_at, completed_by_name, completed_by_initials, checklist_signature")
+    .eq("organization_id", organizationId)
+    .eq("location_id", locationId)
+    .order("completed_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (reportError) {
+    throw new Error(reportError.message);
+  }
+  if (!reportRow) return null;
+
+  const { data: items, error: itemsError } = await supabase
+    .from("food_safety_cleaning_report_items")
+    .select("report_id, task_name_snapshot, action_label_snapshot, response_type_snapshot, response_value, sort_order")
+    .eq("organization_id", organizationId)
+    .eq("report_id", reportRow.id)
+    .order("sort_order", { ascending: true });
+
+  if (itemsError) {
+    throw new Error(itemsError.message);
+  }
+
+  let attemptNumber: number | null = null;
+  const checklistId = deriveSingleChecklistId(reportRow.checklist_signature);
+  if (checklistId) {
+    const { data: checklistRow, error: checklistError } = await supabase
+      .from("food_safety_cleaning_checklists")
+      .select("attempt_number")
+      .eq("organization_id", organizationId)
+      .eq("id", checklistId)
+      .maybeSingle();
+
+    if (checklistError) {
+      throw new Error(checklistError.message);
+    }
+    attemptNumber = checklistRow?.attempt_number ?? null;
+  }
+
+  return {
+    id: reportRow.id,
+    completedAt: reportRow.completed_at,
+    createdAt: reportRow.created_at,
+    employeeName: reportRow.completed_by_name,
+    employeeInitials: reportRow.completed_by_initials,
+    attemptNumber,
+    rows: buildRecentCompletionRows(
+      (items ?? []) as {
+        report_id: string;
+        task_name_snapshot: string;
+        action_label_snapshot: string | null;
+        response_type_snapshot: string;
+        response_value: string | null;
+        sort_order: number;
+      }[]
+    )
+  };
+}
+
 // The set of `${frequency}:${periodKey}` signatures (see
 // reportGeneration.ts's periodSignature) that already have at least one
 // finalized report, restricted to the locations asked for. Reads only
@@ -220,6 +324,26 @@ async function loadLocationCards(
   };
 
   const locationIdList = activeLocations.map((l) => l.id);
+
+  // Recent Completion card data -- only ever fetched for a single-location
+  // request (the detail page); the multi-location list view has no use for
+  // full report items and would pay for N extra queries it never renders.
+  // Isolated in its own try/catch, outside the Promise.all below, so a
+  // failure here can never fail the checklist load itself -- the location
+  // card still loads and can still be completed; only the card shows an
+  // "unable to load" state.
+  const latestReportByLocationId = new Map<string, RecentCompletionReport | null>();
+  const latestReportFailedLocationIds = new Set<string>();
+
+  if (locationIds && locationIds.length === 1) {
+    const [singleLocationId] = locationIds;
+    try {
+      latestReportByLocationId.set(singleLocationId, await loadLatestReportForLocation(organizationId, singleLocationId));
+    } catch (error) {
+      console.error("Food Safety recent-report load error:", error);
+      latestReportFailedLocationIds.add(singleLocationId);
+    }
+  }
 
   // Every possible frequency's signature for the current reference date --
   // used to detect "does this location already have a finalized report for
@@ -340,6 +464,8 @@ async function loadLocationCards(
       lastCompletedAt: latestReport?.completedAt ?? null,
       lastCompletedByInitials: latestReport?.completedByInitials ?? null,
       reportAlreadyLoggedForPeriod,
+      latestReport: latestReportByLocationId.get(location.id) ?? null,
+      latestReportLoadFailed: latestReportFailedLocationIds.has(location.id),
       items
     };
   });

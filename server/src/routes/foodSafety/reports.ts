@@ -4,7 +4,13 @@ import { sendSafeError } from "../../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../../middleware/requirePermission";
 import { zonedTimeToUtc } from "../../utils/zonedTime";
 import { DEFAULT_ORG_TIMEZONE } from "../../config/orgTimezone";
-import { buildTaskColumnsAndValues, type ReportItemRow, type ReportRow, type TaskRow } from "../../utils/foodSafetyReportCard";
+import {
+  buildTaskColumnsAndValues,
+  deriveSingleChecklistId,
+  type ReportItemRow,
+  type ReportRow,
+  type TaskRow
+} from "../../utils/foodSafetyReportCard";
 import { resolveActor } from "./services/actorIdentity";
 
 const RECENT_REPORTS_LIMIT = 28;
@@ -35,19 +41,6 @@ type LocationRow = {
   notes: string | null;
   is_active: boolean;
 };
-
-// Parses a checklist_signature (see reportGeneration.ts's buildChecklistSignature)
-// back into a single checklist id, when it unambiguously names exactly one --
-// null for legacy/backfill reports (no checklist at all) or the rare
-// multi-checklist combined-report case. Used only to look up that checklist's
-// attempt_number for display in the delete-confirmation modal; the deletion
-// RPC (food_safety_delete_report, migration 0102) does its own, authoritative
-// parsing in SQL and is not affected by anything here.
-function deriveSingleChecklistId(signature: string | null): string | null {
-  if (!signature || signature.startsWith("legacy:") || signature.startsWith("backfill:")) return null;
-  const ids = signature.split("|");
-  return ids.length === 1 ? ids[0] : null;
-}
 
 const reportsRouter = Router();
 

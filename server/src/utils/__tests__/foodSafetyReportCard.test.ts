@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildRecentCompletionRows,
   buildTaskColumnsAndValues,
+  deriveSingleChecklistId,
   formatTaskCellValue,
   type ReportItemRow,
   type ReportRow,
@@ -234,4 +236,132 @@ test("buildTaskColumnsAndValues carries a long-text answer through to the report
 
   assert.equal(row.taskValues[col.key].display, longText);
   assert.equal(row.taskValues[col.key].isCheckmark, false);
+});
+
+// ── deriveSingleChecklistId ──────────────────────────────────────────────
+
+test("a single real checklist id round-trips", () => {
+  assert.equal(deriveSingleChecklistId("checklist-a"), "checklist-a");
+});
+
+test("a multi-checklist combined signature has no single id", () => {
+  assert.equal(deriveSingleChecklistId("checklist-a|checklist-b"), null);
+});
+
+test("legacy signatures have no checklist id", () => {
+  assert.equal(deriveSingleChecklistId("legacy:some-report-id"), null);
+});
+
+test("backfill signatures have no checklist id", () => {
+  assert.equal(deriveSingleChecklistId("backfill:2026-07-25"), null);
+});
+
+test("a null signature has no checklist id", () => {
+  assert.equal(deriveSingleChecklistId(null), null);
+});
+
+// ── buildRecentCompletionRows: mobile "Recent Completion" card formatting ──
+
+function recentItem(
+  taskName: string,
+  responseType: string,
+  value: string | null,
+  actionLabel: string | null,
+  sortOrder: number
+): ReportItemRow {
+  return {
+    report_id: "r",
+    task_name_snapshot: taskName,
+    action_label_snapshot: actionLabel,
+    response_type_snapshot: responseType,
+    response_value: value,
+    sort_order: sortOrder
+  };
+}
+
+test("a checked single checkbox shows a checkmark with its label", () => {
+  const rows = buildRecentCompletionRows([recentItem("Staging line scrubbed", "checkbox", "true", "Scrubbed", 0)]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].taskName, "Staging line scrubbed");
+  assert.equal(rows[0].displayValue, "✓ Scrubbed");
+  assert.equal(rows[0].isMissing, false);
+});
+
+test("an unchecked checkbox shows 'Not completed', not a raw value", () => {
+  const rows = buildRecentCompletionRows([recentItem("Staging line scrubbed", "checkbox", null, "Scrubbed", 0)]);
+  assert.equal(rows[0].displayValue, "Not completed");
+  assert.equal(rows[0].isMissing, true);
+});
+
+test("a blank short-text value shows 'Not recorded', not empty text", () => {
+  const rows = buildRecentCompletionRows([recentItem("Notes", "short_text", null, null, 0)]);
+  assert.equal(rows[0].displayValue, "Not recorded");
+  assert.equal(rows[0].isMissing, true);
+});
+
+test("a blank short-text value with only whitespace also shows 'Not recorded'", () => {
+  const rows = buildRecentCompletionRows([recentItem("Notes", "short_text", "   ", null, 0)]);
+  assert.equal(rows[0].displayValue, "Not recorded");
+  assert.equal(rows[0].isMissing, true);
+});
+
+test("a filled short-text/number value shows the raw saved text, not JSON or booleans", () => {
+  const rows = buildRecentCompletionRows([recentItem("Rotate through swab tests locations 1 2 or 3", "short_text", "Location 3", null, 0)]);
+  assert.equal(rows[0].displayValue, "Location 3");
+  assert.equal(rows[0].isMissing, false);
+});
+
+test("numeric zero is a real recorded value, not blank", () => {
+  const rows = buildRecentCompletionRows([recentItem("Chlorine level", "number", "0", null, 0)]);
+  assert.equal(rows[0].displayValue, "0");
+  assert.equal(rows[0].isMissing, false);
+});
+
+test("a multi-label checkbox task (e.g. Swab Test results) collapses to one row showing only the checked label", () => {
+  const rows = buildRecentCompletionRows([
+    recentItem("Swab Test results", "checkbox", "true", "✓", 600),
+    recentItem("Swab Test results", "checkbox", null, "?", 601),
+    recentItem("Swab Test results", "checkbox", null, "X", 602),
+    recentItem("Swab Test results", "checkbox", null, "XX", 603)
+  ]);
+  assert.equal(rows.length, 1, "four label items for one task must collapse into a single row");
+  assert.equal(rows[0].taskName, "Swab Test results");
+  assert.equal(rows[0].displayValue, "✓ ✓");
+  assert.equal(rows[0].isMissing, false);
+});
+
+test("a multi-label checkbox task with nothing checked shows 'Not completed' as one row", () => {
+  const rows = buildRecentCompletionRows([
+    recentItem("Garbage Bin", "checkbox", null, "Emptied", 0),
+    recentItem("Garbage Bin", "checkbox", null, "Bag Replaced", 1)
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].displayValue, "Not completed");
+  assert.equal(rows[0].isMissing, true);
+});
+
+test("a multi-label checkbox task with more than one checked joins both labels", () => {
+  const rows = buildRecentCompletionRows([
+    recentItem("Garbage Bin", "checkbox", "true", "Emptied", 0),
+    recentItem("Garbage Bin", "checkbox", "true", "Bag Replaced", 1)
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].displayValue, "✓ Emptied, ✓ Bag Replaced");
+  assert.equal(rows[0].isMissing, false);
+});
+
+test("rows preserve sort_order and do not reorder tasks", () => {
+  const rows = buildRecentCompletionRows([
+    recentItem("Second task", "short_text", "b", null, 100),
+    recentItem("First task", "short_text", "a", null, 0)
+  ]);
+  assert.deepEqual(
+    rows.map((r) => r.taskName),
+    ["Second task", "First task"],
+    "buildRecentCompletionRows trusts input order (sort_order) rather than re-sorting itself"
+  );
+});
+
+test("an empty item list produces an empty row list", () => {
+  assert.deepEqual(buildRecentCompletionRows([]), []);
 });

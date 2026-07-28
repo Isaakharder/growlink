@@ -6032,17 +6032,122 @@ textarea.cleaning-checklist-response-input {
 
 /* ── Food Safety — Complete Location (mobile) ──────────────────────────────── */
 
+/* No longer sticky: this wrap now sits above the Recent Completion card
+   rather than at the very end of the page's content, and a sticky element
+   here would otherwise stay pinned over the card for the rest of the
+   scroll (its sticky containing block extends through everything after it
+   in the same <section>) instead of releasing once scrolled past. */
 .cleaning-checklist-complete-button-wrap {
-  position: sticky;
-  bottom: 76px;
   margin-top: 1.25rem;
-  z-index: 5;
 }
 
 .cleaning-checklist-complete-button {
   width: 100%;
   min-height: 56px;
   font-size: 1.05rem;
+}
+
+/* ── Food Safety — Recent Completion card (mobile) ─────────────────────────── */
+
+.cleaning-recent-completion-card {
+  margin: 1.5rem 0 1rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.cleaning-recent-completion-card h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cleaning-recent-completion-subtitle {
+  margin: 0.15rem 0 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.cleaning-recent-completion-empty {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.cleaning-recent-completion-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-bottom: 0.65rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.cleaning-recent-completion-datetime {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cleaning-recent-completion-employee {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Compact, non-interactive rows -- explicitly not styled like the editable
+   task-row buttons/inputs above (no border, no background, no cursor)
+   so a completed answer never reads as something still tappable. */
+.cleaning-recent-completion-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.cleaning-recent-completion-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.cleaning-recent-completion-row-task {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cleaning-recent-completion-row-value {
+  font-size: 0.9rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* A missing/incomplete answer is marked by its own text ("Not completed" /
+   "Not recorded") plus this treatment -- never color alone. */
+.cleaning-recent-completion-row-missing .cleaning-recent-completion-row-value {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.cleaning-recent-completion-toggle {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--brand);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
 }
 
 /* ── Food Safety — Logs Backfill (desktop) ─────────────────────────────────── */

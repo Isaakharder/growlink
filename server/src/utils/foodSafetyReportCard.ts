@@ -199,3 +199,76 @@ export function buildTaskColumnsAndValues(
     })
   };
 }
+
+// Parses a checklist_signature (see reportGeneration.ts's buildChecklistSignature)
+// back into a single checklist id, when it unambiguously names exactly one --
+// null for legacy/backfill reports (no checklist at all) or the rare
+// multi-checklist combined-report case. Used only to look up that checklist's
+// attempt_number for display; the report-deletion RPC does its own,
+// authoritative parsing in SQL and is not affected by this.
+export function deriveSingleChecklistId(signature: string | null): string | null {
+  if (!signature || signature.startsWith("legacy:") || signature.startsWith("backfill:")) return null;
+  const ids = signature.split("|");
+  return ids.length === 1 ? ids[0] : null;
+}
+
+export type RecentCompletionRow = {
+  taskName: string;
+  displayValue: string;
+  isMissing: boolean;
+  sortOrder: number;
+};
+
+// Groups report items back into one row per task -- a multi-label checkbox
+// task (e.g. "Swab Test results" with separate items per ✓/?/X/XX label)
+// renders as one row, exactly like the editable checklist groups them (see
+// groupItems() in MobileFoodSafetyLocationPage.tsx) -- and formats each into
+// ready-to-render text server-side, the same "server decides the wording"
+// principle as formatTaskCellValue above. Unlike that function, the fallback
+// text here distinguishes "checkbox left unchecked" ("Not completed") from
+// "optional text/number left blank" ("Not recorded"), which the desktop
+// report table's blank cell has no need to. Assumes items are already
+// ordered by sort_order (true of every query that selects them, matching
+// the order maybeCreateReport itself inserts them in).
+export function buildRecentCompletionRows(items: ReportItemRow[]): RecentCompletionRow[] {
+  type Group = { taskName: string; responseType: string; items: ReportItemRow[]; sortOrder: number };
+  const groups: Group[] = [];
+
+  for (const item of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.taskName === item.task_name_snapshot && last.responseType === item.response_type_snapshot) {
+      last.items.push(item);
+    } else {
+      groups.push({
+        taskName: item.task_name_snapshot,
+        responseType: item.response_type_snapshot,
+        items: [item],
+        sortOrder: item.sort_order
+      });
+    }
+  }
+
+  return groups.map((group) => {
+    if (group.responseType === "checkbox") {
+      const checkedLabels = group.items
+        .filter((item) => item.response_value === "true")
+        .map((item) => item.action_label_snapshot ?? "Done");
+
+      return {
+        taskName: group.taskName,
+        displayValue: checkedLabels.length > 0 ? checkedLabels.map((label) => `✓ ${label}`).join(", ") : "Not completed",
+        isMissing: checkedLabels.length === 0,
+        sortOrder: group.sortOrder
+      };
+    }
+
+    const trimmed = group.items[0]?.response_value?.trim() ?? "";
+
+    return {
+      taskName: group.taskName,
+      displayValue: trimmed.length > 0 ? trimmed : "Not recorded",
+      isMissing: trimmed.length === 0,
+      sortOrder: group.sortOrder
+    };
+  });
+}
