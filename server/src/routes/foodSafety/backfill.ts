@@ -391,6 +391,14 @@ backfillRouter.post("/food-safety/backfill/create", canEdit, async (req, res) =>
       location_name_snapshot: location.name,
       location_area_snapshot: location.area,
       period_signature: `backfill:${day.date}`,
+      // Backfilled reports have no real checklist to derive an id-based
+      // signature from (see reportGeneration.ts's buildChecklistSignature),
+      // so they reuse their own already-unique period_signature value as
+      // their checklist_signature -- this is what the upsert below is keyed
+      // on since migration 0101 replaced the reports table's uniqueness
+      // constraint from (location_id, period_signature) to
+      // (location_id, checklist_signature).
+      checklist_signature: `backfill:${day.date}`,
       task_count: day.results.length,
       completed_at: day.completedAtIso,
       completed_by_user_id: completedByUserId,
@@ -404,7 +412,7 @@ backfillRouter.post("/food-safety/backfill/create", canEdit, async (req, res) =>
 
     const { data: insertedReports, error: reportsError } = await supabase
       .from("food_safety_cleaning_reports")
-      .upsert(reportRows, { onConflict: "location_id,period_signature", ignoreDuplicates: true })
+      .upsert(reportRows, { onConflict: "location_id,checklist_signature", ignoreDuplicates: true })
       .select("id, period_signature");
 
     if (reportsError) {

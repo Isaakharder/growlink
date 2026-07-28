@@ -47,14 +47,27 @@ export async function reportAlreadyExistsForPeriod(
   return (data ?? []).length > 0;
 }
 
+// Deterministic identity for "the exact set of checklist attempts that
+// produced this report" -- the upsert conflict target for report creation
+// (see maybeCreateReport below). Sorted so the same set of checklists always
+// produces the same signature regardless of query ordering. Exported so it
+// can be unit-tested without a live database.
+export function buildChecklistSignature(checklistIds: string[]): string {
+  return [...checklistIds].sort().join("|");
+}
+
 // Called after "Complete Location" succeeds. If the location's entire
 // current-period set of checklists (across every frequency currently in use
 // there) is now complete, creates one immutable report row plus its task
 // snapshots. Safe to call unconditionally and repeatedly: a unique
-// constraint on (location_id, period_signature) makes the report insert
-// idempotent, and this is a no-op whenever the location isn't fully
-// complete. Never throws — a failure here must never break the
-// complete-location response it runs alongside.
+// constraint on (location_id, checklist_signature) -- the exact set of
+// checklist ids that produced this report, not the date -- makes the report
+// insert idempotent per attempt, and this is a no-op whenever the location
+// isn't fully complete. Because the key is per-attempt rather than per-day,
+// a second (or third) "Complete Another Report" attempt for the same
+// location/date always produces its own independent report row. Never
+// throws — a failure here must never break the complete-location response
+// it runs alongside.
 //
 // referenceDate, when given, is the mobile long-press date selector's chosen
 // report date (see MobileFoodSafetyLocationPage.tsx / reportDate.ts) — undefined
@@ -128,6 +141,8 @@ export async function maybeCreateReport(
       }
     }
 
+    const checklistSignature = buildChecklistSignature(currentChecklists.map((c) => c.id));
+
     const { data: insertedReports, error: reportError } = await supabase
       .from("food_safety_cleaning_reports")
       .upsert(
@@ -137,6 +152,7 @@ export async function maybeCreateReport(
           location_name_snapshot: location.name,
           location_area_snapshot: location.area,
           period_signature: periodSignature,
+          checklist_signature: checklistSignature,
           task_count: items.length,
           completed_at: completedAt,
           completed_by_user_id: lastCompleted?.completed_by_user_id ?? null,
@@ -145,7 +161,7 @@ export async function maybeCreateReport(
           generated_at: generatedAt,
           generated_by_user_id: generatedByUserId
         },
-        { onConflict: "location_id,period_signature", ignoreDuplicates: true }
+        { onConflict: "location_id,checklist_signature", ignoreDuplicates: true }
       )
       .select("id");
 

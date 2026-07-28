@@ -4,7 +4,7 @@ import { sendSafeError } from "../../utils/safeError";
 import { requirePermission } from "../../middleware/requirePermission";
 import { resolveActor } from "./services/actorIdentity";
 import { computePeriodKey, type ChecklistPeriodType } from "./services/checklistPeriod";
-import { getCurrentChecklistsForLocation } from "./services/currentChecklists";
+import { getCurrentChecklistsForLocation, reduceToLatestAttempts } from "./services/currentChecklists";
 import { maybeCreateReport, reportAlreadyExistsForPeriod } from "./services/reportGeneration";
 import { validateReportDate } from "./services/reportDate";
 
@@ -19,6 +19,7 @@ type LocationRow = {
 type ChecklistRow = {
   id: string;
   location_id: string;
+  attempt_number: number;
   status: "incomplete" | "complete";
   completed_at: string | null;
   completed_by_name: string | null;
@@ -61,6 +62,15 @@ type LocationCard = {
   // Powers the "Last: Jul 22, 3:41 PM" footer on the mobile location list.
   lastCompletedAt: string | null;
   lastCompletedByInitials: string | null;
+  // True when a report already exists for this location's CURRENT period
+  // (today's date for a daily location, this ISO week for weekly, etc.) --
+  // regardless of whether that report came from the attempt currently being
+  // displayed or an earlier, already-finalized one. Drives the mobile
+  // client's "Report already logged today" confirmation dialog before a
+  // second/third completion of the same period; stays true across a
+  // "Complete Another Report" attempt so the dialog still fires when THAT
+  // attempt is completed too.
+  reportAlreadyLoggedForPeriod: boolean;
   items: {
     id: string;
     name: string;
@@ -139,6 +149,42 @@ async function loadLatestReportsByLocation(
   return map;
 }
 
+// The set of `${frequency}:${periodKey}` signatures (see
+// reportGeneration.ts's periodSignature) that already have at least one
+// finalized report, restricted to the locations asked for. Reads only
+// food_safety_cleaning_reports (immutable), so an in-progress "Complete
+// Another Report" attempt never itself counts here -- only a PRIOR
+// completed attempt does, which is exactly what should trigger the
+// mobile client's duplicate-report confirmation dialog.
+async function loadReportedPeriodSignaturesByLocation(
+  organizationId: string,
+  locationIds: string[],
+  periodSignatures: string[]
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (locationIds.length === 0 || periodSignatures.length === 0) return map;
+
+  const { data, error } = await supabase
+    .from("food_safety_cleaning_reports")
+    .select("location_id, period_signature")
+    .eq("organization_id", organizationId)
+    .in("location_id", locationIds)
+    .in("period_signature", periodSignatures);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  for (const row of (data ?? []) as { location_id: string | null; period_signature: string }[]) {
+    if (!row.location_id) continue;
+    const set = map.get(row.location_id) ?? new Set<string>();
+    set.add(row.period_signature);
+    map.set(row.location_id, set);
+  }
+
+  return map;
+}
+
 async function loadLocationCards(
   organizationId: string,
   locationIds?: string[],
@@ -175,14 +221,25 @@ async function loadLocationCards(
 
   const locationIdList = activeLocations.map((l) => l.id);
 
-  const [{ data: checklists, error: checklistsError }, latestReportsByLocation] = await Promise.all([
+  // Every possible frequency's signature for the current reference date --
+  // used to detect "does this location already have a finalized report for
+  // its own current period", regardless of which frequency that location
+  // actually uses.
+  const periodSignatures = (Object.entries(periodKeyByType) as [ChecklistPeriodType, string][]).map(
+    ([periodType, periodKey]) => `${periodType}:${periodKey}`
+  );
+
+  const [{ data: checklists, error: checklistsError }, latestReportsByLocation, reportedPeriodsByLocation] = await Promise.all([
     supabase
       .from("food_safety_cleaning_checklists")
-      .select("id, location_id, status, completed_at, completed_by_name, completed_by_initials, period_type, period_key")
+      .select(
+        "id, location_id, attempt_number, status, completed_at, completed_by_name, completed_by_initials, period_type, period_key"
+      )
       .eq("organization_id", organizationId)
       .in("location_id", locationIdList)
       .in("period_key", Array.from(new Set(Object.values(periodKeyByType)))),
-    loadLatestReportsByLocation(organizationId, locationIdList)
+    loadLatestReportsByLocation(organizationId, locationIdList),
+    loadReportedPeriodSignaturesByLocation(organizationId, locationIdList, periodSignatures)
   ]);
 
   if (checklistsError) {
@@ -191,9 +248,21 @@ async function loadLocationCards(
 
   // Belt-and-suspenders: only keep checklists whose period_key matches the
   // *current* period for its own period_type (the broad period_key filter
-  // above is just to keep the query cheap).
-  const currentChecklists = ((checklists ?? []) as (ChecklistRow & { period_type: ChecklistPeriodType; period_key: string })[])
+  // above is just to keep the query cheap). A location can now have more
+  // than one row per period_type/period_key (one per "attempt" -- see
+  // migration 0101), so this is further reduced to the latest attempt of
+  // each period_type per location below.
+  const currentPeriodChecklists = ((checklists ?? []) as (ChecklistRow & { period_type: ChecklistPeriodType; period_key: string })[])
     .filter((c) => c.period_key === periodKeyByType[c.period_type]);
+
+  const checklistsByLocationRaw = new Map<string, (ChecklistRow & { period_type: ChecklistPeriodType; period_key: string })[]>();
+  for (const checklist of currentPeriodChecklists) {
+    const list = checklistsByLocationRaw.get(checklist.location_id) ?? [];
+    list.push(checklist);
+    checklistsByLocationRaw.set(checklist.location_id, list);
+  }
+
+  const currentChecklists = Array.from(checklistsByLocationRaw.values()).flatMap((list) => reduceToLatestAttempts(list));
 
   const checklistIds = currentChecklists.map((c) => c.id);
   const itemsByChecklist = new Map<string, ChecklistItemRow[]>();
@@ -255,6 +324,9 @@ async function loadLocationCards(
 
     const latestReport = latestReportsByLocation.get(location.id);
 
+    const locationPeriodSignature = `${location.frequency}:${periodKeyByType[location.frequency]}`;
+    const reportAlreadyLoggedForPeriod = reportedPeriodsByLocation.get(location.id)?.has(locationPeriodSignature) ?? false;
+
     return {
       id: location.id,
       name: location.name,
@@ -267,6 +339,7 @@ async function loadLocationCards(
       completedByInitials: isComplete ? lastCompleted?.completed_by_initials ?? null : null,
       lastCompletedAt: latestReport?.completedAt ?? null,
       lastCompletedByInitials: latestReport?.completedByInitials ?? null,
+      reportAlreadyLoggedForPeriod,
       items
     };
   });
@@ -451,6 +524,82 @@ mobileCleaningChecklistRouter.post(
     const rawValue = (req.body as Record<string, unknown> | undefined)?.value;
     const value = typeof rawValue === "string" ? rawValue.trim() : "";
     void handleSetItemResponse(req, res, value || null);
+  }
+);
+
+// "Complete Another Report" — starts a fresh checklist attempt for a
+// location whose current period is already complete, so a second (or
+// third) full report can be logged for the same location/date (e.g. a
+// packline swab test that failed and needs a re-clean + re-test). Only
+// callable once the location's current attempt is actually complete; the
+// underlying RPC enforces that itself (errcode GL002) even if two requests
+// race. reportDate handling mirrors /complete — re-validated from scratch,
+// never trusted from the client — but unlike /complete, a backdated day
+// that already has a report is still hard-blocked (unchanged, existing
+// behavior; only same-day/current-period resubmission is in scope here).
+mobileCleaningChecklistRouter.post(
+  "/food-safety/mobile/cleaning-checklist/locations/:locationId/new-attempt",
+  canUseMobileFoodSafety,
+  async (req, res) => {
+    const organizationId = req.organizationId;
+    const locationId = String(req.params.locationId);
+    const rawReportDate = (req.body as Record<string, unknown> | undefined)?.reportDate;
+
+    let referenceDate: Date | undefined;
+    if (typeof rawReportDate === "string") {
+      let validated;
+      try {
+        validated = validateReportDate(rawReportDate);
+      } catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid report date." });
+      }
+
+      if (validated.isBackdated) {
+        try {
+          const exists = await reportAlreadyExistsForBackdatedDate(organizationId, locationId, validated.referenceDate, validated.dateStr);
+          if (exists) {
+            return res.status(409).json({ message: "A report already exists for this location and date." });
+          }
+        } catch (error) {
+          return sendSafeError(res, 500, "Failed to check existing reports for this date.", "Backdate duplicate-check error:", error);
+        }
+      }
+
+      referenceDate = validated.referenceDate;
+    }
+
+    const { data: location, error: locationError } = await supabase
+      .from("food_safety_cleaning_locations")
+      .select("frequency")
+      .eq("id", locationId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+
+    if (locationError) {
+      return sendSafeError(res, 500, "Failed to load this location.", "New-attempt location lookup error:", locationError);
+    }
+    if (!location) {
+      return res.status(404).json({ message: "This location could not be found." });
+    }
+
+    const frequency = (location as { frequency: ChecklistPeriodType }).frequency;
+    const periodKey = computePeriodKey(frequency, referenceDate ?? new Date());
+
+    const { error: rpcError } = await supabase.rpc("food_safety_start_new_checklist_attempt", {
+      p_organization_id: organizationId,
+      p_location_id: locationId,
+      p_period_type: frequency,
+      p_period_key: periodKey
+    });
+
+    if (rpcError) {
+      if (rpcError.code === "GL002") {
+        return res.status(409).json({ message: "A checklist is already in progress for this location." });
+      }
+      return sendSafeError(res, 500, "Failed to start a new report for this location.", "New-attempt error:", rpcError);
+    }
+
+    return respondWithReloadedLocation(req, res, organizationId, locationId, referenceDate);
   }
 );
 

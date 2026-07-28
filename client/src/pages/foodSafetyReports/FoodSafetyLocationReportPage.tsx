@@ -46,6 +46,23 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
+// GrowLink's single organization timezone (see server/src/config/orgTimezone.ts
+// and the same pattern in MobileFoodSafetyPage.tsx) -- report timestamps are
+// formatted in this zone, not the viewer's device timezone, so two reports
+// completed on either side of local midnight always read as belonging to
+// whichever calendar day the organization actually experienced them on.
+const ORG_TIMEZONE = "America/Toronto";
+
+// "July 28, 2026 at 10:47 AM" — includes time so multiple same-day reports
+// for one location (e.g. a failed swab test followed by a re-clean and a
+// passing retest) read as distinct rows instead of looking duplicated.
+function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  const datePart = date.toLocaleDateString("en-US", { timeZone: ORG_TIMEZONE, month: "long", day: "numeric", year: "numeric" });
+  const timePart = date.toLocaleTimeString("en-US", { timeZone: ORG_TIMEZONE, hour: "numeric", minute: "2-digit" });
+  return `${datePart} at ${timePart}`;
+}
+
 export function FoodSafetyLocationReportPage() {
   const { locationId } = useParams<{ locationId: string }>();
 
@@ -298,7 +315,7 @@ export function FoodSafetyLocationReportPage() {
                     <tbody>
                       {card.reports.map((report) => (
                         <tr key={report.id}>
-                          <td className="cleaning-reports-col-date">{formatDate(report.completedAt)}</td>
+                          <td className="cleaning-reports-col-date">{formatDateTime(report.completedAt)}</td>
                           {card.taskColumns.map((column) => {
                             const cell = resolveTaskCell(report.taskValues, column.key);
                             return (

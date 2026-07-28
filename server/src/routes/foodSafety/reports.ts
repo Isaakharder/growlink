@@ -80,12 +80,21 @@ reportsRouter.get("/food-safety/reports", canView, async (req, res) => {
   try {
     const cards = await Promise.all(
       ((locations ?? []) as LocationRow[]).map(async (location) => {
+        // completed_at alone is not a unique key -- a location can now have
+        // more than one report on the same day (see "Complete Another
+        // Report"), and two attempts could in principle even share the same
+        // completed_at down to the stored precision. created_at (real
+        // insertion order) and id are added as tiebreakers purely so ORDER BY
+        // is fully deterministic; they never change the primary, meaningful
+        // sort by completed_at.
         let recentQuery = supabase
           .from("food_safety_cleaning_reports")
           .select("id, completed_at, completed_by_name, completed_by_initials")
           .eq("organization_id", organizationId)
           .eq("location_id", location.id)
-          .order("completed_at", { ascending: false });
+          .order("completed_at", { ascending: false })
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false });
 
         if (summaryOnly) {
           // Only the single most recent report is needed for the card.

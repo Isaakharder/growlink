@@ -42,6 +42,10 @@ type LocationCard = {
   completedAt: string | null;
   completedByName: string | null;
   completedByInitials: string | null;
+  // True when a report already exists for this location's current period
+  // (today, this week/month/year), regardless of which attempt is currently
+  // displayed. Drives the "Report already logged today" confirmation dialog.
+  reportAlreadyLoggedForPeriod: boolean;
   items: ChecklistItem[];
 };
 
@@ -139,6 +143,8 @@ export function MobileFoodSafetyLocationPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(new Set());
   const [completing, setCompleting] = useState(false);
+  const [startingNewAttempt, setStartingNewAttempt] = useState(false);
+  const [confirmDuplicateOpen, setConfirmDuplicateOpen] = useState(false);
 
   // The report date this location's checklist is being filled out for --
   // defaults to today. Changed only via the hidden long-press date selector.
@@ -333,7 +339,11 @@ export function MobileFoodSafetyLocationPage() {
     await submitResponse(itemId, url, JSON.stringify({ value, reportDate }));
   }
 
-  async function handleCompleteLocation() {
+  // The actual "Complete Location" submission — always allowed to proceed;
+  // whether a prior report already exists for this period is purely a
+  // client-side confirmation gate handled by the caller (handleCompleteLocation
+  // below), never a server-side block.
+  async function submitCompleteLocation() {
     if (!location || completing) return;
     setError(null);
     setInfoMessage(null);
@@ -362,6 +372,57 @@ export function MobileFoodSafetyLocationPage() {
       setError(err instanceof Error ? err.message : "Failed to complete this location");
     } finally {
       setCompleting(false);
+    }
+  }
+
+  // "Complete" button handler — if a report already exists for this
+  // location's current period, ask for confirmation first (the popup
+  // itself performs no submission; Cancel leaves everything as entered).
+  function handleCompleteLocation() {
+    if (!location || completing) return;
+    if (location.reportAlreadyLoggedForPeriod) {
+      setConfirmDuplicateOpen(true);
+      return;
+    }
+    void submitCompleteLocation();
+  }
+
+  function confirmDuplicateAndSubmit() {
+    setConfirmDuplicateOpen(false);
+    void submitCompleteLocation();
+  }
+
+  // "Complete Another Report" — only shown once the current attempt is
+  // complete. Starts a brand-new, blank checklist attempt for this
+  // location's current period; the earlier attempt (and its already-
+  // generated report) is left completely untouched.
+  async function handleStartNewAttempt() {
+    if (!location || startingNewAttempt) return;
+    setError(null);
+    setInfoMessage(null);
+    setStartingNewAttempt(true);
+
+    const url = `${API_BASE}/locations/${location.id}/new-attempt`;
+
+    try {
+      const res = await apiFetch(url, { method: "POST", body: JSON.stringify({ reportDate }) });
+
+      if (!res.ok) {
+        const errorBody = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(errorBody?.message ?? "Failed to start a new report for this location");
+      }
+
+      const data = (await res.json()) as { location: LocationCard | null };
+      if (data.location) {
+        setLocation(data.location);
+        setCheckboxOverrides({});
+        setQueuedItemIds(new Set());
+        setDrafts({});
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start a new report for this location");
+    } finally {
+      setStartingNewAttempt(false);
     }
   }
 
@@ -520,6 +581,15 @@ export function MobileFoodSafetyLocationPage() {
           {location.completedAt ? (
             <span className="cleaning-checklist-completed-date">{formatCompletedAt(location.completedAt)}</span>
           ) : null}
+          <button
+            type="button"
+            className="secondary cleaning-checklist-new-attempt-button"
+            disabled={startingNewAttempt || !isOnline}
+            onClick={() => void handleStartNewAttempt()}
+          >
+            {startingNewAttempt ? "Starting…" : "Complete Another Report"}
+          </button>
+          {!isOnline ? <p className="cleaning-checklist-offline-notice">Connect to the internet to log another report.</p> : null}
         </div>
       ) : null}
 
@@ -627,11 +697,30 @@ export function MobileFoodSafetyLocationPage() {
             type="button"
             className="primary-action-button cleaning-checklist-complete-button"
             disabled={completing}
-            onClick={() => void handleCompleteLocation()}
+            onClick={handleCompleteLocation}
           >
             {completing ? "Completing…" : "Complete Location"}
           </button>
         </div>
+      ) : null}
+
+      {confirmDuplicateOpen ? (
+        <ModalOverlay
+          onClose={() => setConfirmDuplicateOpen(false)}
+          contentClassName="cleaning-checklist-duplicate-confirm-modal"
+          titleId="report-duplicate-confirm-title"
+        >
+          <h3 id="report-duplicate-confirm-title">Report already logged today</h3>
+          <p>A report has already been completed for this location today. Are you sure you want to log another report?</p>
+          <div className="form-actions">
+            <button type="button" onClick={confirmDuplicateAndSubmit}>
+              Log Another Report
+            </button>
+            <button type="button" className="secondary" onClick={() => setConfirmDuplicateOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </ModalOverlay>
       ) : null}
 
       {pickerOpen ? (

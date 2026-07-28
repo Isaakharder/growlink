@@ -5,12 +5,32 @@ export type CurrentChecklistRow = {
   id: string;
   period_type: ChecklistPeriodType;
   period_key: string;
+  attempt_number: number;
   status: "incomplete" | "complete";
   completed_at: string | null;
   completed_by_user_id: string | null;
   completed_by_name: string | null;
   completed_by_initials: string | null;
 };
+
+// A location can now have more than one checklist row per (period_type,
+// period_key) -- one per "attempt" (see migration 0101, "Complete Another
+// Report"). Only the latest attempt of each period_type is ever the live,
+// currently-relevant one; earlier attempts are frozen history that already
+// produced their own report. Exported so it can be unit-tested without a
+// live database.
+export function reduceToLatestAttempts<T extends { period_type: ChecklistPeriodType; attempt_number: number }>(
+  checklists: T[]
+): T[] {
+  const latestByPeriodType = new Map<ChecklistPeriodType, T>();
+  for (const checklist of checklists) {
+    const current = latestByPeriodType.get(checklist.period_type);
+    if (!current || checklist.attempt_number > current.attempt_number) {
+      latestByPeriodType.set(checklist.period_type, checklist);
+    }
+  }
+  return Array.from(latestByPeriodType.values());
+}
 
 // The set of checklists for one location whose period_key matches the given
 // reference date's period for their own period_type — i.e. the ones due on
@@ -36,7 +56,7 @@ export async function getCurrentChecklistsForLocation(
   const { data: checklists, error } = await supabase
     .from("food_safety_cleaning_checklists")
     .select(
-      "id, period_type, period_key, status, completed_at, completed_by_user_id, completed_by_name, completed_by_initials"
+      "id, period_type, period_key, attempt_number, status, completed_at, completed_by_user_id, completed_by_name, completed_by_initials"
     )
     .eq("organization_id", organizationId)
     .eq("location_id", locationId)
@@ -46,7 +66,9 @@ export async function getCurrentChecklistsForLocation(
     throw new Error(error.message);
   }
 
-  return ((checklists ?? []) as CurrentChecklistRow[]).filter(
+  const currentPeriod = ((checklists ?? []) as CurrentChecklistRow[]).filter(
     (c) => c.period_key === periodKeyByType[c.period_type]
   );
+
+  return reduceToLatestAttempts(currentPeriod);
 }

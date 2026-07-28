@@ -55,6 +55,21 @@ export type PrintReportData = {
   reports: PrintReportRow[];
 };
 
+// NOTE (production-safety audit, food-safety-attempts): this intentionally
+// still renders date-only, not date+time, even though a location can now
+// have more than one report on the same day (see MobileFoodSafetyLocationPage's
+// "Complete Another Report"). The on-screen report table was safely widened
+// to date+time (see FoodSafetyLocationReportPage.tsx's formatDateTime), but
+// this print layout's page-fit math is calibrated against real Chromium PDF
+// output with hand-tuned constants (see PAGE_CONTENT_HEIGHT_MM/SAFETY_MARGIN_ROWS
+// above), table-layout is `auto` (so widening this column's nowrap text would
+// narrow the task-value columns and could change their wrap/row height), and
+// the off-screen measurement row uses a hardcoded placeholder date ("1 January
+// 2026", below) rather than calling this formatter -- so a longer date+time
+// string would print without ever being measured. Changing this safely needs
+// a real print/PDF re-verification pass (as this file's own history required
+// twice already), which isn't available in this environment. Left as a
+// follow-up rather than risking silent print-pagination overflow.
 function formatPrintDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
