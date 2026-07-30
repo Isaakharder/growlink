@@ -41,6 +41,10 @@ export function MobileHomePage() {
         <Link className="mobile-card-button" to="/mobile/food-safety">
           Food Safety
         </Link>
+
+        <Link className="mobile-card-button" to="/mobile/calibration">
+          Calibration
+        </Link>
       </div>
     </section>
   );

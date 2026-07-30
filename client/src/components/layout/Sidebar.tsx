@@ -51,9 +51,10 @@ const navItems: NavItem[] = [
     label: "Pest Control",
     base: "/pest-control",
     children: [
-      { label: "Planner",   to: "/pest-control/planner",   permission: "pest:view" },
-      { label: "Inventory", to: "/pest-control/inventory", permission: "pest:view" },
-      { label: "Records",   to: "/pest-control/records",   permission: "pest:view" },
+      { label: "Planner",     to: "/pest-control/planner",     permission: "pest:view" },
+      { label: "Inventory",   to: "/pest-control/inventory",   permission: "pest:view" },
+      { label: "Records",     to: "/pest-control/records",     permission: "pest:view" },
+      { label: "Calibration", to: "/pest-control/calibration", permission: "calibration:view" },
     ],
   },
   { type: "link", label: "Quality Check", to: "/quality-check", permission: "quality:view" },

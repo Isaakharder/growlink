@@ -17,6 +17,7 @@ import { DailyYieldSamplesPage } from "../pages/DailyYieldSamplesPage";
 import { PestControlSetupPage } from "../pages/PestControlSetupPage";
 import { PestInventoryPage } from "../pages/PestInventoryPage";
 import { PestControlRecordsPage } from "../pages/PestControlRecordsPage";
+import { PestControlCalibrationPage } from "../pages/PestControlCalibrationPage";
 import { PestPlannerPage } from "../pages/PestPlannerPage";
 import { QualityCheckPage } from "../pages/QualityCheckPage";
 import { MobileQualityCheckPage } from "../pages/MobileQualityCheckPage";
@@ -41,6 +42,8 @@ import { FoodSafetyReportsPage } from "../pages/FoodSafetyReportsPage";
 import { FoodSafetyLocationReportPage } from "../pages/foodSafetyReports/FoodSafetyLocationReportPage";
 import { MobileFoodSafetyPage } from "../pages/MobileFoodSafetyPage";
 import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationPage";
+import { MobilePestCalibrationPage } from "../pages/MobilePestCalibrationPage";
+import { MobilePestCalibrationDeviceCompletePage } from "../pages/MobilePestCalibrationDeviceCompletePage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -139,6 +142,14 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="pest:view">
                 <PestControlRecordsPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "pest-control/calibration",
+            element: (
+              <RequirePermission permission="calibration:view">
+                <PestControlCalibrationPage />
               </RequirePermission>
             )
           },
@@ -347,6 +358,22 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="mobile:payroll">
                 <MobilePayrollPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "calibration",
+            element: (
+              <RequirePermission permission="mobile:calibration">
+                <MobilePestCalibrationPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "calibration/:deviceId",
+            element: (
+              <RequirePermission permission="mobile:calibration">
+                <MobilePestCalibrationDeviceCompletePage />
               </RequirePermission>
             )
           }

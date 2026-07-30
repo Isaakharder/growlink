@@ -4645,6 +4645,168 @@ body {
   }
 }
 
+/* ── Calibration device print log ────────────────────────────────────────────
+   Uses the shared [data-print-root] isolation pattern above — a single
+   device's calibration log (title/notes/frequency + one row per completion,
+   one column per response field, one combined column per repeating task).
+   Hidden entirely on screen (it exists only to be printed) — the shared
+   @media print rule forces it to display:block once a print job starts.
+   Always landscape, set per print job by a dynamically injected
+   <style data-calibration-print> tag (see PestControlCalibrationPage.tsx),
+   the same technique BonusesTab.tsx already uses, since @page can't be
+   scoped to a class selector. */
+
+.calibration-device-print-root {
+  display: none;
+}
+
+/* The print root's parent is .coming-soon-card (a generic bordered/shadowed
+   "card" wrapper used all over the app) — the shared print-isolation rule
+   deliberately leaves ANCESTORS of the print root unhidden/unstyled (hiding
+   an ancestor would hide the print root nested inside it), so without this
+   override the card's own background/border/shadow/padding bleeds into the
+   printed page around the log. Scoped with :has() to only the card that
+   actually contains this print root, so other pages' .coming-soon-card
+   usage is unaffected. */
+@media print {
+  .coming-soon-card:has(.calibration-device-print-root) {
+    background: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 0;
+  }
+}
+
+.calibration-device-print-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+/* The title/frequency, Notes, and footer rows are full-width <th>/<td>
+   cells living inside <thead>/<tfoot> purely so they repeat on every
+   printed page (thead/tfoot's table-header-group/table-footer-group is
+   what real browser print engines use to decide what repeats across page
+   breaks) — visually they must look like plain text blocks, not table
+   header cells, hence stripping the border/background/weight a real
+   column-heading cell gets below. */
+.calibration-device-print-table thead {
+  display: table-header-group;
+}
+.calibration-device-print-table tfoot {
+  display: table-footer-group;
+}
+
+.calibration-device-print-table th.calibration-print-chrome-cell,
+.calibration-device-print-table td.calibration-print-chrome-cell {
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-weight: normal;
+}
+
+.calibration-device-print-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 4mm 0 3mm;
+}
+
+.calibration-device-print-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.calibration-device-print-frequency {
+  white-space: nowrap;
+}
+
+.calibration-device-print-notes {
+  padding-bottom: 4mm;
+  color: #333;
+}
+
+.calibration-device-print-notes strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+/* The real column-header row and every data cell — thin light-gray borders,
+   bold headings, comfortable row height, matching the approved mockup. */
+.calibration-device-print-table th:not(.calibration-print-chrome-cell),
+.calibration-device-print-table td:not(.calibration-print-chrome-cell) {
+  border: 1px solid #ccc;
+  padding: 0.6rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.calibration-device-print-table th:not(.calibration-print-chrome-cell) {
+  font-weight: 700;
+  background: #f7f7f7;
+}
+
+/* A repeating task's cell holds one line per row ("Row 1: ...", "Row 2:
+   ..."), so line breaks must actually render instead of collapsing to a
+   single line like ordinary text cells. */
+.calibration-print-cell {
+  white-space: pre-line;
+}
+
+.calibration-device-print-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.calibration-device-print-signoff {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 6mm 0 0;
+}
+
+.calibration-device-print-signature-line,
+.calibration-device-print-date-line {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* A blank rule to physically sign/date on the printed page — an empty
+   inline-block with only a bottom border, not an input (there is nothing
+   to fill in on screen; this only ever exists inside the print root). */
+.calibration-device-print-signature-line::after,
+.calibration-device-print-date-line::after {
+  content: "";
+  display: inline-block;
+  border-bottom: 1px solid #333;
+  vertical-align: bottom;
+  margin-left: 0.5rem;
+}
+
+.calibration-device-print-signature-line::after {
+  width: 70mm;
+}
+
+.calibration-device-print-date-line::after {
+  width: 35mm;
+}
+
+.calibration-device-print-footer {
+  padding: 3mm 0 0;
+  font-size: 0.82rem;
+  color: #555;
+}
+
+@media print {
+  .calibration-device-print-root {
+    display: block !important;
+  }
+}
+
 /* ── Food Safety — Cleaning Locations ──────────────────────────────────────── */
 
 .cleaning-locations-toolbar {
@@ -5063,6 +5225,117 @@ body {
   color: var(--text);
   margin-top: 0.35rem;
   font-weight: 600;
+}
+
+/* Mobile Calibration's own long-press date control — same hidden-control
+   pattern as .cleaning-checklist-header-date above, plus a hold-progress
+   indicator Food Safety's version doesn't have. */
+
+.calibration-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.calibration-header-date {
+  position: relative;
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: right;
+  white-space: nowrap;
+  /* Deliberately not clickable-looking (no pointer cursor, underline,
+     border, background, or icon) -- it's a hidden long-press control, not a
+     visible button. Also suppresses the native long-press text-selection/
+     callout that would otherwise interrupt the 3-second press gesture. */
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  outline-offset: 2px;
+}
+
+.calibration-date-hold-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.calibration-date-hold-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  /* The bar's growing WIDTH is the indicator, not just its color, so this
+     reads clearly even to a colorblind user or in a high-contrast theme. */
+  transition: width 0.05s linear;
+}
+
+.calibration-backdate-notice {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.calibration-use-today-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--brand);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.calibration-date-picker-modal {
+  width: min(360px, 100%);
+}
+
+.calibration-date-picker-current {
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.calibration-date-picker-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.calibration-date-picker-field input[type="date"] {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.calibration-date-picker-bounds {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+}
+
+.calibration-duplicate-confirm-modal {
+  width: min(400px, 100%);
 }
 
 .cleaning-checklist-card-footer {

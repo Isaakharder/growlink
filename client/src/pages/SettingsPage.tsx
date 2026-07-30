@@ -65,6 +65,9 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "food_safety:view",      label: "Food Safety — View" },
       { key: "food_safety:edit",      label: "Food Safety — Edit" },
       { key: "food_safety:delete_reports", label: "Food Safety — Delete Reports" },
+      { key: "calibration:view",      label: "Calibration — View" },
+      { key: "calibration:edit",      label: "Calibration — Edit" },
+      { key: "calibration:delete_records", label: "Calibration — Delete Records" },
     ],
   },
   {
@@ -77,6 +80,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "mobile:quality",      label: "Mobile — Quality" },
       { key: "mobile:payroll",      label: "Mobile — Payroll" },
       { key: "mobile:food_safety",  label: "Mobile — Food Safety" },
+      { key: "mobile:calibration",  label: "Mobile — Calibration" },
     ],
   },
   {
