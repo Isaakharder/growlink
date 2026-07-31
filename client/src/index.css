@@ -4645,164 +4645,327 @@ body {
   }
 }
 
-/* ── Calibration device print log ────────────────────────────────────────────
-   Uses the shared [data-print-root] isolation pattern above — a single
-   device's calibration log (title/notes/frequency + one row per completion,
-   one column per response field, one combined column per repeating task).
-   Hidden entirely on screen (it exists only to be printed) — the shared
-   @media print rule forces it to display:block once a print job starts.
-   Always landscape, set per print job by a dynamically injected
-   <style data-calibration-print> tag (see PestControlCalibrationPage.tsx),
-   the same technique BonusesTab.tsx already uses, since @page can't be
-   scoped to a class selector. */
-
-.calibration-device-print-root {
-  display: none;
+/* ── Calibration device history modal ────────────────────────────────────────
+   A responsive desktop width so the Performed/Entered/Employee/Actions
+   table fits without horizontal scrolling for any device (Scale, Sprayer,
+   or any future device) — not a device-specific override, applies via one
+   shared class regardless of which device's history is open. */
+.calibration-history-modal {
+  width: min(1100px, calc(100vw - 48px));
+  max-width: 1100px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
-/* The print root's parent is .coming-soon-card (a generic bordered/shadowed
-   "card" wrapper used all over the app) — the shared print-isolation rule
-   deliberately leaves ANCESTORS of the print root unhidden/unstyled (hiding
-   an ancestor would hide the print root nested inside it), so without this
-   override the card's own background/border/shadow/padding bleeds into the
-   printed page around the log. Scoped with :has() to only the card that
-   actually contains this print root, so other pages' .coming-soon-card
-   usage is unaffected. */
+@media (max-width: 700px) {
+  .calibration-history-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+}
+
+/* On a normal desktop width the table fits inside the wider modal above, so
+   this wrapper's overflow-x is only ever a fallback for genuinely small
+   screens, not the normal case. */
+.calibration-history-table-wrapper {
+  overflow-x: auto;
+}
+
+.calibration-history-table {
+  table-layout: fixed;
+}
+
+.calibration-history-actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (max-width: 700px) {
+  .calibration-history-table {
+    table-layout: auto;
+  }
+}
+
+/* Keeps Close reachable without scrolling to the bottom once a device has
+   enough records to make the modal scroll (max-height above). */
+.calibration-history-modal .form-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+/* ── Calibration record print (compliance form) ──────────────────────────────
+   Printed from DeviceHistoryModal.tsx's Print button, which batch-prints
+   EVERY record the history table's active filters currently show (not a
+   single selected/viewed record — View and Print are fully independent).
+   This is the only Calibration print flow; a separate multi-record wide
+   history table and its own top-level "Calibration Records" tab used to
+   exist too, but both were removed once the module became fully
+   device-centric (History is reached only via a device card's "View
+   History" button). Hidden on screen; shown via the shared
+   [data-print-root] rule during a print job.
+
+   Records flow down the page naturally rather than one-per-page: a short
+   record (few total answer rows — see recordPrint.ts's isCompactRecord)
+   gets the "compact-record" modifier class so break-inside:avoid keeps it
+   intact and lets the browser place the next record right underneath it
+   on the same page if there's room; a long record does NOT get that
+   class, so its task tables are free to paginate internally (thead
+   repeats, individual rows never split) instead of being forced onto a
+   fresh page or overflowing. There is no custom "Printed:" footer —
+   whatever header/footer the browser's own print dialog adds is up to the
+   user's print settings, not this stylesheet. */
+
+.calibration-record-print-root {
+  display: none;
+  width: 100%;
+  color: #1a1a1a;
+}
+
+/* The print root's ancestors are DeviceHistoryModal's own .modal-overlay
+   (fixed, dark backdrop) and .variety-modal (bordered/shadowed box with
+   overflow-y: auto — a real scrollbar, and a max-width that would
+   otherwise cap the print content at the on-screen modal's width) — the
+   shared print-isolation rule deliberately leaves ancestors unhidden/
+   unstyled (hiding an ancestor would hide the print root nested inside
+   it), so without this override the printed page would look like a
+   screenshot of the modal chrome instead of a plain, full-width document.
+   Scoped with :has() so other modals are unaffected. */
 @media print {
-  .coming-soon-card:has(.calibration-device-print-root) {
+  .modal-overlay:has(.calibration-record-print-root) {
+    position: static;
+    inset: auto;
+    background: none;
+    backdrop-filter: none;
+    padding: 0;
+    display: block;
+  }
+  .variety-modal:has(.calibration-record-print-root) {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
     background: none;
     border: none;
     box-shadow: none;
     border-radius: 0;
     padding: 0;
-    margin: 0;
   }
 }
 
-.calibration-device-print-table {
+/* Full width, no inherited modal/card sizing (width/max-width are reset
+   explicitly here rather than relying on the ancestor overrides above
+   alone). A compact divider between consecutive records — margin above,
+   a thin rule, and the next record's own title margin providing a little
+   breathing room after it — rather than one-record-per-page. */
+.calibration-batch-print-record {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.92rem;
+  max-width: none;
 }
 
-/* The title/frequency, Notes, and footer rows are full-width <th>/<td>
-   cells living inside <thead>/<tfoot> purely so they repeat on every
-   printed page (thead/tfoot's table-header-group/table-footer-group is
-   what real browser print engines use to decide what repeats across page
-   breaks) — visually they must look like plain text blocks, not table
-   header cells, hence stripping the border/background/weight a real
-   column-heading cell gets below. */
-.calibration-device-print-table thead {
-  display: table-header-group;
-}
-.calibration-device-print-table tfoot {
-  display: table-footer-group;
+.calibration-batch-print-record + .calibration-batch-print-record {
+  margin-top: 14px;
+  border-top: 1px solid #999;
 }
 
-.calibration-device-print-table th.calibration-print-chrome-cell,
-.calibration-device-print-table td.calibration-print-chrome-cell {
-  border: none;
-  padding: 0;
-  text-align: left;
-  font-weight: normal;
-}
-
-.calibration-device-print-title-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 4mm 0 3mm;
-}
-
-.calibration-device-print-title {
-  font-size: 1.6rem;
-  font-weight: 700;
-}
-
-.calibration-device-print-frequency {
-  white-space: nowrap;
-}
-
-.calibration-device-print-notes {
-  padding-bottom: 4mm;
-  color: #333;
-}
-
-.calibration-device-print-notes strong {
-  display: block;
-  margin-bottom: 0.2rem;
-}
-
-/* The real column-header row and every data cell — thin light-gray borders,
-   bold headings, comfortable row height, matching the approved mockup. */
-.calibration-device-print-table th:not(.calibration-print-chrome-cell),
-.calibration-device-print-table td:not(.calibration-print-chrome-cell) {
-  border: 1px solid #ccc;
-  padding: 0.6rem 0.7rem;
-  text-align: left;
-  vertical-align: top;
-}
-
-.calibration-device-print-table th:not(.calibration-print-chrome-cell) {
-  font-weight: 700;
-  background: #f7f7f7;
-}
-
-/* A repeating task's cell holds one line per row ("Row 1: ...", "Row 2:
-   ..."), so line breaks must actually render instead of collapsing to a
-   single line like ordinary text cells. */
-.calibration-print-cell {
-  white-space: pre-line;
-}
-
-.calibration-device-print-table tr {
+/* Only short records (few total answer rows) get break-inside:avoid at the
+   whole-record level, so the next record can start right underneath on
+   the same page without the pair being split awkwardly across a page
+   boundary. A long record deliberately does NOT get this — forcing an
+   entire 28-row record to stay together would either push it whole onto
+   a fresh page (defeating natural flow) or, if it doesn't fit anywhere,
+   leave a large blank gap at the bottom of the previous page. Long
+   records rely only on thead-repeat + the row-level break-inside:avoid
+   below to paginate cleanly. */
+.calibration-batch-print-record.compact-record {
   break-inside: avoid;
   page-break-inside: avoid;
 }
 
-.calibration-device-print-signoff {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 2rem;
-  padding: 6mm 0 0;
+/* Same idea one level down: a compact record's task sections stay
+   together with the record as a whole (already covered above, but this
+   also keeps a section's heading attached to its table if the record
+   itself is right at a page boundary). A long record's sections are NOT
+   given this — see the comment above. */
+.compact-record .calibration-batch-print-task {
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
-.calibration-device-print-signature-line,
-.calibration-device-print-date-line {
-  display: inline-block;
-  white-space: nowrap;
+.calibration-record-print-title {
+  font-size: 15pt;
+  font-weight: 700;
+  margin: 0 0 2mm;
 }
 
-/* A blank rule to physically sign/date on the printed page — an empty
-   inline-block with only a bottom border, not an input (there is nothing
-   to fill in on screen; this only ever exists inside the print root). */
-.calibration-device-print-signature-line::after,
-.calibration-device-print-date-line::after {
-  content: "";
-  display: inline-block;
-  border-bottom: 1px solid #333;
-  vertical-align: bottom;
-  margin-left: 0.5rem;
+.calibration-record-print-meta {
+  margin-bottom: 3mm;
+  font-size: 9.5pt;
 }
 
-.calibration-device-print-signature-line::after {
-  width: 70mm;
+.calibration-record-print-meta div {
+  margin-bottom: 0.15rem;
 }
 
-.calibration-device-print-date-line::after {
-  width: 35mm;
+.calibration-record-print-meta span {
+  font-weight: 600;
 }
 
-.calibration-device-print-footer {
-  padding: 3mm 0 0;
-  font-size: 0.82rem;
-  color: #555;
+.calibration-record-print-section {
+  margin-bottom: 2.5mm;
+}
+
+.calibration-record-print-section-title {
+  font-size: 10.5pt;
+  font-weight: 700;
+  margin: 0 0 1.5mm;
+  /* Keeps the heading attached to at least the first row of its table
+     rather than being left alone at the bottom of a page. */
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+.calibration-record-print-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.5pt;
+}
+
+/* Repeats on every page the table spans — important for the 28-row nozzle
+   sections specifically. */
+.calibration-record-print-table thead {
+  display: table-header-group;
+}
+
+.calibration-record-print-table th,
+.calibration-record-print-table td {
+  border: 1px solid #ccc;
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.calibration-record-print-table th {
+  font-weight: 700;
+  background: #f7f7f7;
+}
+
+.calibration-record-print-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* ── Compact long-record print layout (e.g. Sprayer devices) ─────────────────
+   A completely separate class namespace from .calibration-batch-print-
+   and .calibration-record-print- above — deliberately so, per explicit
+   instruction that Scale's approved layout must never be affected by
+   anything done here. Used only for records with enough answer rows that
+   they wouldn't fit a single narrow column on one page (see
+   needsCompactLongLayout in recordPrint.ts) — a two-column grid puts the
+   page's horizontal space to use instead. Column split is structural too
+   (splitSectionsForCompactLayout balances row counts across a contiguous
+   task split), never a device-name check. */
+
+.calibration-long-record {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.calibration-batch-print-record + .calibration-long-record,
+.calibration-long-record + .calibration-batch-print-record,
+.calibration-long-record + .calibration-long-record {
+  margin-top: 14px;
+  border-top: 1px solid #999;
+}
+
+.calibration-long-record-title {
+  font-size: 13pt;
+  font-weight: 700;
+  margin: 0 0 1.5mm;
+}
+
+.calibration-long-record-meta {
+  margin-bottom: 2mm;
+  font-size: 8.5pt;
+  line-height: 1.15;
+}
+
+.calibration-long-record-meta div {
+  margin-bottom: 0.1rem;
+}
+
+.calibration-long-record-meta span {
+  font-weight: 600;
+}
+
+.calibration-long-record-tasks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10mm;
+  align-items: start;
+}
+
+.calibration-long-record-column {
+  min-width: 0;
+}
+
+.calibration-long-record-section {
+  margin-bottom: 5px;
+  /* Keep a task's heading+table together where reasonably possible —
+     unlike the compact-record case, this is the only thing keeping a
+     section intact (there's no whole-record break-inside:avoid for the
+     long-record layout, since that would defeat fitting on one page in
+     the first place if it ever did overflow). */
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.calibration-long-record-section-title {
+  font-size: 9.5pt;
+  font-weight: 700;
+  margin: 0 0 1px;
+  line-height: 1.15;
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+.calibration-long-record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8pt;
+  line-height: 1.15;
+}
+
+.calibration-long-record-table thead {
+  display: table-header-group;
+}
+
+.calibration-long-record-table th,
+.calibration-long-record-table td {
+  border: 1px solid #ccc;
+  padding: 1.5px 4px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.calibration-long-record-table th {
+  font-weight: 700;
+  background: #f7f7f7;
+}
+
+.calibration-long-record-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 @media print {
-  .calibration-device-print-root {
+  .calibration-record-print-root {
     display: block !important;
   }
 }

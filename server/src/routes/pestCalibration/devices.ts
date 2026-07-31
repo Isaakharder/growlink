@@ -653,4 +653,4 @@ devicesRouter.put("/pest/calibration/devices/:id/template", canEdit, async (req,
   }
 });
 
-export { devicesRouter, loadDeviceDetail, validateDevicePayload };
+export { devicesRouter, loadDeviceDetail, validateDevicePayload, validateTaskPayload, validateFieldPayload };

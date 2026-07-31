@@ -228,9 +228,17 @@ recordsRouter.get("/pest/calibration/devices/:id/effective-date-check", canCompl
 const DEFAULT_RECORDS_LIMIT = 50;
 const MAX_RECORDS_LIMIT = 200;
 
+// Always device-scoped now — the client only ever shows calibration history
+// per device (via "View History" on a device card), there is no more
+// cross-device records list in the UI, so a missing device_id is a client
+// bug, not a valid "show everything" request.
 recordsRouter.get("/pest/calibration/records", canView, async (req, res) => {
   const organizationId = req.organizationId;
   const { device_id, employee, date_from, date_to, limit, offset } = req.query;
+
+  if (typeof device_id !== "string" || !device_id) {
+    return res.status(400).json({ message: "device_id is required." });
+  }
 
   const parsedLimit = typeof limit === "string" ? Number(limit) : NaN;
   const boundedLimit = Number.isFinite(parsedLimit) && parsedLimit > 0
@@ -255,9 +263,9 @@ recordsRouter.get("/pest/calibration/records", canView, async (req, res) => {
     .order("completed_at", { ascending: false })
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
+    .eq("device_id", device_id)
     .range(boundedOffset, boundedOffset + boundedLimit - 1);
 
-  if (typeof device_id === "string" && device_id) query = query.eq("device_id", device_id);
   if (typeof employee === "string" && employee) query = query.eq("completed_by_user_id", employee);
   if (typeof date_from === "string" && date_from) query = query.gte("effective_date", date_from);
   if (typeof date_to === "string" && date_to) query = query.lte("effective_date", date_to);
@@ -322,6 +330,97 @@ recordsRouter.get("/pest/calibration/records/:id", canView, async (req, res) => 
   });
 
   return res.json({ ...record, answers: answers ?? [], repeating_rows: repeatingRows });
+});
+
+// Batch version of the single-record detail endpoint above, for printing
+// every record a device-history filter currently shows in one job instead
+// of N sequential requests. Returns full immutable snapshots (device name,
+// performed date, employee, task/field labels, units, answers) in the
+// EXACT order requested, so the printout matches the on-screen table order.
+// Any requested id that doesn't exist (or belongs to a different
+// organization) fails the whole batch with a clear 404 listing which ids —
+// silently returning fewer records than requested would let a print job
+// quietly omit a record.
+recordsRouter.post("/pest/calibration/records/print-details", canView, async (req, res) => {
+  const organizationId = req.organizationId;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const recordIds = Array.isArray(body.recordIds)
+    ? body.recordIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+
+  if (recordIds.length === 0) {
+    return res.status(400).json({ message: "recordIds is required." });
+  }
+  if (recordIds.length > MAX_RECORDS_LIMIT) {
+    return res.status(400).json({ message: `Cannot print more than ${MAX_RECORDS_LIMIT} records at once.` });
+  }
+
+  const { data: records, error: recordsError } = await supabase
+    .from("pest_calibration_records")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .in("id", recordIds);
+
+  if (recordsError) {
+    return sendSafeError(res, 500, "Failed to load records for printing.", "Calibration print-details records error:", recordsError);
+  }
+
+  const recordsById = new Map((records ?? []).map((r) => [r.id as string, r]));
+  const missingIds = recordIds.filter((id) => !recordsById.has(id));
+  if (missingIds.length > 0) {
+    return res.status(404).json({ message: `${missingIds.length} record(s) could not be found.` });
+  }
+
+  const [{ data: answers, error: answersError }, { data: rows, error: rowsError }] = await Promise.all([
+    supabase
+      .from("pest_calibration_record_answers")
+      .select("*")
+      .in("record_id", recordIds)
+      .order("task_sort_order", { ascending: true })
+      .order("sort_order", { ascending: true }),
+    supabase
+      .from("pest_calibration_record_repeating_rows")
+      .select("*, pest_calibration_record_repeating_answers(*)")
+      .in("record_id", recordIds)
+      .order("task_sort_order", { ascending: true })
+      .order("row_index", { ascending: true })
+  ]);
+
+  if (answersError) {
+    return sendSafeError(res, 500, "Failed to load record answers.", "Calibration print-details answers error:", answersError);
+  }
+  if (rowsError) {
+    return sendSafeError(res, 500, "Failed to load record repeating rows.", "Calibration print-details rows error:", rowsError);
+  }
+
+  const answersByRecord = new Map<string, unknown[]>();
+  for (const answer of answers ?? []) {
+    const key = (answer as { record_id: string }).record_id;
+    if (!answersByRecord.has(key)) answersByRecord.set(key, []);
+    answersByRecord.get(key)!.push(answer);
+  }
+
+  const rowsByRecord = new Map<string, unknown[]>();
+  for (const row of rows ?? []) {
+    const { pest_calibration_record_repeating_answers, ...rest } = row as typeof row & {
+      record_id: string;
+      pest_calibration_record_repeating_answers: unknown[];
+    };
+    const formatted = {
+      ...rest,
+      answers: [...pest_calibration_record_repeating_answers].sort((a: any, b: any) => a.sort_order - b.sort_order)
+    };
+    if (!rowsByRecord.has(rest.record_id)) rowsByRecord.set(rest.record_id, []);
+    rowsByRecord.get(rest.record_id)!.push(formatted);
+  }
+
+  const ordered = recordIds.map((id) => ({
+    ...recordsById.get(id),
+    answers: answersByRecord.get(id) ?? [],
+    repeating_rows: rowsByRecord.get(id) ?? []
+  }));
+
+  return res.json(ordered);
 });
 
 export { recordsRouter };
