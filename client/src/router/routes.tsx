@@ -34,8 +34,6 @@ import { NoAccessPage } from "../pages/NoAccessPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
-import { PayrollPage } from "../pages/PayrollPage";
-import { MobilePayrollPage } from "../pages/MobilePayrollPage";
 import { FoodSafetyPage } from "../pages/FoodSafetyPage";
 import { FoodSafetyLocationsPage } from "../pages/FoodSafetyLocationsPage";
 import { FoodSafetyReportsPage } from "../pages/FoodSafetyReportsPage";
@@ -245,16 +243,6 @@ export const appRouter = createBrowserRouter([
             element: <ImportTemplateMappingPage />
           },
 
-          // Payroll — requires payroll:view
-          {
-            path: "payroll",
-            element: (
-              <RequirePermission permission="payroll:view">
-                <PayrollPage />
-              </RequirePermission>
-            )
-          },
-
           // Food Safety — requires food_safety:view
           {
             path: "food-safety",
@@ -350,14 +338,6 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="mobile:quality">
                 <MobileQualityCheckPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "payroll",
-            element: (
-              <RequirePermission permission="mobile:payroll">
-                <MobilePayrollPage />
               </RequirePermission>
             )
           },

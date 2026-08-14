@@ -34,10 +34,6 @@ export function MobileHomePage() {
           Pest Log
         </Link>
 
-        <Link className="mobile-card-button" to="/mobile/payroll">
-          Payroll
-        </Link>
-
         <Link className="mobile-card-button" to="/mobile/food-safety">
           Food Safety
         </Link>

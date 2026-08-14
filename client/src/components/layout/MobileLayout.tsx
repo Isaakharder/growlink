@@ -12,7 +12,6 @@ const MOBILE_PERMISSIONS = [
   "mobile:irrigation",
   "mobile:pest",
   "mobile:quality",
-  "mobile:payroll",
   "mobile:food_safety",
   // Desktop irrigation permissions also grant entry to the mobile shell —
   // a user with only irrigation:view/edit (no mobile:* keys at all) must

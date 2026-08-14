@@ -12,8 +12,6 @@ const DESKTOP_PERMISSIONS = [
   "greenhouse_setup:edit",
   "cases:view",
   "cases:edit",
-  "payroll:view",
-  "payroll:edit",
   "food_safety:view",
   "food_safety:edit",
 ];
@@ -26,7 +24,6 @@ const MOBILE_PERMISSIONS = [
   "mobile:irrigation",
   "mobile:pest",
   "mobile:quality",
-  "mobile:payroll",
   "mobile:food_safety",
 ];
 

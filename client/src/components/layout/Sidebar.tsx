@@ -58,7 +58,6 @@ const navItems: NavItem[] = [
     ],
   },
   { type: "link", label: "Quality Check", to: "/quality-check", permission: "quality:view" },
-  { type: "link", label: "Payroll", to: "/payroll", permission: "payroll:view" },
   {
     type: "group",
     label: "Food Safety",
