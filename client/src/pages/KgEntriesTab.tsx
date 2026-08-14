@@ -64,6 +64,9 @@ const OPTIONS_URL = "/api/yield-entry-options";
 const ENTRIES_URL = "/api/yield-entries";
 const PDF_PREVIEW_URL = "/api/pdf-import/preview";
 const PDF_IMPORT_URL = "/api/pdf-import/import";
+const PDF_REMAP_SIZES_URL = "/api/pdf-import/remap-sizes";
+const SIZE_RULES_URL = "/api/flowmaster-size-rules";
+const YIELD_SIZES_URL = "/api/yield-sizes";
 const PENDING_IMPORTS_URL = "/api/agent-pending-imports";
 const FLOWMASTER_FILTER = "?dataSourceType=flowmaster";
 const CSV_SETTINGS_URL = "/api/greenhouse-setup/csv-size-settings";
@@ -163,6 +166,47 @@ type PendingAgentWeek = {
   isoWeek: number | null;
   count: number;
 };
+
+type SizeRuleAction = "create" | "map" | "ignore" | "distribute";
+
+type FlowMasterSizeRule = {
+  id: string;
+  raw_label: string;
+  action: SizeRuleAction;
+  target_size_id: string | null;
+  distribute_size_ids: string[];
+};
+
+type SizeSetupDraft = {
+  action: SizeRuleAction;
+  newSizeName: string;
+  newSizeSortOrder: string;
+  mapTargetId: string;
+  distributeIds: string[];
+};
+
+function defaultSizeSetupDraft(label: string): SizeSetupDraft {
+  return {
+    action: "create",
+    newSizeName: label,
+    newSizeSortOrder: "0",
+    mapTargetId: "",
+    distributeIds: []
+  };
+}
+
+function isSizeRelatedWarning(warning: string): boolean {
+  const lower = warning.toLowerCase();
+  return (
+    warning.startsWith("New size found:") ||
+    lower.includes("saved size rule") ||
+    lower.includes("saved distribution rule")
+  );
+}
+
+function hasUnresolvedSizes(files: PdfPreviewFile[]): boolean {
+  return files.some((file) => file.success && !file.skipped && file.unknownSizes.length > 0);
+}
 
 const KNOWN_SIZE_ORDER = ["Small", "Medium", "Large", "SXL", "XL", "XXL"];
 
@@ -278,6 +322,13 @@ export function KgEntriesTab() {
   const [reassignTargetVarietyId, setReassignTargetVarietyId] = useState<string>("");
   const [reassignSavingId, setReassignSavingId] = useState<string | null>(null);
   const [reassignErrors, setReassignErrors] = useState<Record<string, string>>({});
+  const [sizeRules, setSizeRules] = useState<FlowMasterSizeRule[]>([]);
+  const [isSizeSetupOpen, setIsSizeSetupOpen] = useState(false);
+  const [sizeSetupDrafts, setSizeSetupDrafts] = useState<Record<string, SizeSetupDraft>>({});
+  const [sizeSetupSavingLabel, setSizeSetupSavingLabel] = useState<string | null>(null);
+  const [sizeSetupErrors, setSizeSetupErrors] = useState<Record<string, string>>({});
+  const [sizeSetupResolvedLabels, setSizeSetupResolvedLabels] = useState<Set<string>>(new Set());
+  const [sizeSetupExiting, setSizeSetupExiting] = useState(false);
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<YieldEntryFormState>({
@@ -406,6 +457,214 @@ export function KgEntriesTab() {
     }
   }
 
+  async function fetchSizeRules() {
+    try {
+      const res = await apiFetch(SIZE_RULES_URL);
+      if (!res.ok) return;
+      const data = (await res.json()) as FlowMasterSizeRule[];
+      setSizeRules(data);
+    } catch {
+      // Non-critical — setup UI just won't show which labels already have a saved rule.
+    }
+  }
+
+  async function fetchActiveYieldSizes() {
+    try {
+      const res = await apiFetch(OPTIONS_URL);
+      if (!res.ok) return;
+      const body = (await res.json()) as { yieldSizes?: YieldSizeOption[] };
+      const sortedSizes = [...(body.yieldSizes ?? [])].sort((a, b) => a.sort_order - b.sort_order);
+      setYieldSizes(sortedSizes);
+    } catch {
+      // Non-critical — setup UI dropdowns simply won't include the just-created size until retried.
+    }
+  }
+
+  // Re-resolves already-parsed preview files against the org's current
+  // active sizes + saved rules, without needing the original file bytes
+  // (the client never retains those past the initial upload). Falls back to
+  // returning the input unchanged on any failure so the preview never loses
+  // data — the user can just retry from the "Configure Sizes" button.
+  async function remapPdfPreviewSizes(files: PdfPreviewFile[]): Promise<PdfPreviewFile[]> {
+    const eligibleIndexes: number[] = [];
+    const requestFiles: Array<{ sizeBreakdown: Record<string, number>; unknownSizes: string[] }> = [];
+
+    files.forEach((file, index) => {
+      if (file.success && !file.skipped) {
+        eligibleIndexes.push(index);
+        requestFiles.push({ sizeBreakdown: file.sizeBreakdown, unknownSizes: file.unknownSizes });
+      }
+    });
+
+    if (requestFiles.length === 0) {
+      return files;
+    }
+
+    try {
+      const response = await apiFetch(PDF_REMAP_SIZES_URL, {
+        method: "POST",
+        body: JSON.stringify({ files: requestFiles })
+      });
+
+      if (!response.ok) {
+        return files;
+      }
+
+      const body = (await response.json()) as {
+        success: boolean;
+        files?: Array<{
+          sizeBreakdown: Record<string, number>;
+          sizeMappingStatus: PdfPreviewFileSuccess["sizeMappingStatus"];
+          unknownSizes: string[];
+          sizeWarnings: string[];
+        }>;
+      };
+
+      if (!body.success || !Array.isArray(body.files)) {
+        return files;
+      }
+
+      const next = [...files];
+      eligibleIndexes.forEach((fileIndex, i) => {
+        const original = next[fileIndex];
+        const result = body.files?.[i];
+        if (!original.success || !result) return;
+
+        const keptWarnings = original.warnings.filter((w) => !isSizeRelatedWarning(w));
+
+        next[fileIndex] = {
+          ...original,
+          sizeBreakdown: result.sizeBreakdown,
+          sizeMappingStatus: result.sizeMappingStatus,
+          unknownSizes: result.unknownSizes,
+          warnings: Array.from(new Set([...keptWarnings, ...result.sizeWarnings]))
+        };
+      });
+
+      return next;
+    } catch {
+      return files;
+    }
+  }
+
+  // Leaving the size setup workflow (either "Done"/auto-complete or
+  // "Cancel") always re-resolves the preview against whatever rules were
+  // saved so far, then returns to the preview modal — partial progress is
+  // never lost, and any label still without a rule stays blocked.
+  async function handleExitSizeSetup() {
+    setSizeSetupExiting(true);
+    try {
+      const remapped = await remapPdfPreviewSizes(pdfPreviewFiles);
+      setPdfPreviewFiles(remapped);
+    } finally {
+      setSizeSetupExiting(false);
+      setIsSizeSetupOpen(false);
+      setSizeSetupDrafts({});
+      setSizeSetupErrors({});
+      setSizeSetupResolvedLabels(new Set());
+    }
+  }
+
+  async function handleSaveSizeSetupRow(label: string) {
+    const draft = sizeSetupDrafts[label] ?? defaultSizeSetupDraft(label);
+
+    setSizeSetupErrors((current) => {
+      const next = { ...current };
+      delete next[label];
+      return next;
+    });
+
+    if (draft.action === "create" && !draft.newSizeName.trim()) {
+      setSizeSetupErrors((current) => ({ ...current, [label]: "Size name is required." }));
+      return;
+    }
+    if (draft.action === "map" && !draft.mapTargetId) {
+      setSizeSetupErrors((current) => ({ ...current, [label]: "Select an existing size to map to." }));
+      return;
+    }
+    if (draft.action === "distribute" && draft.distributeIds.length === 0) {
+      setSizeSetupErrors((current) => ({ ...current, [label]: "Select at least one destination size." }));
+      return;
+    }
+
+    setSizeSetupSavingLabel(label);
+
+    try {
+      let targetSizeId: string | null = null;
+
+      if (draft.action === "create") {
+        const sortOrderNum = Number(draft.newSizeSortOrder);
+        const createResponse = await apiFetch(YIELD_SIZES_URL, {
+          method: "POST",
+          body: JSON.stringify({
+            name: draft.newSizeName.trim(),
+            sort_order: Number.isFinite(sortOrderNum) ? sortOrderNum : 0,
+            status: "active"
+          })
+        });
+
+        if (!createResponse.ok) {
+          let message = "Failed to create size.";
+          try {
+            const body = (await createResponse.json()) as { message?: string };
+            if (body.message) message = body.message;
+          } catch {
+            // Ignore non-JSON error body.
+          }
+          throw new Error(message);
+        }
+
+        const created = (await createResponse.json()) as YieldSizeOption;
+        targetSizeId = created.id;
+      } else if (draft.action === "map") {
+        targetSizeId = draft.mapTargetId;
+      }
+
+      const rulePayload: Record<string, unknown> = {
+        raw_label: label,
+        action: draft.action
+      };
+      if (draft.action === "create" || draft.action === "map") {
+        rulePayload.target_size_id = targetSizeId;
+      }
+      if (draft.action === "distribute") {
+        rulePayload.distribute_size_ids = draft.distributeIds;
+      }
+
+      const ruleResponse = await apiFetch(SIZE_RULES_URL, {
+        method: "POST",
+        body: JSON.stringify(rulePayload)
+      });
+
+      if (!ruleResponse.ok) {
+        let message = "Failed to save size rule.";
+        try {
+          const body = (await ruleResponse.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch {
+          // Ignore non-JSON error body.
+        }
+        throw new Error(message);
+      }
+
+      await Promise.all([fetchSizeRules(), fetchActiveYieldSizes()]);
+
+      const updatedResolved = new Set(sizeSetupResolvedLabels).add(label);
+      setSizeSetupResolvedLabels(updatedResolved);
+
+      if (uniqueUnknownSizeLabels.every((pendingLabel) => updatedResolved.has(pendingLabel))) {
+        await handleExitSizeSetup();
+      }
+    } catch (error) {
+      setSizeSetupErrors((current) => ({
+        ...current,
+        [label]: error instanceof Error ? error.message : "Failed to save size rule."
+      }));
+    } finally {
+      setSizeSetupSavingLabel(null);
+    }
+  }
+
   async function handleCsvSizeToggle(rawLabel: string, checked: boolean) {
     const upper = rawLabel.toUpperCase();
     const next = checked
@@ -431,7 +690,8 @@ export function KgEntriesTab() {
       const res = await apiFetch(`${PENDING_IMPORTS_URL}${FLOWMASTER_FILTER}${weekParams}`);
       if (!res.ok) return;
       const body = (await res.json()) as { files?: PdfPreviewFile[] };
-      setPdfPreviewFiles(body.files ?? []);
+      const files = body.files ?? [];
+      setPdfPreviewFiles(files);
       setPdfPreviewError(null);
       setPdfImportStatus(null);
       setPdfImportedCardKeys(new Set());
@@ -439,6 +699,10 @@ export function KgEntriesTab() {
       setPdfCardImportErrors({});
       void fetchCsvSettings();
       setIsPdfPreviewOpen(true);
+
+      if (hasUnresolvedSizes(files)) {
+        setIsSizeSetupOpen(true);
+      }
     } catch {
       // Silently ignore — user can retry by clicking the card again.
     }
@@ -447,6 +711,7 @@ export function KgEntriesTab() {
   useEffect(() => {
     void fetchOptionsAndEntries();
     void fetchPendingWeeks();
+    void fetchSizeRules();
   }, []);
 
   async function executeSubmit(submitPayload: {
@@ -681,6 +946,10 @@ export function KgEntriesTab() {
     setPdfImportedCardKeys(new Set());
     setPdfCardImportingKeys(new Set());
     setPdfCardImportErrors({});
+    setIsSizeSetupOpen(false);
+    setSizeSetupDrafts({});
+    setSizeSetupErrors({});
+    setSizeSetupResolvedLabels(new Set());
 
     if (pdfFileInputRef.current) {
       pdfFileInputRef.current.value = "";
@@ -735,6 +1004,10 @@ export function KgEntriesTab() {
       }
 
       setPdfPreviewFiles(body.files);
+
+      if (hasUnresolvedSizes(body.files)) {
+        setIsSizeSetupOpen(true);
+      }
     } catch (uploadError) {
       setPdfPreviewFiles([]);
       setPdfPreviewError(
@@ -834,6 +1107,21 @@ export function KgEntriesTab() {
     () => pdfPreviewFiles.filter((file): file is PdfPreviewFileFailure => !file.success),
     [pdfPreviewFiles]
   );
+
+  // Every unique unknown FlowMaster size label across all loaded preview
+  // files (not just the first one) — the set the size setup workflow works
+  // through. Skipped files (already-imported/duplicate) are excluded since
+  // their sizes don't affect anything importable.
+  const uniqueUnknownSizeLabels = useMemo(() => {
+    const labels = new Set<string>();
+    for (const file of pdfPreviewFiles) {
+      if (!file.success || file.skipped) continue;
+      for (const label of file.unknownSizes) {
+        labels.add(label);
+      }
+    }
+    return Array.from(labels).sort((a, b) => a.localeCompare(b));
+  }, [pdfPreviewFiles]);
 
   const groupedPdfPreviewCards = useMemo(() => {
     const ignoredSet = new Set(csvIgnoredLabels.map((l) => l.toUpperCase()));
@@ -986,9 +1274,18 @@ export function KgEntriesTab() {
         unknownSizes: Array.from(new Set(group.unknownSizes)),
       };
 
-      // For CSV cards, recompute sizeBreakdown/unknownSizes/totalKg/counts
-      // from csvSizes + current ignoredSet so toggles take effect immediately.
-      if (group.isCsvSource && group.csvSizes.length > 0) {
+      // For CSV cards, recompute sizeBreakdown/unknownSizes/totalKg/counts from
+      // csvSizes + current ignoredSet so ignore-toggles take effect immediately
+      // without a server round trip. Only do this when a toggle actually
+      // applies to one of this card's labels — otherwise the server-resolved
+      // fields already merged into finalGroup above are the source of truth
+      // (they're rule-aware; this recompute only knows the CSV parser's
+      // built-in size-label map, not saved size rules or newly-created sizes).
+      const hasRelevantIgnoreToggle = group.csvSizes.some((entry) =>
+        ignoredSet.has(entry.rawLabel.toUpperCase())
+      );
+
+      if (group.isCsvSource && group.csvSizes.length > 0 && hasRelevantIgnoreToggle) {
         const csvBreakdown: Record<string, number> = {};
         const csvUnknown: string[] = [];
         let csvMapped = 0;
@@ -1464,7 +1761,7 @@ export function KgEntriesTab() {
         </div>
       </div>
 
-      {isPdfPreviewOpen ? (
+      {isPdfPreviewOpen && !isSizeSetupOpen ? (
         <ModalOverlay
           onClose={closePdfPreviewModal}
           contentClassName="variety-modal pdf-preview-modal"
@@ -1473,6 +1770,15 @@ export function KgEntriesTab() {
             <div className="pdf-preview-modal-header">
               <h2 id="pdf-import-preview-title">PDF Import Preview</h2>
               <div className="pdf-preview-header-actions">
+                {uniqueUnknownSizeLabels.length > 0 && (
+                  <button
+                    type="button"
+                    className="cases-entry-open-button"
+                    onClick={() => setIsSizeSetupOpen(true)}
+                  >
+                    Configure Sizes ({uniqueUnknownSizeLabels.length})
+                  </button>
+                )}
                 <button
                   type="button"
                   className="cases-entry-open-button"
@@ -1741,6 +2047,13 @@ export function KgEntriesTab() {
                             <li key={`${group.key}-${size}`}>{size}</li>
                           ))}
                         </ul>
+                        <button
+                          type="button"
+                          className="size-setup-configure-button"
+                          onClick={() => setIsSizeSetupOpen(true)}
+                        >
+                          Configure Sizes
+                        </button>
                       </div>
                     )}
 
@@ -1816,6 +2129,196 @@ export function KgEntriesTab() {
                 type="button"
                 className="secondary"
                 onClick={closePdfPreviewModal}
+              >
+                Cancel
+              </button>
+            </div>
+        </ModalOverlay>
+      ) : null}
+
+      {isPdfPreviewOpen && isSizeSetupOpen ? (
+        <ModalOverlay
+          onClose={() => void handleExitSizeSetup()}
+          contentClassName="variety-modal size-setup-modal"
+          titleId="size-setup-title"
+        >
+            <div className="pdf-preview-modal-header">
+              <h2 id="size-setup-title">Configure New Sizes</h2>
+              <div className="pdf-preview-header-actions">
+                <button
+                  type="button"
+                  className="cases-entry-open-button"
+                  onClick={() => void handleExitSizeSetup()}
+                  disabled={sizeSetupExiting}
+                >
+                  {sizeSetupExiting ? "Saving..." : "Done"}
+                </button>
+              </div>
+            </div>
+
+            <p className="pdf-preview-subtitle">
+              FlowMaster reported {uniqueUnknownSizeLabels.length} size label
+              {uniqueUnknownSizeLabels.length === 1 ? "" : "s"} that {uniqueUnknownSizeLabels.length === 1 ? "isn't" : "aren't"} configured
+              in GrowLink yet. Choose how each one should be handled — your choice is saved for this organization and applied automatically
+              on future imports.
+            </p>
+
+            <div className="size-setup-list">
+              {uniqueUnknownSizeLabels.length === 0 ? (
+                <p>All sizes are now configured.</p>
+              ) : (
+                uniqueUnknownSizeLabels.map((label) => {
+                  const draft = sizeSetupDrafts[label] ?? defaultSizeSetupDraft(label);
+                  const isResolved = sizeSetupResolvedLabels.has(label);
+                  const isSaving = sizeSetupSavingLabel === label;
+                  const rowError = sizeSetupErrors[label];
+                  const existingRule = sizeRules.find(
+                    (rule) => rule.raw_label.trim().toLowerCase() === label.trim().toLowerCase()
+                  );
+
+                  function updateDraft(patch: Partial<SizeSetupDraft>) {
+                    setSizeSetupDrafts((current) => ({
+                      ...current,
+                      [label]: { ...(current[label] ?? defaultSizeSetupDraft(label)), ...patch }
+                    }));
+                  }
+
+                  return (
+                    <div key={label} className={`size-setup-row${isResolved ? " size-setup-row-resolved" : ""}`}>
+                      <div className="size-setup-row-header">
+                        <span className="size-setup-label">{label}</span>
+                        {isResolved && <span className="pdf-preview-status-pill ok">Configured</span>}
+                      </div>
+
+                      {existingRule && !isResolved && (
+                        <p className="size-setup-hint">
+                          A saved rule for this label points at a size that no longer exists. Choose again below.
+                        </p>
+                      )}
+
+                      {!isResolved && (
+                        <>
+                          <div className="size-setup-action-choices">
+                            {(
+                              [
+                                { value: "create", label: "Create new size" },
+                                { value: "map", label: "Map to existing size" },
+                                { value: "ignore", label: "Ignore this label" },
+                                { value: "distribute", label: "Distribute proportionally" }
+                              ] as Array<{ value: SizeRuleAction; label: string }>
+                            ).map((option) => (
+                              <label key={option.value} className="size-setup-action-choice">
+                                <input
+                                  type="radio"
+                                  name={`size-setup-action-${label}`}
+                                  checked={draft.action === option.value}
+                                  onChange={() => updateDraft({ action: option.value })}
+                                />
+                                {option.label}
+                              </label>
+                            ))}
+                          </div>
+
+                          {draft.action === "create" && (
+                            <div className="size-setup-fields">
+                              <label>
+                                Size name
+                                <input
+                                  type="text"
+                                  value={draft.newSizeName}
+                                  onChange={(event) => updateDraft({ newSizeName: event.target.value })}
+                                />
+                              </label>
+                              <label>
+                                Sort order
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={draft.newSizeSortOrder}
+                                  onChange={(event) => updateDraft({ newSizeSortOrder: event.target.value })}
+                                />
+                              </label>
+                            </div>
+                          )}
+
+                          {draft.action === "map" && (
+                            <div className="size-setup-fields">
+                              <label>
+                                Existing size
+                                <select
+                                  value={draft.mapTargetId}
+                                  onChange={(event) => updateDraft({ mapTargetId: event.target.value })}
+                                >
+                                  <option value="">Select a size…</option>
+                                  {yieldSizes.map((size) => (
+                                    <option key={size.id} value={size.id}>
+                                      {size.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <p className="size-setup-hint">
+                                Use this when FlowMaster uses a different name for a size GrowLink already tracks.
+                              </p>
+                            </div>
+                          )}
+
+                          {draft.action === "ignore" && (
+                            <p className="size-setup-hint">
+                              This label's kg is excluded entirely — not added to totals or averages. Use this for grades or
+                              subtotals (e.g. "Class 1") that summarize existing sizes rather than representing a new one.
+                            </p>
+                          )}
+
+                          {draft.action === "distribute" && (
+                            <div className="size-setup-fields">
+                              <span className="size-setup-fields-label">Destination sizes</span>
+                              <div className="size-setup-checkbox-list">
+                                {yieldSizes.map((size) => (
+                                  <label key={size.id} className="size-setup-checkbox-item">
+                                    <input
+                                      type="checkbox"
+                                      checked={draft.distributeIds.includes(size.id)}
+                                      onChange={(event) => {
+                                        const nextIds = event.target.checked
+                                          ? [...draft.distributeIds, size.id]
+                                          : draft.distributeIds.filter((id) => id !== size.id);
+                                        updateDraft({ distributeIds: nextIds });
+                                      }}
+                                    />
+                                    {size.name}
+                                  </label>
+                                ))}
+                              </div>
+                              <p className="size-setup-hint">
+                                This label's kg is split across the selected sizes, in proportion to how much of each was
+                                already packed in the same run. The total imported kg never changes.
+                              </p>
+                            </div>
+                          )}
+
+                          {rowError && <p className="form-error">{rowError}</p>}
+
+                          <div className="size-setup-row-actions">
+                            <button type="button" onClick={() => void handleSaveSizeSetupRow(label)} disabled={isSaving}>
+                              {isSaving ? "Saving..." : "Save"}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="form-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void handleExitSizeSetup()}
+                disabled={sizeSetupExiting}
               >
                 Cancel
               </button>

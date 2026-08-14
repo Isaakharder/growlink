@@ -4,6 +4,13 @@ import { supabase } from "../config/supabase";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
 import { parseFlowMasterCsvBuffer, type CsvSizeEntry } from "../utils/flowMasterCsvParser";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
+import { normalizeSizeRuleLabel, type SizeRuleRecord } from "../utils/flowMasterSizeRules";
+import {
+  canonicalizeSizeName,
+  resolveFileSizes,
+  type OrgSizeContext,
+  type SizeMappingClassification
+} from "../utils/sizeMapping";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 const pdfImportRouter = Router();
@@ -104,10 +111,6 @@ type ActiveVariety = {
   name: string;
 };
 
-type ActiveYieldSize = {
-  name: string;
-};
-
 type ExistingYieldEntry = {
   variety_id: string;
   year: number;
@@ -129,51 +132,68 @@ export type VarietyForCalc = {
   case_kg: number;
 };
 
-const KNOWN_SIZE_LABEL_MAP: Record<string, string> = {
-  SM: "Small",
-  MD: "Medium",
-  LG: "Large",
-  SXL: "SXL",
-  XL: "XL",
-  XXL: "XXL"
-};
-
-const KNOWN_SIZE_TARGET_TO_LABEL = Object.entries(KNOWN_SIZE_LABEL_MAP).reduce<Record<string, string>>(
-  (acc, [label, target]) => {
-    acc[target] = label;
-    return acc;
-  },
-  {}
-);
-
 export function normalizeName(value: string): string {
   return value.trim().toLowerCase();
 }
 
-// Stripped + lowercased aliases → canonical matching key.
-// Handles short codes (SM/MD/LG) and full names interchangeably.
-const SIZE_ALIAS_MAP: Record<string, string> = {
-  sm: "sm",
-  small: "sm",
-  md: "md",
-  med: "md",
-  medium: "md",
-  lg: "lg",
-  large: "lg",
-  xl: "xl",
-  extralarge: "xl",
-  xlarge: "xl",
-  sxl: "sxl",
-  superxl: "sxl",
-  xxl: "xxl",
-  doublexl: "xxl",
-  "24ct": "24ct",
-  "24count": "24ct"
-};
+// Loads the org's active yield sizes and saved flowmaster_size_rules once
+// per request. Shared by /pdf-import/preview, /pdf-import/remap-sizes and
+// agentPendingImports.ts's buildPreviewFile so all three resolve unknown
+// sizes identically.
+export async function loadOrgSizeContext(
+  organizationId: string
+): Promise<{ ok: true; ctx: OrgSizeContext } | { ok: false; error: string }> {
+  const [sizesResult, rulesResult] = await Promise.all([
+    supabase
+      .from("yield_sizes")
+      .select("id, name")
+      .eq("organization_id", organizationId)
+      .eq("status", "active"),
+    supabase
+      .from("flowmaster_size_rules")
+      .select("id, raw_label, action, target_size_id, distribute_size_ids")
+      .eq("organization_id", organizationId)
+  ]);
 
-export function canonicalizeSizeName(value: string): string {
-  const stripped = value.trim().toLowerCase().replace(/[\s\-_]/g, "");
-  return SIZE_ALIAS_MAP[stripped] ?? stripped;
+  if (sizesResult.error) {
+    return { ok: false, error: "Failed to load active yield sizes." };
+  }
+
+  if (rulesResult.error) {
+    return { ok: false, error: "Failed to load saved size rules." };
+  }
+
+  const activeSizes = (sizesResult.data ?? []) as ActiveYieldSizeWithId[];
+  const activeYieldSizeNameByCanonical = new Map<string, string>();
+  const activeSizeNameById = new Map<string, string>();
+  for (const size of activeSizes) {
+    activeYieldSizeNameByCanonical.set(canonicalizeSizeName(size.name), size.name);
+    activeSizeNameById.set(size.id, size.name);
+  }
+
+  type RuleRow = {
+    id: string;
+    raw_label: string;
+    action: SizeRuleRecord["action"];
+    target_size_id: string | null;
+    distribute_size_ids: string[] | null;
+  };
+
+  const rulesByNormalizedLabel = new Map<string, SizeRuleRecord>();
+  for (const row of (rulesResult.data ?? []) as RuleRow[]) {
+    rulesByNormalizedLabel.set(normalizeSizeRuleLabel(row.raw_label), {
+      id: row.id,
+      rawLabel: row.raw_label,
+      action: row.action,
+      targetSizeId: row.target_size_id,
+      distributeSizeIds: row.distribute_size_ids ?? []
+    });
+  }
+
+  return {
+    ok: true,
+    ctx: { activeYieldSizeNameByCanonical, activeSizeNameById, rulesByNormalizedLabel }
+  };
 }
 
 export type SizeMappingResult = {
@@ -387,14 +407,9 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
 
     const organizationId = req.organizationId;
 
-    const [varietiesResult, yieldSizesResult, yieldEntriesResult, csvSettings] = await Promise.all([
+    const [varietiesResult, yieldEntriesResult, csvSettings, sizeContextResult] = await Promise.all([
       supabase
         .from("varieties")
-        .select("id, name")
-        .eq("organization_id", organizationId)
-        .eq("status", "active"),
-      supabase
-        .from("yield_sizes")
         .select("id, name")
         .eq("organization_id", organizationId)
         .eq("status", "active"),
@@ -403,17 +418,12 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
         .select("variety_id, year, week")
         .eq("organization_id", organizationId),
       fetchCsvSizeSettings(organizationId),
+      loadOrgSizeContext(organizationId),
     ]);
 
     if (varietiesResult.error) {
       return res.status(500).json({
         message: "Failed to load active varieties for PDF preview."
-      });
-    }
-
-    if (yieldSizesResult.error) {
-      return res.status(500).json({
-        message: "Failed to load active yield sizes for PDF preview."
       });
     }
 
@@ -423,18 +433,18 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
       });
     }
 
+    if (!sizeContextResult.ok) {
+      return res.status(500).json({ message: sizeContextResult.error });
+    }
+
+    const sizeContext = sizeContextResult.ctx;
+
     const activeVarieties = (varietiesResult.data ?? []) as ActiveVariety[];
-    const activeYieldSizes = (yieldSizesResult.data ?? []) as ActiveYieldSize[];
     const existingYieldEntries = (yieldEntriesResult.data ?? []) as ExistingYieldEntry[];
 
     const activeVarietyByExactName = new Map<string, ActiveVariety>();
     for (const variety of activeVarieties) {
       activeVarietyByExactName.set(variety.name, variety);
-    }
-
-    const activeYieldSizeNameByCanonical = new Map<string, string>();
-    for (const size of activeYieldSizes) {
-      activeYieldSizeNameByCanonical.set(canonicalizeSizeName(size.name), size.name);
     }
 
     const existingEntryKeySet = new Set<string>();
@@ -522,7 +532,10 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
 
           const parsed = file.parsed;
 
-          const warnings = [...parsed.warnings];
+          // Drop the parser's own "New size found" warnings — they don't
+          // know about saved size rules, so a label a rule already resolves
+          // would otherwise still show a stale "unknown" warning below.
+          const warnings = parsed.warnings.filter((w) => !w.startsWith("New size found:"));
 
           let skipped = false;
           let alreadyImported = false;
@@ -553,29 +566,8 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
             );
           }
 
-          const unknownSizeSet = new Set<string>(parsed.unknownSizes);
-          const mapped: Array<{ pdfSize: string; growlinkSize: string }> = [];
-
-          for (const parsedSizeName of Object.keys(parsed.sizeKg)) {
-            const canonical = canonicalizeSizeName(parsedSizeName);
-            const activeSizeName = activeYieldSizeNameByCanonical.get(canonical);
-            const pdfSizeLabel =
-              KNOWN_SIZE_TARGET_TO_LABEL[parsedSizeName] ?? parsedSizeName;
-
-            if (activeSizeName) {
-              mapped.push({
-                pdfSize: pdfSizeLabel,
-                growlinkSize: activeSizeName
-              });
-            } else {
-              unknownSizeSet.add(pdfSizeLabel);
-              warnings.push(
-                `New size found: ${pdfSizeLabel}. Add this size in GrowLink before importing.`
-              );
-            }
-          }
-
-          const unknownSizes = Array.from(unknownSizeSet);
+          const resolved = resolveFileSizes(parsed.sizeKg, parsed.unknownSizes, sizeContext);
+          warnings.push(...resolved.ruleNotes, ...resolved.sizeWarnings);
 
           const duplicateKey =
             matchedVariety && parsed.isoYear !== null && parsed.isoWeek !== null
@@ -614,17 +606,12 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
             isoYear: parsed.isoYear,
             totalKg: parsed.totalKg,
             averageFruitWeightG: parsed.averageFruitWeightG,
-            sizeBreakdown: parsed.sizeKg,
-            sizeMappingStatus: {
-              mappedCount: mapped.length,
-              unmappedCount: unknownSizes.length,
-              mapped,
-              unmapped: unknownSizes
-            },
+            sizeBreakdown: resolved.sizeKg,
+            sizeMappingStatus: resolved.sizeMappingStatus,
             duplicateStatus: {
               found: hasExistingWeeklyData
             },
-            unknownSizes,
+            unknownSizes: resolved.unknownSizes,
             warnings: uniqueWarnings,
             csvSizes: parsed.csvSizes
           };
@@ -654,6 +641,97 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
       files
     });
   });
+});
+
+type RemapSizesFileInput = {
+  sizeBreakdown: Record<string, number>;
+  unknownSizes: string[];
+};
+
+type RemapSizesFileResult = {
+  sizeBreakdown: Record<string, number>;
+  sizeMappingStatus: SizeMappingClassification["sizeMappingStatus"];
+  unknownSizes: string[];
+  sizeWarnings: string[];
+};
+
+function parseRemapSizesPayload(input: unknown): RemapSizesFileInput[] {
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid request body.");
+  }
+
+  const body = input as Record<string, unknown>;
+  const rawFiles = body.files;
+
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) {
+    throw new Error("files must be a non-empty array.");
+  }
+
+  return rawFiles.map((rawFile, index) => {
+    if (!rawFile || typeof rawFile !== "object") {
+      throw new Error(`files[${index}] is invalid.`);
+    }
+
+    const file = rawFile as Record<string, unknown>;
+    const rawBreakdown = file.sizeBreakdown;
+    if (!rawBreakdown || typeof rawBreakdown !== "object" || Array.isArray(rawBreakdown)) {
+      throw new Error(`files[${index}].sizeBreakdown must be an object of size name to kg.`);
+    }
+
+    const sizeBreakdown: Record<string, number> = {};
+    for (const [sizeName, rawKg] of Object.entries(rawBreakdown as Record<string, unknown>)) {
+      const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
+      if (!Number.isFinite(kg)) {
+        throw new Error(`files[${index}].sizeBreakdown has an invalid kg value for "${sizeName}".`);
+      }
+      sizeBreakdown[sizeName] = kg;
+    }
+
+    const unknownSizes = Array.isArray(file.unknownSizes)
+      ? file.unknownSizes.filter((s): s is string => typeof s === "string")
+      : [];
+
+    return { sizeBreakdown, unknownSizes };
+  });
+}
+
+// POST /pdf-import/remap-sizes
+// Re-resolves already-parsed preview files against the org's CURRENT active
+// yield_sizes + saved flowmaster_size_rules, without needing the original
+// PDF/CSV bytes (which the client never retains past the initial preview
+// upload). Used after the user configures unknown sizes in the size setup
+// workflow, so Import/Import All can re-enable without re-selecting files.
+// Read-only — no writes — so it uses the same canView guard as preview.
+pdfImportRouter.post("/pdf-import/remap-sizes", canView, async (req, res) => {
+  let files: RemapSizesFileInput[];
+
+  try {
+    files = parseRemapSizesPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body.";
+    return res.status(400).json({ message });
+  }
+
+  const organizationId = req.organizationId;
+  const sizeContextResult = await loadOrgSizeContext(organizationId);
+
+  if (!sizeContextResult.ok) {
+    return res.status(500).json({ message: sizeContextResult.error });
+  }
+
+  const sizeContext = sizeContextResult.ctx;
+
+  const results: RemapSizesFileResult[] = files.map((file) => {
+    const resolved = resolveFileSizes(file.sizeBreakdown, file.unknownSizes, sizeContext);
+    return {
+      sizeBreakdown: resolved.sizeKg,
+      sizeMappingStatus: resolved.sizeMappingStatus,
+      unknownSizes: resolved.unknownSizes,
+      sizeWarnings: [...resolved.ruleNotes, ...resolved.sizeWarnings]
+    };
+  });
+
+  return res.json({ success: true, files: results });
 });
 
 export { pdfImportRouter };

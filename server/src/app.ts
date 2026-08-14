@@ -40,6 +40,7 @@ import { varietiesRouter } from "./routes/varieties";
 import { yieldEntriesRouter } from "./routes/yieldEntries";
 import { yieldProjectionsRouter } from "./routes/yieldProjections";
 import { yieldSizesRouter } from "./routes/yieldSizes";
+import { flowMasterSizeRulesRouter } from "./routes/flowMasterSizeRules";
 import { payrollRouter } from "./routes/payroll";
 
 const DEV_ORIGINS = [
@@ -154,6 +155,7 @@ app.use("/api", varietiesRouter);
 app.use("/api", yieldEntriesRouter);
 app.use("/api", yieldProjectionsRouter);
 app.use("/api", yieldSizesRouter);
+app.use("/api", flowMasterSizeRulesRouter);
 app.use("/api", mobileDailyYieldRouter);
 app.use("/api", dailyYieldSamplesRouter);
 app.use("/api", mobileIrrigationLogRouter);

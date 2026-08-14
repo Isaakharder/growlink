@@ -1625,6 +1625,116 @@ body {
   justify-content: flex-end;
 }
 
+.size-setup-modal {
+  width: min(720px, 100%);
+  max-height: min(88vh, 900px);
+  overflow-y: auto;
+}
+
+.size-setup-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+}
+
+.size-setup-row {
+  border: 1px solid #d4e3dc;
+  border-radius: 12px;
+  background: #fbfdfc;
+  padding: 0.7rem 0.8rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.size-setup-row-resolved {
+  background: #f4faf7;
+  border-color: #b8ddd0;
+}
+
+.size-setup-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.size-setup-label {
+  font-weight: 700;
+  font-size: 0.94rem;
+}
+
+.size-setup-action-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+}
+
+.size-setup-action-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.size-setup-fields {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.15rem;
+}
+
+.size-setup-fields label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.size-setup-fields-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.size-setup-checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+}
+
+.size-setup-checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.size-setup-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.size-setup-row-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.size-setup-configure-button {
+  margin-top: 0.4rem;
+  font-size: 0.76rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid #efcfaa;
+  background: #fff8ef;
+  color: #8b4f12;
+  cursor: pointer;
+}
+
+.size-setup-configure-button:hover {
+  background: #fdeed7;
+}
+
 .pdf-preview-failure-section {
   margin: 1rem 1.1rem 0;
   padding-top: 0.75rem;

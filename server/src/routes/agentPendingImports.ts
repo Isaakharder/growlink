@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
-import { canonicalizeSizeName } from "./pdfImport";
+import { loadOrgSizeContext } from "./pdfImport";
+import { resolveFileSizes, type OrgSizeContext } from "../utils/sizeMapping";
 import { type CsvSizeEntry } from "../utils/flowMasterCsvParser";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
@@ -32,7 +33,6 @@ type PendingImportRow = {
 };
 
 type ActiveVariety = { id: string; name: string };
-type ActiveYieldSize = { name: string };
 type ExistingYieldEntry = { variety_id: string; year: number; week: number };
 type ExistingImportRun = { lot_number: string };
 
@@ -76,7 +76,7 @@ type PdfPreviewSuccess = {
 type BuildPreviewContext = {
   activeVarietyByName: Map<string, ActiveVariety>;
   activeVarietyById: Map<string, ActiveVariety>;
-  activeYieldSizeNameByCanonical: Map<string, string>;
+  sizeContext: OrgSizeContext;
   existingEntryKeySet: Set<string>;
   alreadyImportedLots: Set<string>;
 };
@@ -126,28 +126,12 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
     }
   }
 
-  const unknownSizeSet = new Set<string>(
-    Array.isArray(row.unknown_sizes)
-      ? (row.unknown_sizes as unknown[]).filter((s): s is string => typeof s === "string")
-      : []
-  );
+  const unknownSizesSeed = Array.isArray(row.unknown_sizes)
+    ? (row.unknown_sizes as unknown[]).filter((s): s is string => typeof s === "string")
+    : [];
 
-  const mapped: Array<{ pdfSize: string; growlinkSize: string }> = [];
-
-  for (const sizeName of Object.keys(sizeBreakdown)) {
-    const canonical = canonicalizeSizeName(sizeName);
-    const activeSizeName = ctx.activeYieldSizeNameByCanonical.get(canonical);
-    if (activeSizeName) {
-      mapped.push({ pdfSize: sizeName, growlinkSize: activeSizeName });
-    } else {
-      unknownSizeSet.add(sizeName);
-      warnings.push(
-        `New size found: ${sizeName}. Add this size in GrowLink before importing.`
-      );
-    }
-  }
-
-  const unknownSizes = Array.from(unknownSizeSet);
+  const resolved = resolveFileSizes(sizeBreakdown, unknownSizesSeed, ctx.sizeContext);
+  warnings.push(...resolved.ruleNotes, ...resolved.sizeWarnings);
 
   const duplicateKey =
     matchedVariety && row.iso_year !== null && row.iso_week !== null
@@ -199,15 +183,10 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
     isoYear: row.iso_year,
     totalKg: row.parsed_total_kg,
     averageFruitWeightG: row.average_fruit_weight_g,
-    sizeBreakdown,
-    sizeMappingStatus: {
-      mappedCount: mapped.length,
-      unmappedCount: unknownSizes.length,
-      mapped,
-      unmapped: unknownSizes
-    },
+    sizeBreakdown: resolved.sizeKg,
+    sizeMappingStatus: resolved.sizeMappingStatus,
     duplicateStatus: { found: hasExistingWeeklyData },
-    unknownSizes,
+    unknownSizes: resolved.unknownSizes,
     warnings: Array.from(new Set(warnings)),
     csvSizes,
     needsTemplate: row.needs_template,
@@ -223,16 +202,11 @@ async function loadBuildContext(
   organizationId: string,
   lotNumbers: string[]
 ): Promise<BuildContextResult> {
-  const [varietiesResult, yieldSizesResult, yieldEntriesResult, importRunsResult] =
+  const [varietiesResult, yieldEntriesResult, importRunsResult, sizeContextResult] =
     await Promise.all([
       supabase
         .from("varieties")
         .select("id, name")
-        .eq("organization_id", organizationId)
-        .eq("status", "active"),
-      supabase
-        .from("yield_sizes")
-        .select("name")
         .eq("organization_id", organizationId)
         .eq("status", "active"),
       supabase
@@ -245,14 +219,12 @@ async function loadBuildContext(
             .select("lot_number")
             .eq("organization_id", organizationId)
             .in("lot_number", lotNumbers)
-        : Promise.resolve({ data: [] as ExistingImportRun[], error: null })
+        : Promise.resolve({ data: [] as ExistingImportRun[], error: null }),
+      loadOrgSizeContext(organizationId)
     ]);
 
   if (varietiesResult.error) {
     return { ok: false, error: "Failed to load varieties." };
-  }
-  if (yieldSizesResult.error) {
-    return { ok: false, error: "Failed to load yield sizes." };
   }
   if (yieldEntriesResult.error) {
     return { ok: false, error: "Failed to load yield entries." };
@@ -260,9 +232,11 @@ async function loadBuildContext(
   if (importRunsResult.error) {
     return { ok: false, error: "Failed to load import history." };
   }
+  if (!sizeContextResult.ok) {
+    return { ok: false, error: sizeContextResult.error };
+  }
 
   const activeVarieties = (varietiesResult.data ?? []) as ActiveVariety[];
-  const activeYieldSizes = (yieldSizesResult.data ?? []) as ActiveYieldSize[];
   const existingYieldEntries = (yieldEntriesResult.data ?? []) as ExistingYieldEntry[];
   const existingImportRuns = (importRunsResult.data ?? []) as ExistingImportRun[];
 
@@ -271,11 +245,6 @@ async function loadBuildContext(
   for (const v of activeVarieties) {
     activeVarietyByName.set(v.name, v);
     activeVarietyById.set(v.id, v);
-  }
-
-  const activeYieldSizeNameByCanonical = new Map<string, string>();
-  for (const s of activeYieldSizes) {
-    activeYieldSizeNameByCanonical.set(canonicalizeSizeName(s.name), s.name);
   }
 
   const existingEntryKeySet = new Set<string>();
@@ -293,7 +262,7 @@ async function loadBuildContext(
     ctx: {
       activeVarietyByName,
       activeVarietyById,
-      activeYieldSizeNameByCanonical,
+      sizeContext: sizeContextResult.ctx,
       existingEntryKeySet,
       alreadyImportedLots
     }
