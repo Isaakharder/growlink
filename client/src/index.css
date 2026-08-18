@@ -2952,6 +2952,14 @@ body {
   background: #f7faf9;
 }
 
+.yield-analytics-summary-table tfoot td {
+  background: #e3ebe6;
+  color: #1b2622;
+  font-weight: 700;
+  border-top: 2px solid #8fa89d;
+  border-bottom: none;
+}
+
 .yield-analytics-chart-wrapper {
   margin-top: 1rem;
 }

@@ -561,7 +561,7 @@ export function YieldAnalyticsPage() {
 
   const filteredVarietySummary = useMemo(() => {
     if (!summary) {
-      return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[] };
+      return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[], averageRow: null as AnalyticsRow | null };
     }
 
     const sizes = summary.sizes ?? [];
@@ -577,6 +577,8 @@ export function YieldAnalyticsPage() {
       total_kg: number;
       weighted_fw_sum: number;
       weighted_fw_kg: number;
+      fruit_count_sum: number;
+      fruit_count_kg: number;
       area_m2: number;
       size_kg_sum: Record<string, number>;
     };
@@ -601,6 +603,8 @@ export function YieldAnalyticsPage() {
           total_kg: 0,
           weighted_fw_sum: 0,
           weighted_fw_kg: 0,
+          fruit_count_sum: 0,
+          fruit_count_kg: 0,
           area_m2: variety?.area_m2 ?? 0,
           size_kg_sum: {}
         });
@@ -616,6 +620,14 @@ export function YieldAnalyticsPage() {
       if (Number.isFinite(avgFruitWeightG) && Number.isFinite(totalKg) && totalKg > 0) {
         bucket.weighted_fw_sum += avgFruitWeightG * totalKg;
         bucket.weighted_fw_kg += totalKg;
+      }
+
+      // Fruit count derived per entry (kg -> g / AFW g-per-fruit), kept separate from the
+      // arithmetic weighted_fw_sum/kg above since combining mass/count across entries requires
+      // a harmonic-style ratio (total kg / total fruit count), not an average of AFW values.
+      if (Number.isFinite(avgFruitWeightG) && avgFruitWeightG > 0 && Number.isFinite(totalKg) && totalKg > 0) {
+        bucket.fruit_count_sum += (totalKg * 1000) / avgFruitWeightG;
+        bucket.fruit_count_kg += totalKg;
       }
 
       const sizeKg = (entry.size_kg ?? {}) as Record<string, number>;
@@ -655,7 +667,67 @@ export function YieldAnalyticsPage() {
       })
       .sort((a, b) => a.variety_name.localeCompare(b.variety_name));
 
-    return { sizes, rows };
+    let averageRow: AnalyticsRow | null = null;
+
+    if (byVariety.size > 0) {
+      let totalEntriesCount = 0;
+      let totalKg = 0;
+      let totalWasteKg = 0;
+      let totalFruitCount = 0;
+      let totalFruitCountKg = 0;
+      let kgPerM2Numerator = 0;
+      let kgPerM2Denominator = 0;
+      const sizeKgTotals: Record<string, number> = {};
+
+      for (const item of byVariety.values()) {
+        totalEntriesCount += item.entries_count;
+        totalKg += item.total_kg;
+        totalWasteKg += filteredWasteKgByVarietyId.get(item.variety_id) ?? 0;
+        totalFruitCount += item.fruit_count_sum;
+        totalFruitCountKg += item.fruit_count_kg;
+
+        // Only varieties with a known area contribute to the combined kg/m2 figure,
+        // so a missing area on one variety doesn't distort the others' density.
+        if (item.area_m2 > 0) {
+          kgPerM2Numerator += item.total_kg;
+          kgPerM2Denominator += item.area_m2;
+        }
+
+        for (const [sizeId, kg] of Object.entries(item.size_kg_sum)) {
+          sizeKgTotals[sizeId] = (sizeKgTotals[sizeId] ?? 0) + kg;
+        }
+      }
+
+      // Denominator is the total kg actually classified into a size bucket, not the
+      // variety's overall total_kg (which can include waste/unclassified kg) — otherwise
+      // the size percentages would under-total instead of summing to ~100%.
+      let totalClassifiedSizeKg = 0;
+      for (const size of sizes) {
+        totalClassifiedSizeKg += sizeKgTotals[size.id] ?? 0;
+      }
+
+      const averageSizePct: Record<string, number> = {};
+      for (const size of sizes) {
+        const sizeKg = sizeKgTotals[size.id] ?? 0;
+        averageSizePct[size.id] = totalClassifiedSizeKg > 0 ? (sizeKg / totalClassifiedSizeKg) * 100 : 0;
+      }
+
+      averageRow = {
+        variety_id: "__average__",
+        variety_name: "Average",
+        entries_count: totalEntriesCount,
+        total_kg: totalKg,
+        waste_pct: totalKg > 0 ? (totalWasteKg / totalKg) * 100 : 0,
+        // Combined AFW = total kg / total estimated fruit count (a mass-weighted harmonic
+        // mean), not a simple kg-weighted average of AFW values — those diverge whenever
+        // entries with very different fruit sizes are combined.
+        avg_fruit_weight_g: totalFruitCount > 0 ? (totalFruitCountKg * 1000) / totalFruitCount : null,
+        kg_per_m2: kgPerM2Denominator > 0 ? kgPerM2Numerator / kgPerM2Denominator : null,
+        size_pct: averageSizePct
+      };
+    }
+
+    return { sizes, rows, averageRow };
   }, [summary, varietyMeta, filteredEntries, filteredWasteKgByVarietyId]);
 
   const varietySummaryWeekLabel = useMemo(
@@ -738,6 +810,22 @@ export function YieldAnalyticsPage() {
       lines.push(values.map(toCsvCell).join(","));
     }
 
+    if (filteredVarietySummary.averageRow) {
+      const averageValues: Array<string | number> = [
+        filteredVarietySummary.averageRow.variety_name,
+        filteredVarietySummary.averageRow.entries_count,
+        roundTo(filteredVarietySummary.averageRow.total_kg, 2),
+        formatWastePct(filteredVarietySummary.averageRow.waste_pct),
+        formatAvgFruitWeight(filteredVarietySummary.averageRow.avg_fruit_weight_g),
+        formatKgPerM2(filteredVarietySummary.averageRow.kg_per_m2),
+        ...filteredVarietySummary.sizes.map((size) =>
+          formatWholePercent(filteredVarietySummary.averageRow!.size_pct[size.id] ?? 0)
+        )
+      ];
+
+      lines.push(averageValues.map(toCsvCell).join(","));
+    }
+
     const csvContent = `${lines.join("\n")}\n`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     downloadBlobFile(blob, `${varietySummaryExportBaseName}.csv`);
@@ -777,12 +865,26 @@ export function YieldAnalyticsPage() {
       ...filteredVarietySummary.sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
     ]);
 
+    const averageRow = filteredVarietySummary.averageRow;
+    const footRows = averageRow
+      ? [[
+          averageRow.variety_name,
+          String(averageRow.entries_count),
+          String(roundTo(averageRow.total_kg, 2)),
+          formatWastePct(averageRow.waste_pct),
+          formatAvgFruitWeight(averageRow.avg_fruit_weight_g),
+          formatKgPerM2(averageRow.kg_per_m2),
+          ...filteredVarietySummary.sizes.map((size) => formatWholePercent(averageRow.size_pct[size.id] ?? 0))
+        ]]
+      : [];
+
     autoTable(doc, {
       head: [headers],
       body:
         bodyRows.length > 0
           ? bodyRows
           : [["No filtered rows to export.", ...new Array(Math.max(0, headers.length - 1)).fill("")]],
+      foot: bodyRows.length > 0 ? footRows : [],
       startY: 72,
       styles: {
         fontSize: 9,
@@ -795,6 +897,12 @@ export function YieldAnalyticsPage() {
         fillColor: [240, 246, 244],
         textColor: [24, 35, 32],
         fontStyle: "bold"
+      },
+      footStyles: {
+        fillColor: [231, 237, 233],
+        textColor: [24, 35, 32],
+        fontStyle: "bold",
+        lineWidth: { top: 1.2 }
       },
       margin: { left: 40, right: 40, top: 72 }
     });
@@ -1068,6 +1176,23 @@ export function YieldAnalyticsPage() {
                   </tr>
                 ))}
               </tbody>
+              {filteredVarietySummary.averageRow ? (
+                <tfoot>
+                  <tr>
+                    <td>Average</td>
+                    <td>{filteredVarietySummary.averageRow.entries_count}</td>
+                    <td>{roundTo(filteredVarietySummary.averageRow.total_kg, 2)}</td>
+                    <td>{formatWastePct(filteredVarietySummary.averageRow.waste_pct)}</td>
+                    <td>{formatAvgFruitWeight(filteredVarietySummary.averageRow.avg_fruit_weight_g)}</td>
+                    <td>{formatKgPerM2(filteredVarietySummary.averageRow.kg_per_m2)}</td>
+                    {filteredVarietySummary.sizes.map((size) => (
+                      <td key={`average-${size.id}`}>
+                        {formatWholePercent(filteredVarietySummary.averageRow!.size_pct[size.id] ?? 0)}
+                      </td>
+                    ))}
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
         ) : null}
@@ -1324,6 +1449,23 @@ export function YieldAnalyticsPage() {
                         </tr>
                       )}
                     </tbody>
+                    {filteredVarietySummary.averageRow ? (
+                      <tfoot>
+                        <tr>
+                          <td>Average</td>
+                          <td>{filteredVarietySummary.averageRow.entries_count}</td>
+                          <td>{roundTo(filteredVarietySummary.averageRow.total_kg, 2)}</td>
+                          <td>{formatWastePct(filteredVarietySummary.averageRow.waste_pct)}</td>
+                          <td>{formatAvgFruitWeight(filteredVarietySummary.averageRow.avg_fruit_weight_g)}</td>
+                          <td>{formatKgPerM2(filteredVarietySummary.averageRow.kg_per_m2)}</td>
+                          {filteredVarietySummary.sizes.map((size) => (
+                            <td key={`preview-average-${size.id}`}>
+                              {formatWholePercent(filteredVarietySummary.averageRow!.size_pct[size.id] ?? 0)}
+                            </td>
+                          ))}
+                        </tr>
+                      </tfoot>
+                    ) : null}
                   </table>
                 </div>
               </div>
