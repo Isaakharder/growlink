@@ -11,7 +11,17 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(Get-ChildItem -Directory)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(xargs grep -l \"ENABLE ROW LEVEL SECURITY\\\\|enable row level security\")",
+      "Bash(node --require tsx/cjs --test src/routes/pestCalibration/__tests__/devices.test.ts)",
+      "Bash(command -v supabase)",
+      "Bash(command -v npx)",
+      "Bash(where chromium-cli *)",
+      "Bash(npx chromium-cli *)",
+      "Bash(curl -s http://localhost:4000/api/health)",
+      "Bash(curl -s -o /dev/null -w \"client status: %{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8080/api/flowmaster-size-rules)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -X POST http://localhost:8080/api/pdf-import/remap-sizes -H \"Content-Type: application/json\" -d '{\"files\":[]}')"
     ],
     "additionalDirectories": [
       "C:\\growlink\\server",
