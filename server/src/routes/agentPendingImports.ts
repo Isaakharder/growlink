@@ -2,7 +2,9 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { loadOrgSizeContext } from "./pdfImport";
 import { resolveFileSizes, type OrgSizeContext } from "../utils/sizeMapping";
-import { type CsvSizeEntry } from "../utils/flowMasterCsvParser";
+import { type CsvSizeEntry, type CsvRowKg } from "../utils/flowMasterCsvParser";
+import { resolveCsvRowLabels } from "../utils/flowMasterCsvRuleResolver";
+import { fetchCsvSizeSettings, type CsvSizeSettings } from "../utils/csvSizeSettings";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 
 const agentPendingImportsRouter = Router();
@@ -77,6 +79,7 @@ type BuildPreviewContext = {
   activeVarietyByName: Map<string, ActiveVariety>;
   activeVarietyById: Map<string, ActiveVariety>;
   sizeContext: OrgSizeContext;
+  csvSettings: CsvSizeSettings;
   existingEntryKeySet: Set<string>;
   alreadyImportedLots: Set<string>;
 };
@@ -89,8 +92,13 @@ type BuildContextResult =
 // matching, size mapping and duplicate-week detection identically —
 // including preferring override_variety_id over the raw parsed variety_name.
 function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfPreviewSuccess {
+  // Drop the parser's own "New size found" warnings baked in at upload time —
+  // they don't know about saved size rules, so a label a rule has since
+  // resolved would otherwise still show a stale "unknown" warning below
+  // alongside (or instead of) the correctly-resolved one. Mirrors pdfImport.ts's
+  // /pdf-import/preview, which filters the same way for the same reason.
   const warnings: string[] = Array.isArray(row.warnings)
-    ? (row.warnings as string[]).filter((w) => typeof w === "string")
+    ? (row.warnings as string[]).filter((w) => typeof w === "string" && !w.startsWith("New size found:"))
     : [];
 
   const alreadyImported = row.lot_number !== null && ctx.alreadyImportedLots.has(row.lot_number);
@@ -116,19 +124,56 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
     );
   }
 
-  // Normalise size_kg from JSONB — values may be strings when deserialised from numeric
-  const rawSizeKg = row.size_kg ?? {};
-  const sizeBreakdown: Record<string, number> = {};
-  for (const [sizeName, rawKg] of Object.entries(rawSizeKg)) {
-    const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
-    if (Number.isFinite(kg) && kg >= 0) {
-      sizeBreakdown[sizeName] = kg;
-    }
-  }
-
-  const unknownSizesSeed = Array.isArray(row.unknown_sizes)
-    ? (row.unknown_sizes as unknown[]).filter((s): s is string => typeof s === "string")
+  // raw_payload.csvRowKg carries the per-row MARKET/SIZE1/kg facts captured
+  // at upload time (empty/absent for PDFs and pending rows queued before this
+  // field existed). When present, re-derive sizeBreakdown/unknownSizesSeed
+  // from those raw facts — with the org's CURRENT saved flowmaster_size_rules
+  // factored into MARKET-vs-SIZE1 priority — instead of trusting the stored
+  // size_kg/unknown_sizes columns, which were computed once at upload time
+  // using only the org's rules AS THEY WERE THEN (and, for MARKET, without
+  // any rules at all, since the parser has no DB access). This is what lets a
+  // MARKET rule added after upload (e.g. an Ignore rule for "waste") still
+  // correctly suppress a row instead of leaving its kg stuck under "Small"
+  // forever. Falls back to the stored columns when csvRowKg isn't available.
+  const rawCsvRowKg = row.raw_payload?.csvRowKg;
+  const csvRowKg: CsvRowKg[] = Array.isArray(rawCsvRowKg)
+    ? (rawCsvRowKg as unknown[]).filter(
+        (r): r is CsvRowKg =>
+          r !== null &&
+          typeof r === "object" &&
+          typeof (r as CsvRowKg).marketLabel === "string" &&
+          typeof (r as CsvRowKg).size1Label === "string" &&
+          typeof (r as CsvRowKg).kg === "number"
+      )
     : [];
+
+  let sizeBreakdown: Record<string, number>;
+  let unknownSizesSeed: string[];
+
+  if (csvRowKg.length > 0) {
+    const reResolved = resolveCsvRowLabels(
+      csvRowKg,
+      ctx.csvSettings.ignoredSizeLabels,
+      ctx.csvSettings.sizeAliases,
+      ctx.sizeContext.rulesByNormalizedLabel
+    );
+    sizeBreakdown = reResolved.sizeKg;
+    unknownSizesSeed = reResolved.unknownSizes;
+  } else {
+    // Normalise size_kg from JSONB — values may be strings when deserialised from numeric
+    const rawSizeKg = row.size_kg ?? {};
+    sizeBreakdown = {};
+    for (const [sizeName, rawKg] of Object.entries(rawSizeKg)) {
+      const kg = typeof rawKg === "number" ? rawKg : Number(rawKg);
+      if (Number.isFinite(kg) && kg >= 0) {
+        sizeBreakdown[sizeName] = kg;
+      }
+    }
+
+    unknownSizesSeed = Array.isArray(row.unknown_sizes)
+      ? (row.unknown_sizes as unknown[]).filter((s): s is string => typeof s === "string")
+      : [];
+  }
 
   const resolved = resolveFileSizes(sizeBreakdown, unknownSizesSeed, ctx.sizeContext);
   warnings.push(...resolved.ruleNotes, ...resolved.sizeWarnings);
@@ -202,7 +247,7 @@ async function loadBuildContext(
   organizationId: string,
   lotNumbers: string[]
 ): Promise<BuildContextResult> {
-  const [varietiesResult, yieldEntriesResult, importRunsResult, sizeContextResult] =
+  const [varietiesResult, yieldEntriesResult, importRunsResult, sizeContextResult, csvSettings] =
     await Promise.all([
       supabase
         .from("varieties")
@@ -220,7 +265,8 @@ async function loadBuildContext(
             .eq("organization_id", organizationId)
             .in("lot_number", lotNumbers)
         : Promise.resolve({ data: [] as ExistingImportRun[], error: null }),
-      loadOrgSizeContext(organizationId)
+      loadOrgSizeContext(organizationId),
+      fetchCsvSizeSettings(organizationId)
     ]);
 
   if (varietiesResult.error) {
@@ -263,6 +309,7 @@ async function loadBuildContext(
       activeVarietyByName,
       activeVarietyById,
       sizeContext: sizeContextResult.ctx,
+      csvSettings,
       existingEntryKeySet,
       alreadyImportedLots
     }

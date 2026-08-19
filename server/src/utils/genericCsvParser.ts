@@ -218,5 +218,6 @@ export function parseGenericCsvBuffer(
     unknownSizes: [],
     warnings: acc.warnings,
     csvSizes: [],
+    csvRowKg: [],
   }));
 }

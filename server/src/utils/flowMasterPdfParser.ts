@@ -8,6 +8,24 @@ export type CsvSizeEntry = {
   kg: number;             // total kg for this label across all rows in the lot
 };
 
+// One raw CSV data row's MARKET/SIZE1/kg/avg/pcs facts, kept independent of
+// any ignore/alias/rule resolution. The pure CSV parser can only resolve a
+// row using org config it was handed as plain arguments (ignoredSizeLabels,
+// sizeAliases) — it has no database access, so it can't know whether MARKET
+// has a saved flowmaster_size_rules entry that should take priority over a
+// direct SIZE1 size code. Carrying these facts through lets a later,
+// rules-aware resolution pass (flowMasterCsvRuleResolver.ts, run once the
+// caller has actually loaded the org's saved rules) redo that MARKET-vs-SIZE1
+// decision correctly instead of it being locked in at parse time.
+// Populated only for CSV new-format files; empty for old-format CSVs and PDFs.
+export type CsvRowKg = {
+  marketLabel: string;  // uppercase-trimmed MARKET value, "" if absent/blank
+  size1Label: string;   // uppercase-trimmed SIZE1 value, "" if absent/blank
+  kg: number;
+  avg: number | null;
+  pcs: number | null;
+};
+
 export type FlowMasterParseResult = {
   sourceFile: string;
   lotNumber: string | null;
@@ -24,6 +42,8 @@ export type FlowMasterParseResult = {
   // Populated only for CSV files; empty for PDFs.
   // Includes ALL raw size labels (even ignored ones) so the UI can show toggle checkboxes.
   csvSizes: CsvSizeEntry[];
+  // See CsvRowKg above. Empty for PDFs and old-format CSVs.
+  csvRowKg: CsvRowKg[];
 };
 
 // Maps Flow Master PDF size labels → GrowLink size names.
@@ -192,6 +212,7 @@ function extractFromText(text: string, sourceFile: string): FlowMasterParseResul
     unknownSizes,
     warnings,
     csvSizes: [],
+    csvRowKg: [],
   };
 }
 

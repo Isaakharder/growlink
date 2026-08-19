@@ -3,6 +3,7 @@ import multer from "multer";
 import { supabase } from "../config/supabase";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
 import { parseFlowMasterCsvBuffer, type CsvSizeEntry } from "../utils/flowMasterCsvParser";
+import { resolveCsvRowLabels } from "../utils/flowMasterCsvRuleResolver";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
 import { normalizeSizeRuleLabel, type SizeRuleRecord } from "../utils/flowMasterSizeRules";
 import {
@@ -566,7 +567,23 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
             );
           }
 
-          const resolved = resolveFileSizes(parsed.sizeKg, parsed.unknownSizes, sizeContext);
+          // CSV files carry per-row MARKET/SIZE1 facts (empty for PDFs) —
+          // re-derive sizeKg/unknownSizes with saved flowmaster_size_rules
+          // factored into MARKET-vs-SIZE1 priority before the shared
+          // aggregation engine (resolveFileSizes/applySizeRules) runs, so a
+          // MARKET rule (e.g. an Ignore rule for "waste") can suppress a row
+          // even when its SIZE1 is already a recognized size code.
+          const { sizeKg: preSizeKg, unknownSizes: preUnknownSizes } =
+            parsed.csvRowKg.length > 0
+              ? resolveCsvRowLabels(
+                  parsed.csvRowKg,
+                  csvSettings.ignoredSizeLabels,
+                  csvSettings.sizeAliases,
+                  sizeContext.rulesByNormalizedLabel
+                )
+              : { sizeKg: parsed.sizeKg, unknownSizes: parsed.unknownSizes };
+
+          const resolved = resolveFileSizes(preSizeKg, preUnknownSizes, sizeContext);
           warnings.push(...resolved.ruleNotes, ...resolved.sizeWarnings);
 
           const duplicateKey =

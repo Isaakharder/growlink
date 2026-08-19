@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applySizeRules, type SizeRuleRecord } from "../flowMasterSizeRules";
+import { applySizeRules, normalizeSizeRuleLabel, type SizeRuleRecord } from "../flowMasterSizeRules";
 
 function rule(overrides: Partial<SizeRuleRecord> & { id: string; rawLabel: string }): SizeRuleRecord {
   return {
@@ -185,6 +185,27 @@ test("several unknown labels in one file resolve independently by their own rule
   assert.strictEqual(result.sizeKg.Large, 640);
   assert.strictEqual(result.sizeKg["all weight"], 10);
   assert.strictEqual(result.sizeKg.Green, 25);
+});
+
+// ─── normalizeSizeRuleLabel ───────────────────────────────────────────────
+
+test("normalizeSizeRuleLabel strips braces, collapses whitespace, and lowercases so label variants share one match key", () => {
+  assert.strictEqual(normalizeSizeRuleLabel("{oversized}"), "oversized");
+  assert.strictEqual(normalizeSizeRuleLabel("OVERSIZED"), "oversized");
+  assert.strictEqual(normalizeSizeRuleLabel("  Oversized  "), "oversized");
+  assert.strictEqual(normalizeSizeRuleLabel("{ Oversized }"), "oversized");
+  assert.strictEqual(normalizeSizeRuleLabel("Class   1"), "class 1");
+});
+
+test("a rule saved with braces resolves an unknownSizes label that has no braces (and vice versa)", () => {
+  const rules = new Map([
+    [normalizeSizeRuleLabel("{oversized}"), rule({ id: "r1", rawLabel: "{oversized}", action: "ignore" })]
+  ]);
+
+  const result = applySizeRules({ OVERSIZED: 5 }, ["OVERSIZED"], rules, new Map());
+
+  assert.deepStrictEqual(result.unknownSizes, []);
+  assert.strictEqual(result.sizeKg.OVERSIZED, undefined);
 });
 
 test("rule pointing at a deleted/inactive size falls back to unknown with a warning note", () => {

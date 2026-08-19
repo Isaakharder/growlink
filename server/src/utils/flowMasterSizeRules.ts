@@ -30,8 +30,12 @@ export type ApplySizeRulesResult = {
   notes: string[];
 };
 
+// Case/space/brace-insensitive so a rule saved from one raw label variant
+// (e.g. "{oversized}") still matches a later file that spells it slightly
+// differently (e.g. "Oversized", "oversized "). The stored raw_label itself
+// (and whatever the UI displays) is untouched — this only affects matching.
 export function normalizeSizeRuleLabel(value: string): string {
-  return value.trim().toLowerCase();
+  return value.trim().toLowerCase().replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function roundTo2(value: number): number {
