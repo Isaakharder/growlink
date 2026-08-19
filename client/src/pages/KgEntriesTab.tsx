@@ -280,8 +280,18 @@ function sortSizeNames(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-function calculateComputedTotalKg(sizeBreakdown: Record<string, number>): number {
-  return Object.values(sizeBreakdown).reduce((sum, kg) => sum + kg, 0);
+// sizeBreakdown keys include BOTH resolved GrowLink size names and any raw
+// labels still awaiting a saved rule (see unknownSizes) — summing every key
+// overstates a source reading's importable kg by including kg that isn't
+// actually mapped to a real size yet. Excluding unknownSizes keys gives the
+// correct "mapped/importable kg" figure shown per Source Reading and rolled
+// up into "Total kg from sizes".
+function calculateMappedTotalKg(sizeBreakdown: Record<string, number>, unknownSizes: string[]): number {
+  const unknownSet = new Set(unknownSizes);
+  return Object.entries(sizeBreakdown).reduce(
+    (sum, [size, kg]) => (unknownSet.has(size) ? sum : sum + kg),
+    0
+  );
 }
 
 export function KgEntriesTab() {
@@ -318,6 +328,12 @@ export function KgEntriesTab() {
   const [pdfCardImportErrors, setPdfCardImportErrors] = useState<Record<string, string>>({});
   const [pendingWeeks, setPendingWeeks] = useState<PendingAgentWeek[]>([]);
   const [csvIgnoredLabels, setCsvIgnoredLabels] = useState<string[]>([]);
+  // Set only when pdfPreviewFiles was populated from GET /agent-pending-imports
+  // (handlePendingWeekClick) rather than a fresh /pdf-import/preview upload —
+  // lets handleCsvSizeToggle re-fetch server-truth (rules-aware) results
+  // instead of relying on the client-side raw-label-only recompute, which
+  // doesn't know about saved flowmaster_size_rules.
+  const [viewedPendingWeek, setViewedPendingWeek] = useState<{ isoYear: number | null; isoWeek: number | null } | null>(null);
   const [reassigningReadingId, setReassigningReadingId] = useState<string | null>(null);
   const [reassignTargetVarietyId, setReassignTargetVarietyId] = useState<string>("");
   const [reassignSavingId, setReassignSavingId] = useState<string | null>(null);
@@ -678,6 +694,15 @@ export function KgEntriesTab() {
         method: "PATCH",
         body: JSON.stringify({ ignoredSizeLabels: next }),
       });
+
+      // Pending imports can re-derive a fully rules-aware sizeBreakdown from
+      // stored raw CSV text (see buildPreviewFile), so re-fetch to reflect
+      // the new ignoredSizeLabels immediately instead of relying on the
+      // client-side raw-label recompute below, which has no knowledge of
+      // saved flowmaster_size_rules and would otherwise disagree with it.
+      if (viewedPendingWeek) {
+        await handlePendingWeekClick(viewedPendingWeek.isoYear, viewedPendingWeek.isoWeek);
+      }
     } catch {
       // Best-effort save; local state already updated.
     }
@@ -699,6 +724,7 @@ export function KgEntriesTab() {
       setPdfImportedCardKeys(new Set());
       setPdfCardImportingKeys(new Set());
       setPdfCardImportErrors({});
+      setViewedPendingWeek({ isoYear, isoWeek });
       void fetchCsvSettings();
       setIsPdfPreviewOpen(true);
 
@@ -970,6 +996,7 @@ export function KgEntriesTab() {
     setPdfImportedCardKeys(new Set());
     setPdfCardImportingKeys(new Set());
     setPdfCardImportErrors({});
+    setViewedPendingWeek(null);
     setPdfPreviewUploading(true);
 
     const formData = new FormData();
@@ -1132,7 +1159,7 @@ export function KgEntriesTab() {
     for (const file of pdfPreviewFiles) {
       if (!file.success) continue;
 
-      const computedTotalKg = calculateComputedTotalKg(file.sizeBreakdown);
+      const computedTotalKg = calculateMappedTotalKg(file.sizeBreakdown, file.unknownSizes);
 
       const normalizedWarnings = file.warnings.filter(
         (warning) =>
@@ -1246,7 +1273,7 @@ export function KgEntriesTab() {
       const yearKey = file.isoYear === null ? "unknown-year" : String(file.isoYear);
       const key = `${varietyKey}::${weekKey}::${yearKey}`;
 
-      const computedTotalKg = calculateComputedTotalKg(file.sizeBreakdown);
+      const computedTotalKg = calculateMappedTotalKg(file.sizeBreakdown, file.unknownSizes);
 
       if (
         file.averageFruitWeightG !== null &&
@@ -1276,18 +1303,21 @@ export function KgEntriesTab() {
         unknownSizes: Array.from(new Set(group.unknownSizes)),
       };
 
-      // For CSV cards, recompute sizeBreakdown/unknownSizes/totalKg/counts from
-      // csvSizes + current ignoredSet so ignore-toggles take effect immediately
-      // without a server round trip. Only do this when a toggle actually
-      // applies to one of this card's labels — otherwise the server-resolved
-      // fields already merged into finalGroup above are the source of truth
-      // (they're rule-aware; this recompute only knows the CSV parser's
-      // built-in size-label map, not saved size rules or newly-created sizes).
+      // For freshly-uploaded CSV previews (not yet queued — no reading has an
+      // id), recompute sizeBreakdown/unknownSizes/totalKg/counts from csvSizes
+      // + current ignoredSet so ignore-toggles take effect immediately without
+      // a server round trip. Pending-import cards (readings DO have an id) skip
+      // this entirely and instead get a full server re-fetch from
+      // handleCsvSizeToggle, because this recompute only understands the CSV
+      // parser's built-in size-label map — not saved flowmaster_size_rules —
+      // and would silently disagree with (and overwrite) the correct,
+      // rule-aware totals already merged into finalGroup above.
+      const isPendingImportGroup = group.sourceReadings.some((reading) => reading.id !== null);
       const hasRelevantIgnoreToggle = group.csvSizes.some((entry) =>
         ignoredSet.has(entry.rawLabel.toUpperCase())
       );
 
-      if (group.isCsvSource && group.csvSizes.length > 0 && hasRelevantIgnoreToggle) {
+      if (!isPendingImportGroup && group.isCsvSource && group.csvSizes.length > 0 && hasRelevantIgnoreToggle) {
         const csvBreakdown: Record<string, number> = {};
         const csvUnknown: string[] = [];
         let csvMapped = 0;
@@ -1813,7 +1843,7 @@ export function KgEntriesTab() {
           titleId="pdf-import-preview-title"
         >
             <div className="pdf-preview-modal-header">
-              <h2 id="pdf-import-preview-title">PDF Import Preview</h2>
+              <h2 id="pdf-import-preview-title">Import Preview</h2>
               <div className="pdf-preview-header-actions">
                 {uniqueUnknownSizeLabels.length > 0 && (
                   <button
@@ -1843,7 +1873,7 @@ export function KgEntriesTab() {
             </div>
 
             <p className="pdf-preview-subtitle">
-              Review parsed PDF data before importing.
+              Review parsed data before importing.
             </p>
 
             <form className="pdf-preview-form" onSubmit={(e) => e.preventDefault()}>
@@ -1869,7 +1899,9 @@ export function KgEntriesTab() {
               <div className="csv-size-preferences-panel">
                 <h3 className="csv-size-preferences-title">CSV Size Preferences</h3>
                 <p className="csv-size-preferences-hint">
-                  Uncheck any size to exclude it from all imports. Your choices are saved automatically.
+                  Raw kg detected per label, before saved size rules are applied — totals here will not match
+                  the final Size Breakdown below. Uncheck any size to exclude it from all imports. Your choices
+                  are saved automatically.
                 </p>
                 <ul className="csv-size-checkbox-list">
                   {allDetectedCsvSizes.map((entry) => {
@@ -1939,7 +1971,7 @@ export function KgEntriesTab() {
 
                     <dl className="pdf-preview-metric-grid">
                       <div className="pdf-preview-metric-cell">
-                        <dt>PDF Count (Importable)</dt>
+                        <dt>File Count (Importable)</dt>
                         <dd>{group.sourceReadings.filter((reading) => !reading.skipped).length}</dd>
                       </div>
                       <div className="pdf-preview-metric-cell">
