@@ -2,7 +2,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { loadOrgSizeContext } from "./pdfImport";
 import { resolveFileSizes, type OrgSizeContext } from "../utils/sizeMapping";
-import { type CsvSizeEntry, type CsvRowKg } from "../utils/flowMasterCsvParser";
+import { parseFlowMasterCsv, type CsvSizeEntry, type CsvRowKg, type FlowMasterParseResult } from "../utils/flowMasterCsvParser";
 import { resolveCsvRowLabels } from "../utils/flowMasterCsvRuleResolver";
 import { fetchCsvSizeSettings, type CsvSizeSettings } from "../utils/csvSizeSettings";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
@@ -15,7 +15,7 @@ const canEdit = requirePermission("yield:edit");
 const PENDING_IMPORT_COLUMNS =
   "id, lot_number, variety_name, source_filename, start_time, iso_year, iso_week, average_fruit_weight_g, size_kg, parsed_total_kg, warnings, unknown_sizes, raw_payload, needs_template, data_source_type, override_variety_id";
 
-type PendingImportRow = {
+export type PendingImportRow = {
   id: string;
   lot_number: string | null;
   variety_name: string | null;
@@ -75,7 +75,7 @@ type PdfPreviewSuccess = {
   csvHeaders: string[];
 };
 
-type BuildPreviewContext = {
+export type BuildPreviewContext = {
   activeVarietyByName: Map<string, ActiveVariety>;
   activeVarietyById: Map<string, ActiveVariety>;
   sizeContext: OrgSizeContext;
@@ -91,14 +91,45 @@ type BuildContextResult =
 // Shared by GET (batch) and PATCH (single row) so both resolve variety
 // matching, size mapping and duplicate-week detection identically —
 // including preferring override_variety_id over the raw parsed variety_name.
-function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfPreviewSuccess {
-  // Drop the parser's own "New size found" warnings baked in at upload time —
-  // they don't know about saved size rules, so a label a rule has since
-  // resolved would otherwise still show a stale "unknown" warning below
-  // alongside (or instead of) the correctly-resolved one. Mirrors pdfImport.ts's
-  // /pdf-import/preview, which filters the same way for the same reason.
-  const warnings: string[] = Array.isArray(row.warnings)
-    ? (row.warnings as string[]).filter((w) => typeof w === "string" && !w.startsWith("New size found:"))
+export function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfPreviewSuccess {
+  // If the raw CSV text was captured at upload time (raw_payload.csv_text —
+  // see agentRoutes.ts), fully re-parse it now instead of trusting ANY of
+  // the stored columns (size_kg, warnings, start_time, iso_year/iso_week,
+  // parsed_total_kg, average_fruit_weight_g). Those were frozen at whatever
+  // the parser produced the moment this row was queued — if a parser fix
+  // (duplicate-header handling, date parsing, MARKET/SIZE1 priority, etc.)
+  // shipped after that, the stored columns stay wrong forever without this.
+  // Rows queued before raw CSV text was captured fall back to the stored
+  // columns below (best-effort — the original bytes are gone, so a full
+  // re-parse isn't possible; only sizeKg can be partially corrected via
+  // csvRowKg, see further down).
+  const rawCsvText = row.raw_payload?.csv_text;
+  let freshParsed: FlowMasterParseResult | null = null;
+  if (typeof rawCsvText === "string" && row.lot_number) {
+    try {
+      const reparsed = parseFlowMasterCsv(
+        rawCsvText,
+        row.source_filename,
+        ctx.csvSettings.ignoredSizeLabels,
+        ctx.csvSettings.sizeAliases
+      );
+      freshParsed = reparsed.find((r) => r.lotNumber === row.lot_number) ?? null;
+    } catch {
+      // Fall back to stored columns below — a re-parse failure here must
+      // never break the review UI.
+      freshParsed = null;
+    }
+  }
+
+  const baseWarnings: unknown[] = freshParsed ? freshParsed.warnings : row.warnings;
+
+  // Drop the parser's own "New size found" warnings — they don't know about
+  // saved size rules, so a label a rule has since resolved would otherwise
+  // still show a stale "unknown" warning below alongside (or instead of) the
+  // correctly-resolved one. Mirrors pdfImport.ts's /pdf-import/preview,
+  // which filters the same way for the same reason.
+  const warnings: string[] = Array.isArray(baseWarnings)
+    ? (baseWarnings as string[]).filter((w) => typeof w === "string" && !w.startsWith("New size found:"))
     : [];
 
   const alreadyImported = row.lot_number !== null && ctx.alreadyImportedLots.has(row.lot_number);
@@ -124,18 +155,14 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
     );
   }
 
-  // raw_payload.csvRowKg carries the per-row MARKET/SIZE1/kg facts captured
-  // at upload time (empty/absent for PDFs and pending rows queued before this
-  // field existed). When present, re-derive sizeBreakdown/unknownSizesSeed
-  // from those raw facts — with the org's CURRENT saved flowmaster_size_rules
-  // factored into MARKET-vs-SIZE1 priority — instead of trusting the stored
-  // size_kg/unknown_sizes columns, which were computed once at upload time
-  // using only the org's rules AS THEY WERE THEN (and, for MARKET, without
-  // any rules at all, since the parser has no DB access). This is what lets a
-  // MARKET rule added after upload (e.g. an Ignore rule for "waste") still
-  // correctly suppress a row instead of leaving its kg stuck under "Small"
-  // forever. Falls back to the stored columns when csvRowKg isn't available.
-  const rawCsvRowKg = row.raw_payload?.csvRowKg;
+  // csvRowKg carries the per-row MARKET/SIZE1/kg facts needed to redo size
+  // resolution with the org's CURRENT saved flowmaster_size_rules factored
+  // into MARKET-vs-SIZE1 priority (a MARKET rule can outrank a direct SIZE1
+  // code — see flowMasterCsvRuleResolver.ts). Prefer freshParsed's (always
+  // correct, this instant) over whatever raw_payload happened to store at
+  // upload time; fall back to the stored columns only when neither is usable
+  // (e.g. a PDF row, or a CSV row queued before either field existed).
+  const rawCsvRowKg = freshParsed ? freshParsed.csvRowKg : row.raw_payload?.csvRowKg;
   const csvRowKg: CsvRowKg[] = Array.isArray(rawCsvRowKg)
     ? (rawCsvRowKg as unknown[]).filter(
         (r): r is CsvRowKg =>
@@ -178,9 +205,17 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
   const resolved = resolveFileSizes(sizeBreakdown, unknownSizesSeed, ctx.sizeContext);
   warnings.push(...resolved.ruleNotes, ...resolved.sizeWarnings);
 
+  // Effective date/week/total/AFW: freshParsed's when a re-parse succeeded,
+  // otherwise whatever was stored at upload time.
+  const effectiveStartTime = freshParsed ? freshParsed.startTime : row.start_time;
+  const effectiveIsoYear = freshParsed ? freshParsed.isoYear : row.iso_year;
+  const effectiveIsoWeek = freshParsed ? freshParsed.isoWeek : row.iso_week;
+  const effectiveTotalKg = freshParsed ? freshParsed.totalKg : row.parsed_total_kg;
+  const effectiveAverageFruitWeightG = freshParsed ? freshParsed.averageFruitWeightG : row.average_fruit_weight_g;
+
   const duplicateKey =
-    matchedVariety && row.iso_year !== null && row.iso_week !== null
-      ? `${matchedVariety.id}::${row.iso_year}::${row.iso_week}`
+    matchedVariety && effectiveIsoYear !== null && effectiveIsoWeek !== null
+      ? `${matchedVariety.id}::${effectiveIsoYear}::${effectiveIsoWeek}`
       : null;
 
   const hasExistingWeeklyData =
@@ -190,8 +225,9 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
     warnings.push("Existing weekly data found. Import will add these PDF totals to the week.");
   }
 
-  // Extract csvSizes stored in raw_payload at upload time.
-  const rawCsvSizes = row.raw_payload?.csvSizes;
+  // csvSizes: prefer freshParsed's (always correct), else whatever raw_payload
+  // stored at upload time.
+  const rawCsvSizes = freshParsed ? freshParsed.csvSizes : row.raw_payload?.csvSizes;
   const csvSizes: CsvSizeEntry[] = Array.isArray(rawCsvSizes)
     ? (rawCsvSizes as unknown[]).filter(
         (e): e is CsvSizeEntry =>
@@ -222,12 +258,12 @@ function buildPreviewFile(row: PendingImportRow, ctx: BuildPreviewContext): PdfP
       varietyId: matchedVariety?.id ?? null,
       varietyName: matchedVariety?.name ?? null
     },
-    startTime: row.start_time,
-    startDate: row.start_time?.slice(0, 10) ?? null,
-    isoWeek: row.iso_week,
-    isoYear: row.iso_year,
-    totalKg: row.parsed_total_kg,
-    averageFruitWeightG: row.average_fruit_weight_g,
+    startTime: effectiveStartTime,
+    startDate: effectiveStartTime?.slice(0, 10) ?? null,
+    isoWeek: effectiveIsoWeek,
+    isoYear: effectiveIsoYear,
+    totalKg: effectiveTotalKg,
+    averageFruitWeightG: effectiveAverageFruitWeightG,
     sizeBreakdown: resolved.sizeKg,
     sizeMappingStatus: resolved.sizeMappingStatus,
     duplicateStatus: { found: hasExistingWeeklyData },

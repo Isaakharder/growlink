@@ -490,7 +490,17 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
     // ── flowmaster path (unchanged) ───────────────────────────────────────────
     const csvSettings = await fetchCsvSizeSettings(organizationId);
 
-    type ParsedEntry = { filename: string; parsed: FlowMasterParseResult | null; parseError: string | null };
+    type ParsedEntry = {
+      filename: string;
+      parsed: FlowMasterParseResult | null;
+      parseError: string | null;
+      // Raw file text, CSV files only (null for PDFs). Persisted into
+      // raw_payload.csv_text below so a pending row can be fully re-parsed
+      // later if a parser fix ships after this file was already queued —
+      // without it, a stored row's sizeKg/dates/warnings are frozen forever
+      // at whatever the parser produced at upload time.
+      csvText: string | null;
+    };
     const fileParseArrays = await Promise.all(
       uploadedFiles.map(async (file): Promise<ParsedEntry[]> => {
         const isCsv =
@@ -499,6 +509,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           file.mimetype === "application/csv";
         try {
           if (isCsv) {
+            const csvText = file.buffer.toString("utf-8");
             const csvResults = parseFlowMasterCsvBuffer(
               file.buffer,
               file.originalname,
@@ -506,17 +517,18 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
               csvSettings.sizeAliases
             );
             if (csvResults.length === 0) {
-              return [{ filename: file.originalname, parsed: null, parseError: "CSV contained no importable runs." }];
+              return [{ filename: file.originalname, parsed: null, parseError: "CSV contained no importable runs.", csvText }];
             }
-            return csvResults.map((parsed) => ({ filename: file.originalname, parsed, parseError: null as null }));
+            return csvResults.map((parsed) => ({ filename: file.originalname, parsed, parseError: null as null, csvText }));
           }
           const parsed = await parseFlowMasterPdfBuffer(file.buffer, file.originalname);
-          return [{ filename: file.originalname, parsed, parseError: null as null }];
+          return [{ filename: file.originalname, parsed, parseError: null as null, csvText: null }];
         } catch (err) {
           return [{
             filename: file.originalname,
             parsed: null,
-            parseError: err instanceof Error ? err.message : "Failed to parse file."
+            parseError: err instanceof Error ? err.message : "Failed to parse file.",
+            csvText: null
           }];
         }
       })
@@ -608,7 +620,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
             data_source_type: "flowmaster",
             source_type: "agent",
             needs_template: false,
-            raw_payload: parsed,
+            raw_payload: file.csvText !== null ? { ...parsed, csv_text: file.csvText } : parsed,
             uploaded_at: new Date().toISOString()
           },
           { onConflict: "organization_id,lot_number" }
