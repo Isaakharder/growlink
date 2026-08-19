@@ -3,6 +3,11 @@ import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 import { resolveActor } from "./foodSafety/services/actorIdentity";
+import {
+  calculateSampleMetrics,
+  parseBinFillPercent,
+  parseRequiredNumber
+} from "./mobileDailyYieldSampleMath";
 
 type RowRecord = {
   id: string;
@@ -53,26 +58,6 @@ function isMissingSettingsStorageError(error: { code?: string; message?: string 
     error.code === "PGRST205" ||
     message.includes("daily_yield_bin_settings") && message.includes("does not exist")
   );
-}
-
-function parseRequiredNumber(value: unknown, fieldName: string): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`${fieldName} is required`);
-  }
-
-  return parsed;
-}
-
-function parseBinFillPercent(value: unknown): number {
-  const parsed = parseRequiredNumber(value, "bin_fill_percent");
-
-  if (parsed < 0) {
-    throw new Error("bin_fill_percent must be 0 or greater");
-  }
-
-  return parsed;
 }
 
 function parseNonNegativeNumber(value: unknown, fieldName: string): number {
@@ -395,6 +380,48 @@ async function ensureRowLinkedToVariety(
   }
 }
 
+async function getRowTotalStems(rowId: string, organizationId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from("greenhouse_rows")
+    .select("slab_count, plants_per_slab, stems_per_plant")
+    .eq("id", rowId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Greenhouse row fetch error (daily yield sample edit):", error);
+    throw new Error("Failed to load row details.");
+  }
+
+  if (!data) {
+    throw new Error("Selected row was not found");
+  }
+
+  const slabCount = Number(data.slab_count);
+  const plantsPerSlab = Number(data.plants_per_slab);
+  const stemsPerPlant = Number(data.stems_per_plant);
+
+  if (
+    !Number.isFinite(slabCount) ||
+    slabCount < 0 ||
+    !Number.isFinite(plantsPerSlab) ||
+    plantsPerSlab < 0 ||
+    !Number.isFinite(stemsPerPlant) ||
+    stemsPerPlant <= 0
+  ) {
+    throw new Error("Selected row does not have a valid stem count.");
+  }
+
+  const totalPlants = slabCount * plantsPerSlab;
+  const totalStems = totalPlants * stemsPerPlant;
+
+  if (!Number.isFinite(totalStems) || totalStems <= 0) {
+    throw new Error("Selected row does not have a valid stem count.");
+  }
+
+  return totalStems;
+}
+
 // Suppress unused constants warning — kept for clarity in case of future use.
 void DEFAULT_KG_PER_FULL_BIN;
 void DEFAULT_KG_PER_CASE;
@@ -547,6 +574,86 @@ mobileDailyYieldRouter.post("/mobile/daily-yield/samples", canWrite, async (req,
   }
 
   return res.status(201).json(data);
+});
+
+mobileDailyYieldRouter.patch("/mobile/daily-yield/samples/:id", canWrite, async (req, res) => {
+  const organizationId = req.organizationId;
+  let sampleId: string;
+  let nextPercent: number;
+
+  try {
+    sampleId = parseId(req.params.id, "id");
+    const body = req.body as Record<string, unknown>;
+    nextPercent = parseBinFillPercent(body.percent_full ?? body.bin_fill_percent);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("daily_yield_samples")
+    .select("id, row_id, kg_per_full_bin")
+    .eq("id", sampleId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (existingError) {
+    return sendSafeError(
+      res,
+      500,
+      "Failed to load yield sample.",
+      "Daily yield sample fetch error:",
+      existingError
+    );
+  }
+
+  if (!existing) {
+    return res.status(404).json({ message: "Yield sample not found." });
+  }
+
+  const kgPerFullBin = Number(existing.kg_per_full_bin ?? 0);
+  if (!Number.isFinite(kgPerFullBin) || kgPerFullBin < 0) {
+    return res.status(400).json({ message: "Saved sample has an invalid kg_per_full_bin value." });
+  }
+
+  let totalStems: number;
+  try {
+    totalStems = await getRowTotalStems(existing.row_id, organizationId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load row details.";
+    return res.status(400).json({ message });
+  }
+
+  const { calculatedSampleKg, calculatedKgPerStem } = calculateSampleMetrics(
+    nextPercent,
+    kgPerFullBin,
+    totalStems
+  );
+
+  const { data: updated, error: updateError } = await supabase
+    .from("daily_yield_samples")
+    .update({
+      bin_fill_percent: nextPercent,
+      percent_full: nextPercent,
+      calculated_sample_kg: calculatedSampleKg,
+      calculated_kg_per_stem: calculatedKgPerStem
+    })
+    .eq("id", sampleId)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+
+  if (updateError) {
+    return sendSafeError(
+      res,
+      500,
+      "Failed to update yield sample.",
+      "Daily yield sample update error:",
+      updateError
+    );
+  }
+
+  return res.json(updated);
 });
 
 mobileDailyYieldRouter.get("/mobile/daily-yield/samples", canView, async (req, res) => {

@@ -3458,6 +3458,23 @@ body {
   gap: 0.2rem;
 }
 
+.sample-edit-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.sample-edit-controls input {
+  width: 6.25rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.25rem 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
 .mobile-sample-list li span {
   color: var(--text-muted);
   font-size: 0.9rem;
@@ -3466,6 +3483,40 @@ body {
 .mobile-sample-list button {
   padding: 0.45rem 0.65rem;
   background: var(--surface);
+}
+
+.sample-edit-btn {
+  flex-shrink: 0;
+  padding: 0.25rem 0.55rem !important;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+}
+
+.sample-edit-btn:not(:disabled):hover {
+  color: var(--brand) !important;
+  border-color: var(--brand) !important;
+}
+
+.sample-edit-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sample-edit-cancel-btn {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem !important;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text-muted) !important;
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.sample-edit-cancel-btn:not(:disabled):hover {
+  color: #c0392b !important;
 }
 
 .sample-delete-btn {

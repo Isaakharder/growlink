@@ -157,6 +157,28 @@ function buildLinkedRowsByVariety(rows: MobileOptionsRow[]): Record<string, Link
   return linkedByVariety;
 }
 
+function toLocalSample(sample: PersistedSample, rowRef?: LinkedRow): LocalSample {
+  return {
+    id: sample.id,
+    row_id: sample.row_id,
+    row_number: sample.row_number ?? rowRef?.row_number ?? 0,
+    phase_id: sample.phase_id ?? rowRef?.phase_id ?? "",
+    phase_name: sample.phase_name ?? rowRef?.phase_name ?? "Unknown",
+    row_label:
+      sample.row_label ??
+      rowRef?.label ??
+      `Row ${sample.row_number ?? rowRef?.row_number ?? "-"}`,
+    bin_fill_percent: Number(sample.percent_full ?? 0),
+    sample_kg: Number(sample.calculated_sample_kg ?? 0),
+    sample_kg_per_stem: Number(sample.calculated_kg_per_stem ?? 0),
+    slab_count: Number(sample.slab_count ?? rowRef?.slab_count ?? 0),
+    plants_per_slab: Number(sample.plants_per_slab ?? rowRef?.plants_per_slab ?? 0),
+    stems_per_plant: Number(sample.stems_per_plant ?? rowRef?.stems_per_plant ?? 0),
+    total_plants: Number(sample.total_plants ?? rowRef?.total_plants ?? 0),
+    total_stems: Number(sample.total_stems ?? rowRef?.total_stems ?? 0)
+  };
+}
+
 export function MobileDailyYieldPage() {
   const { isOnline } = useOnlineStatus();
   const navigate = useNavigate();
@@ -190,6 +212,8 @@ export function MobileDailyYieldPage() {
   const [savingSample, setSavingSample] = useState(false);
   const [resettingSamples, setResettingSamples] = useState(false);
   const [deletingSampleId, setDeletingSampleId] = useState<string | null>(null);
+  const [editingSampleId, setEditingSampleId] = useState<string | null>(null);
+  const [editingSamplePercentDraft, setEditingSamplePercentDraft] = useState("");
 
   const [casesSectionExpanded, setCasesSectionExpanded] = useState(false);
   const [casesPerBinDraft, setCasesPerBinDraft] = useState("38");
@@ -539,33 +563,7 @@ export function MobileDailyYieldPage() {
 
         const data = (await response.json()) as PersistedSample[];
 
-        setSamples(
-          data.map((sample) => {
-            const rowRef = rowsById[sample.row_id];
-
-            return {
-              id: sample.id,
-              row_id: sample.row_id,
-              row_number: sample.row_number ?? rowRef?.row_number ?? 0,
-              phase_id: sample.phase_id ?? rowRef?.phase_id ?? "",
-              phase_name: sample.phase_name ?? rowRef?.phase_name ?? "Unknown",
-              row_label:
-                sample.row_label ??
-                rowRef?.label ??
-                `Row ${sample.row_number ?? rowRef?.row_number ?? "-"}`,
-              bin_fill_percent: Number(sample.percent_full ?? 0),
-              sample_kg: Number(sample.calculated_sample_kg ?? 0),
-              sample_kg_per_stem: Number(sample.calculated_kg_per_stem ?? 0),
-              slab_count: Number(sample.slab_count ?? rowRef?.slab_count ?? 0),
-              plants_per_slab: Number(
-                sample.plants_per_slab ?? rowRef?.plants_per_slab ?? 0
-              ),
-              stems_per_plant: Number(sample.stems_per_plant ?? rowRef?.stems_per_plant ?? 0),
-              total_plants: Number(sample.total_plants ?? rowRef?.total_plants ?? 0),
-              total_stems: Number(sample.total_stems ?? rowRef?.total_stems ?? 0)
-            };
-          })
-        );
+        setSamples(data.map((sample) => toLocalSample(sample, rowsById[sample.row_id])));
         // Keep allWeekSamples in sync for color totals.
       setAllWeekSamples((prev) => ({ ...prev, [selectedVarietyId]: data }));
     } catch (fetchError) {
@@ -841,6 +839,72 @@ export function MobileDailyYieldPage() {
     }
   }
 
+  function startEditSample(sample: LocalSample) {
+    setError(null);
+    setEditingSampleId(sample.id);
+    setEditingSamplePercentDraft(String(sample.bin_fill_percent));
+  }
+
+  function cancelEditSample() {
+    setEditingSampleId(null);
+    setEditingSamplePercentDraft("");
+  }
+
+  async function saveEditedSample(sample: LocalSample) {
+    if (!isOnline) {
+      setError("Connect to the internet to edit saved samples.");
+      return;
+    }
+
+    if (sample.offline) {
+      setError("Wait for pending samples to sync before editing them.");
+      return;
+    }
+
+    const parsedPercent = Number(editingSamplePercentDraft);
+    if (!Number.isFinite(parsedPercent) || parsedPercent < 0) {
+      setError("Percent of bin filled must be 0 or greater.");
+      return;
+    }
+
+    setEditingSampleId(sample.id);
+    setError(null);
+
+    try {
+      const response = await apiFetch(`${SAMPLES_URL}/${sample.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ percent_full: parsedPercent })
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? "Failed to update sample");
+      }
+
+      const updated = (await response.json()) as PersistedSample;
+      const rowRef = rowsById[updated.row_id];
+      const updatedLocal = toLocalSample(updated, rowRef);
+
+      setSamples((current) =>
+        current.map((entry) => (entry.id === sample.id ? updatedLocal : entry))
+      );
+
+      if (selectedVarietyId) {
+        setAllWeekSamples((prev) => ({
+          ...prev,
+          [selectedVarietyId]: (prev[selectedVarietyId] ?? []).map((entry) =>
+            entry.id === sample.id ? updated : entry
+          )
+        }));
+      }
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Failed to update sample");
+    } finally {
+      setEditingSampleId(null);
+      setEditingSamplePercentDraft("");
+    }
+  }
+
   return (
     <section className="mobile-page mobile-yield-page">
       <h2>Daily Yield</h2>
@@ -943,6 +1007,7 @@ export function MobileDailyYieldPage() {
             Percent of bin filled
             <input
               type="number"
+              inputMode="decimal"
               min="0"
               step="0.1"
               value={binFillPercent}
@@ -1000,12 +1065,54 @@ export function MobileDailyYieldPage() {
                   <span>
                     {roundTo(sample.bin_fill_percent, 2)}% | {roundTo(sample.sample_kg, 3)} kg | {roundTo(sample.sample_kg_per_stem, 6)} kg/stem
                   </span>
+                  {editingSampleId === sample.id ? (
+                    <div className="sample-edit-controls">
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.1"
+                        value={editingSamplePercentDraft}
+                        onChange={(event) => setEditingSamplePercentDraft(event.target.value)}
+                        aria-label="Edit percent of bin filled"
+                      />
+                      <button
+                        type="button"
+                        className="sample-edit-btn"
+                        onClick={() => void saveEditedSample(sample)}
+                        disabled={editingSampleId !== sample.id}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="sample-edit-cancel-btn"
+                        onClick={cancelEditSample}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
+                <button
+                  type="button"
+                  className="sample-edit-btn"
+                  onClick={() => startEditSample(sample)}
+                  disabled={!isOnline || sample.offline === true || editingSampleId !== null}
+                  aria-label="Edit sample percent"
+                >
+                  {editingSampleId === sample.id ? "Editing..." : "Edit"}
+                </button>
                 <button
                   type="button"
                   className="sample-delete-btn"
                   onClick={() => deleteSample(sample.id)}
-                  disabled={!isOnline || sample.offline === true || deletingSampleId === sample.id}
+                  disabled={
+                    !isOnline ||
+                    sample.offline === true ||
+                    deletingSampleId === sample.id ||
+                    editingSampleId === sample.id
+                  }
                   aria-label="Remove sample"
                 >
                   {deletingSampleId === sample.id ? "…" : "✕"}
