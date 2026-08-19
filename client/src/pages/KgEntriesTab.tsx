@@ -322,6 +322,8 @@ export function KgEntriesTab() {
   const [reassignTargetVarietyId, setReassignTargetVarietyId] = useState<string>("");
   const [reassignSavingId, setReassignSavingId] = useState<string | null>(null);
   const [reassignErrors, setReassignErrors] = useState<Record<string, string>>({});
+  const [removingReadingId, setRemovingReadingId] = useState<string | null>(null);
+  const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
   const [sizeRules, setSizeRules] = useState<FlowMasterSizeRule[]>([]);
   const [isSizeSetupOpen, setIsSizeSetupOpen] = useState(false);
   const [sizeSetupDrafts, setSizeSetupDrafts] = useState<Record<string, SizeSetupDraft>>({});
@@ -1547,6 +1549,49 @@ export function KgEntriesTab() {
     }
   }
 
+  async function handleRemoveReading(readingId: string, filename: string) {
+    const confirmed = window.confirm(
+      `Remove "${filename}" from pending review? This does not delete anything already imported — it only discards this queued file. Re-upload it later if needed.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setRemoveErrors((current) => {
+      const next = { ...current };
+      delete next[readingId];
+      return next;
+    });
+    setRemovingReadingId(readingId);
+
+    try {
+      const response = await apiFetch(`${PENDING_IMPORTS_URL}/${readingId}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        let message = `Remove failed (${response.status})`;
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) {
+            message = body.message;
+          }
+        } catch {
+          // Ignore non-JSON body.
+        }
+        throw new Error(message);
+      }
+
+      setPdfPreviewFiles((current) => current.filter((file) => !(file.success && file.id === readingId)));
+      void fetchPendingWeeks();
+    } catch (error) {
+      setRemoveErrors((current) => ({
+        ...current,
+        [readingId]: error instanceof Error ? error.message : "Remove failed."
+      }));
+    } finally {
+      setRemovingReadingId(null);
+    }
+  }
+
   async function handleImportAllCards() {
     setPdfImportStatus(null);
     setPdfImportAllRunning(true);
@@ -1946,18 +1991,34 @@ export function KgEntriesTab() {
                                 </span>
 
                                 {reading.id && !isReassigning && (
-                                  <button
-                                    type="button"
-                                    className="pdf-source-reading-reassign-button"
-                                    onClick={() => {
-                                      setReassigningReadingId(readingKey);
-                                      setReassignTargetVarietyId(group.matchedVarietyId ?? "");
-                                    }}
-                                  >
-                                    Reassign
-                                  </button>
+                                  <div className="pdf-source-reading-actions">
+                                    <button
+                                      type="button"
+                                      className="pdf-source-reading-reassign-button"
+                                      onClick={() => {
+                                        setReassigningReadingId(readingKey);
+                                        setReassignTargetVarietyId(group.matchedVarietyId ?? "");
+                                      }}
+                                    >
+                                      Reassign
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="pdf-source-reading-remove-button"
+                                      disabled={removingReadingId === reading.id}
+                                      onClick={() => void handleRemoveReading(reading.id as string, reading.filename)}
+                                    >
+                                      {removingReadingId === reading.id ? "Removing..." : "Remove"}
+                                    </button>
+                                  </div>
                                 )}
                               </div>
+
+                              {removeErrors[readingKey] && (
+                                <p className="pdf-source-reading-override-error">
+                                  {removeErrors[readingKey]}
+                                </p>
+                              )}
 
                               {reading.isOverridden && !isReassigning && (
                                 <p className="pdf-source-reading-override-note">

@@ -1578,6 +1578,32 @@ body {
   border-color: var(--accent, #4a7c59);
 }
 
+.pdf-source-reading-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.pdf-source-reading-remove-button {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid #d99a8c;
+  background: #fff;
+  color: #b3492f;
+  cursor: pointer;
+}
+
+.pdf-source-reading-remove-button:hover {
+  background: #fdf1ee;
+}
+
+.pdf-source-reading-remove-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .pdf-source-reading-override-note {
   margin: 0.15rem 0 0;
   font-size: 0.72rem;
