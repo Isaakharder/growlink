@@ -41,6 +41,7 @@ import { yieldEntriesRouter } from "./routes/yieldEntries";
 import { yieldProjectionsRouter } from "./routes/yieldProjections";
 import { yieldSizesRouter } from "./routes/yieldSizes";
 import { flowMasterSizeRulesRouter } from "./routes/flowMasterSizeRules";
+import { csvMappingTemplatesRouter } from "./routes/csvMappingTemplates";
 
 const DEV_ORIGINS = [
   "http://localhost:5173",
@@ -120,6 +121,7 @@ app.use("/api/agent/pdf-import", strictLimiter);
 app.use("/api/integrations/docklink/sync-color-cases", strictLimiter);
 app.use("/api/integrations/docklink/sync-waste", strictLimiter);
 app.use("/api/pdf-import", strictLimiter);
+app.use("/api/csv-templates", strictLimiter);
 
 app.use("/api", healthRouter);
 app.use("/api", adminCustomersRouter);
@@ -155,6 +157,7 @@ app.use("/api", yieldEntriesRouter);
 app.use("/api", yieldProjectionsRouter);
 app.use("/api", yieldSizesRouter);
 app.use("/api", flowMasterSizeRulesRouter);
+app.use("/api", csvMappingTemplatesRouter);
 app.use("/api", mobileDailyYieldRouter);
 app.use("/api", dailyYieldSamplesRouter);
 app.use("/api", mobileIrrigationLogRouter);
