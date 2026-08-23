@@ -12,8 +12,10 @@ import type {
   ColumnMapping,
   ConditionalRowRule,
   FixedCellMapping,
+  NormalizedGroup,
   NormalizedPreview,
   TemplateConfig,
+  ValidationIssue,
   ValueMapping
 } from "../utils/csvTemplateTypes";
 
@@ -621,6 +623,46 @@ async function loadSourceFileGrid(organizationId: string, sourceFileId: string, 
   return parseCsvGrid(data.raw_text as string, delimiter);
 }
 
+export type VarietyMatch = { id: string; name: string };
+
+/** Active varieties keyed by trimmed, lowercased name — the engine only ever produces raw variety text, never an id, so this is how every group's varietyRaw gets resolved to a real record. */
+export async function loadActiveVarietyByName(organizationId: string): Promise<Map<string, VarietyMatch>> {
+  const { data, error } = await supabase
+    .from("varieties")
+    .select("id, name")
+    .eq("organization_id", organizationId)
+    .eq("status", "active");
+  if (error) throw error;
+
+  const map = new Map<string, VarietyMatch>();
+  for (const v of data ?? []) {
+    map.set((v.name as string).trim().toLowerCase(), { id: v.id as string, name: v.name as string });
+  }
+  return map;
+}
+
+function checkGroupVarietyIssues(
+  groups: NormalizedGroup[],
+  activeVarietyByName: Map<string, VarietyMatch>
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const group of groups) {
+    // A missing varietyRaw is already flagged by the engine's own
+    // validateNormalizedPreview (code: variety_unresolved) — this only
+    // covers the case where raw text IS present but doesn't match any
+    // real, active organization variety.
+    if (!group.varietyRaw) continue;
+    if (!activeVarietyByName.has(group.varietyRaw.trim().toLowerCase())) {
+      issues.push({
+        code: "variety_unresolved",
+        message: `No active variety matches "${group.varietyRaw}".`,
+        groupKey: group.groupKey
+      });
+    }
+  }
+  return issues;
+}
+
 export type PreviewResult = {
   preview: NormalizedPreview;
   templateId: string | null;
@@ -671,16 +713,27 @@ export async function buildCsvPreview(organizationId: string, body: PreviewInput
   const context: EngineContext = { sizeNameById, alreadyImportedLotNumbers };
   const preview = normalizeCsvWithTemplate(grid.rows, config, context);
 
-  const finalPreview: NormalizedPreview = layoutMismatch
-    ? {
-        ...preview,
-        validationIssues: [
-          { code: "layout_mismatch", message: "The uploaded file's structure no longer matches this template. Please review before importing." },
-          ...preview.validationIssues
-        ],
-        canImport: false
-      }
-    : preview;
+  const activeVarietyByName = await loadActiveVarietyByName(organizationId);
+  const varietyIssues = checkGroupVarietyIssues(preview.groups, activeVarietyByName);
+
+  const allIssues: ValidationIssue[] = [
+    ...(layoutMismatch
+      ? [
+          {
+            code: "layout_mismatch" as const,
+            message: "The uploaded file's structure no longer matches this template. Please review before importing."
+          }
+        ]
+      : []),
+    ...preview.validationIssues,
+    ...varietyIssues
+  ];
+
+  const finalPreview: NormalizedPreview = {
+    ...preview,
+    validationIssues: allIssues,
+    canImport: allIssues.length === 0
+  };
 
   return {
     preview: finalPreview,
@@ -813,6 +866,283 @@ export async function listPendingCsvTemplateImports(organizationId: string): Pro
   }
 
   return items;
+}
+
+// ---------------------------------------------------------------------------
+// Final import — writes yield_entries / yield_entry_daily_breakdown /
+// yield_import_runs. Mirrors pdfImport.ts's create/append semantics
+// (merge-on-append, kg-weighted... actually simple-replace here since a CSV
+// template group is a single cohesive batch, see note below) but is a
+// fully independent implementation against the new engine's output shape.
+//
+// Server-side revalidation: the client submits the exact NormalizedGroup it
+// showed the user as `approvedGroup`, but the write is driven entirely by a
+// FRESH re-parse of the stored source file through the FRESH engine run —
+// `approvedGroup` is only compared against that fresh result (groupsMatch)
+// to detect a stale/tampered preview. The database is never written from
+// client-supplied numbers.
+// ---------------------------------------------------------------------------
+
+export type CsvTemplateImportInput = {
+  sourceFileId: string;
+  templateId: string;
+  groupKey: string;
+  approvedGroup: NormalizedGroup;
+};
+
+export type CsvTemplateImportResult = {
+  mode: "create" | "append";
+  entryId: string;
+  varietyId: string;
+};
+
+function groupsMatch(fresh: NormalizedGroup, approved: NormalizedGroup): boolean {
+  const EPS = 0.01;
+  if (fresh.varietyRaw !== approved.varietyRaw) return false;
+  if (fresh.packedDate !== approved.packedDate) return false;
+  if (fresh.isoYear !== approved.isoYear || fresh.isoWeek !== approved.isoWeek) return false;
+  if (fresh.lotNumber !== approved.lotNumber) return false;
+  if (Math.abs(fresh.reconciliation.recognizedSizeKg - approved.reconciliation.recognizedSizeKg) > EPS) return false;
+
+  const freshKeys = Object.keys(fresh.sizeKg).sort();
+  const approvedKeys = Object.keys(approved.sizeKg).sort();
+  if (freshKeys.length !== approvedKeys.length) return false;
+  for (let i = 0; i < freshKeys.length; i += 1) {
+    if (freshKeys[i] !== approvedKeys[i]) return false;
+    if (Math.abs(fresh.sizeKg[freshKeys[i]] - approved.sizeKg[approvedKeys[i]]) > EPS) return false;
+  }
+
+  return true;
+}
+
+async function loadVarietyForCalc(organizationId: string, varietyId: string): Promise<{ id: string; area_m2: number; case_kg: number }> {
+  const { data, error } = await supabase
+    .from("varieties")
+    .select("id, area_m2, case_kg")
+    .eq("id", varietyId)
+    .eq("organization_id", organizationId)
+    .single();
+  if (error || !data) throw new TemplateValidationError("Selected variety was not found.");
+  return data as { id: string; area_m2: number; case_kg: number };
+}
+
+/** Finds an existing yield_sizes row by case-insensitive name, or creates one — for value mappings using the "create" action, which store only a name until the size is actually needed at import time. */
+async function ensureYieldSizeId(organizationId: string, name: string, knownIds: Map<string, string>): Promise<string> {
+  const existingId = knownIds.get(name.trim().toLowerCase());
+  if (existingId) return existingId;
+
+  const { data: existingRows, error: existingErr } = await supabase
+    .from("yield_sizes")
+    .select("id, name")
+    .eq("organization_id", organizationId);
+  if (existingErr) throw existingErr;
+
+  const match = (existingRows ?? []).find((s) => (s.name as string).trim().toLowerCase() === name.trim().toLowerCase());
+  if (match) {
+    knownIds.set(name.trim().toLowerCase(), match.id as string);
+    return match.id as string;
+  }
+
+  const { data: created, error: createErr } = await supabase
+    .from("yield_sizes")
+    .insert({ organization_id: organizationId, name: name.trim(), sort_order: 0, status: "active" })
+    .select("id")
+    .single();
+  if (createErr) throw createErr;
+
+  knownIds.set(name.trim().toLowerCase(), created.id as string);
+  return created.id as string;
+}
+
+function calculateGroupTotals(sizeKgById: Record<string, number>, variety: { area_m2: number; case_kg: number }) {
+  const total_kg = Object.values(sizeKgById).reduce((sum, v) => sum + v, 0);
+  const kg_per_m2 = variety.area_m2 > 0 ? total_kg / variety.area_m2 : 0;
+  const total_cases = variety.case_kg > 0 ? total_kg / variety.case_kg : 0;
+  return { total_kg, kg_per_m2, total_cases };
+}
+
+export async function importCsvTemplateGroup(
+  organizationId: string,
+  userId: string,
+  input: CsvTemplateImportInput
+): Promise<CsvTemplateImportResult> {
+  const templateRow = await getTemplateById(organizationId, input.templateId);
+  if (!templateRow) throw new TemplateNotFoundError("Template not found.");
+
+  const config = templateRowToConfig(templateRow);
+  const grid = await loadSourceFileGrid(organizationId, input.sourceFileId, templateRow.delimiter);
+
+  const [sizeNameById, alreadyImportedLotNumbers, activeVarietyByName] = await Promise.all([
+    loadSizeNameById(organizationId),
+    loadAlreadyImportedLotNumbers(organizationId),
+    loadActiveVarietyByName(organizationId)
+  ]);
+
+  const context: EngineContext = { sizeNameById, alreadyImportedLotNumbers };
+  const freshPreview = normalizeCsvWithTemplate(grid.rows, config, context);
+
+  const freshGroup = freshPreview.groups.find((g) => g.groupKey === input.groupKey);
+  if (!freshGroup) {
+    throw new TemplateValidationError("The requested group was not found in a fresh re-parse of the source file.");
+  }
+
+  if (!groupsMatch(freshGroup, input.approvedGroup)) {
+    throw new TemplateConflictError("The preview has changed since it was approved. Please re-review before importing.");
+  }
+
+  const groupIssues = [
+    ...freshPreview.validationIssues.filter((i) => !i.groupKey || i.groupKey === input.groupKey),
+    ...checkGroupVarietyIssues([freshGroup], activeVarietyByName)
+  ];
+  if (groupIssues.length > 0) {
+    throw new TemplateValidationError(`Cannot import: ${groupIssues.map((i) => i.message).join(" ")}`);
+  }
+
+  const varietyMatch = activeVarietyByName.get((freshGroup.varietyRaw ?? "").trim().toLowerCase());
+  if (!varietyMatch) throw new TemplateValidationError(`No active variety matches "${freshGroup.varietyRaw}".`);
+  if (!freshGroup.packedDate) throw new TemplateValidationError("Packed date could not be resolved for this group.");
+  if (freshGroup.isoYear === null || freshGroup.isoWeek === null) {
+    throw new TemplateValidationError("Year/week could not be resolved for this group.");
+  }
+
+  // Dedup claim — the group's real lot number if the template maps one,
+  // else a deterministic pseudo-lot derived from the group's own content
+  // so re-importing the exact same synthetic group is still blocked.
+  const claimLotNumber =
+    freshGroup.lotNumber ?? `csvtpl-${createHash("sha1").update(freshGroup.groupKey).digest("hex").slice(0, 16)}`;
+
+  const { error: claimErr } = await supabase.from("yield_import_runs").insert({
+    organization_id: organizationId,
+    lot_number: claimLotNumber,
+    variety_id: varietyMatch.id,
+    iso_year: freshGroup.isoYear,
+    iso_week: freshGroup.isoWeek,
+    source_filename: templateRow.name,
+    created_by: userId,
+    csv_mapping_template_id: templateRow.id,
+    source_file_id: input.sourceFileId
+  });
+
+  if (claimErr) {
+    if (claimErr.code === "23505") {
+      throw new TemplateConflictError(`This data (lot ${claimLotNumber}) has already been imported.`);
+    }
+    throw claimErr;
+  }
+
+  try {
+    const varietyForCalc = await loadVarietyForCalc(organizationId, varietyMatch.id);
+    const knownSizeIds = new Map(Array.from(sizeNameById.entries()).map(([id, name]) => [name.trim().toLowerCase(), id]));
+
+    const sizeKgById: Record<string, number> = {};
+    for (const [name, kg] of Object.entries(freshGroup.sizeKg)) {
+      const id = await ensureYieldSizeId(organizationId, name, knownSizeIds);
+      sizeKgById[id] = (sizeKgById[id] ?? 0) + kg;
+    }
+
+    const { data: existingEntry, error: existingErr } = await supabase
+      .from("yield_entries")
+      .select("id, size_kg")
+      .eq("organization_id", organizationId)
+      .eq("variety_id", varietyMatch.id)
+      .eq("year", freshGroup.isoYear)
+      .eq("week", freshGroup.isoWeek)
+      .maybeSingle();
+    if (existingErr) throw existingErr;
+
+    let entryId: string;
+    let mode: "create" | "append";
+
+    if (existingEntry) {
+      mode = "append";
+      const mergedSizeKg: Record<string, number> = { ...(existingEntry.size_kg as Record<string, number>) };
+      for (const [id, kg] of Object.entries(sizeKgById)) {
+        mergedSizeKg[id] = (mergedSizeKg[id] ?? 0) + kg;
+      }
+      const mergedTotals = calculateGroupTotals(mergedSizeKg, varietyForCalc);
+
+      const { data: updated, error: updateErr } = await supabase
+        .from("yield_entries")
+        .update({
+          size_kg: mergedSizeKg,
+          average_fruit_weight_g: freshGroup.averageFruitWeightG,
+          ...mergedTotals,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", existingEntry.id)
+        .select("id")
+        .single();
+      if (updateErr) throw updateErr;
+      entryId = updated.id as string;
+    } else {
+      mode = "create";
+      const totals = calculateGroupTotals(sizeKgById, varietyForCalc);
+      const { data: created, error: createErr } = await supabase
+        .from("yield_entries")
+        .insert({
+          organization_id: organizationId,
+          variety_id: varietyMatch.id,
+          year: freshGroup.isoYear,
+          week: freshGroup.isoWeek,
+          packed_date: freshGroup.packedDate,
+          size_kg: sizeKgById,
+          average_fruit_weight_g: freshGroup.averageFruitWeightG,
+          ...totals
+        })
+        .select("id")
+        .single();
+      if (createErr) throw createErr;
+      entryId = created.id as string;
+    }
+
+    const { error: breakdownErr } = await supabase.from("yield_entry_daily_breakdown").insert({
+      organization_id: organizationId,
+      yield_entry_id: entryId,
+      packed_date: freshGroup.packedDate,
+      size_kg: sizeKgById,
+      total_kg: Object.values(sizeKgById).reduce((sum, v) => sum + v, 0),
+      average_fruit_weight_g: freshGroup.averageFruitWeightG
+    });
+    if (breakdownErr) {
+      // Non-fatal (matches pdfImport.ts's own tolerance here): the weekly
+      // total is already correct, this only affects the per-day breakdown
+      // display, and the failure is logged for follow-up.
+      console.error("csv-templates import: daily breakdown insert failed:", breakdownErr);
+    }
+
+    await supabase
+      .from("agent_pending_imports")
+      .delete()
+      .eq("organization_id", organizationId)
+      .eq("source_file_id", input.sourceFileId);
+
+    return { mode, entryId, varietyId: varietyMatch.id };
+  } catch (error) {
+    // Release the claim so this data can be retried.
+    await supabase
+      .from("yield_import_runs")
+      .delete()
+      .eq("organization_id", organizationId)
+      .eq("lot_number", claimLotNumber);
+    throw error;
+  }
+}
+
+export function parseImportBody(input: unknown): CsvTemplateImportInput {
+  if (!input || typeof input !== "object") throw new TemplateValidationError("Invalid request body");
+  const body = input as Record<string, unknown>;
+
+  const sourceFileId = typeof body.sourceFileId === "string" ? body.sourceFileId : "";
+  const templateId = typeof body.templateId === "string" ? body.templateId : "";
+  const groupKey = typeof body.groupKey === "string" ? body.groupKey : "";
+  if (!sourceFileId) throw new TemplateValidationError("sourceFileId is required");
+  if (!templateId) throw new TemplateValidationError("templateId is required");
+  if (!groupKey) throw new TemplateValidationError("groupKey is required");
+  if (!body.approvedGroup || typeof body.approvedGroup !== "object") {
+    throw new TemplateValidationError("approvedGroup is required");
+  }
+
+  return { sourceFileId, templateId, groupKey, approvedGroup: body.approvedGroup as NormalizedGroup };
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +1302,18 @@ csvMappingTemplatesRouter.post("/csv-templates/pending", canEdit, async (req, re
     return res.status(201).json(row);
   } catch (error) {
     return handleKnownError(res, error, "Failed to stage CSV file for review.", "csv-templates pending create error:");
+  }
+});
+
+csvMappingTemplatesRouter.post("/csv-templates/import", canEdit, async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  try {
+    const body = parseImportBody(req.body);
+    const result = await importCsvTemplateGroup(req.organizationId, userId, body);
+    return res.status(201).json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to import CSV data.", "csv-templates import error:");
   }
 });
 

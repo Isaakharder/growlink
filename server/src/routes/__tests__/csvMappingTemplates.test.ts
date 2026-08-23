@@ -23,10 +23,12 @@ import {
   parseTemplateWriteBody,
   createPendingCsvTemplateImport,
   listPendingCsvTemplateImports,
+  importCsvTemplateGroup,
   TemplateNotFoundError,
   TemplateNotCurrentError,
   TemplateConflictError,
   TemplateInUseError,
+  TemplateValidationError,
   type TemplateRow,
   type TemplateWriteInput
 } from "../csvMappingTemplates";
@@ -47,6 +49,27 @@ async function cleanupSourceFile(sourceFileId: string) {
 
 async function cleanupTemplateGroup(templateGroupId: string) {
   await supabase.from("csv_mapping_templates").delete().eq("template_group_id", templateGroupId);
+}
+
+async function createTestVariety(organizationId: string): Promise<{ id: string; name: string }> {
+  const name = `Test Variety ${randomUUID()}`;
+  const { data, error } = await supabase
+    .from("varieties")
+    .insert({ organization_id: organizationId, name, area_m2: 100, case_kg: 10, status: "active", color: "green" })
+    .select("id, name")
+    .single();
+  if (error) throw error;
+  return { id: data.id as string, name: data.name as string };
+}
+
+async function cleanupTestVarietyAndEntries(organizationId: string, varietyId: string) {
+  const { data: entries } = await supabase.from("yield_entries").select("id").eq("organization_id", organizationId).eq("variety_id", varietyId);
+  for (const entry of entries ?? []) {
+    await supabase.from("yield_entry_daily_breakdown").delete().eq("yield_entry_id", entry.id as string);
+  }
+  await supabase.from("yield_entries").delete().eq("organization_id", organizationId).eq("variety_id", varietyId);
+  await supabase.from("yield_import_runs").delete().eq("organization_id", organizationId).eq("variety_id", varietyId);
+  await supabase.from("varieties").delete().eq("id", varietyId);
 }
 
 const SIMPLE_CSV = "Market,Size,Kg\nClass 1,SM,10\nClass 1,MD,15\n";
@@ -367,6 +390,201 @@ test("pending CSV template queue is org-isolated", async () => {
     assert.ok(!otherOrgList.some((i) => i.id === pending.id));
   } finally {
     await supabase.from("agent_pending_imports").delete().eq("id", pending.id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Final import — actually writes yield_entries / yield_entry_daily_breakdown
+// / yield_import_runs against a dedicated throwaway test variety, cleaned
+// up afterward. No real/historical org data is touched by these tests.
+// ---------------------------------------------------------------------------
+
+function importGrid(varietyName: string, date: string, market: string, size: string, kg: string): string {
+  return `Market,Size,Kg,Variety,Date\n${market},${size},${kg},${varietyName},${date}\n`;
+}
+
+function importTemplateBody(sourceFileId: string, name: string): TemplateWriteInput {
+  return parseTemplateWriteBody({
+    name,
+    sourceFileId,
+    delimiter: ",",
+    headerRowIndex: 0,
+    dataStartRowIndex: 1,
+    columnMappings: [
+      { columnIndex: 0, field: "market_grade" },
+      { columnIndex: 1, field: "size_label" },
+      { columnIndex: 2, field: "size_weight_kg" },
+      { columnIndex: 3, field: "variety" },
+      { columnIndex: 4, field: "packed_date", dateFormat: "DDMMYYYY" }
+    ],
+    valueMappings: [{ sourceField: "size_label", rawValue: "SM", action: "create", newSizeName: `TestSize-${randomUUID()}` }]
+  });
+}
+
+test("importCsvTemplateGroup: create mode writes a new yield_entries row with the correct totals", async () => {
+  const variety = await createTestVariety(DENVA_ORG_ID);
+  const csv = importGrid(variety.name, "15082026", "Class 1", "SM", "12.5");
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, csv, `import-create-${randomUUID()}.csv`);
+  const template = await createTemplate(DENVA_ORG_ID, TEST_USER_ID, importTemplateBody(uploaded.sourceFileId, `Import Create Test ${randomUUID()}`));
+
+  try {
+    const previewResult = await buildCsvPreview(DENVA_ORG_ID, { sourceFileId: uploaded.sourceFileId, templateId: template.id });
+    assert.equal(previewResult.preview.canImport, true, JSON.stringify(previewResult.preview.validationIssues));
+    const group = previewResult.preview.groups[0];
+
+    const result = await importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, {
+      sourceFileId: uploaded.sourceFileId,
+      templateId: template.id,
+      groupKey: group.groupKey,
+      approvedGroup: group
+    });
+
+    assert.equal(result.mode, "create");
+    assert.equal(result.varietyId, variety.id);
+
+    const { data: entry } = await supabase.from("yield_entries").select("*").eq("id", result.entryId).single();
+    assert.equal(entry?.total_kg, 12.5);
+    assert.equal(entry?.packed_date, "2026-08-15");
+    assert.equal(entry?.year, group.isoYear);
+    assert.equal(entry?.week, group.isoWeek);
+  } finally {
+    await cleanupTemplateGroup(template.template_group_id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+    await cleanupTestVarietyAndEntries(DENVA_ORG_ID, variety.id);
+  }
+});
+
+test("importCsvTemplateGroup: append mode merges into the same variety/week's existing entry", async () => {
+  const variety = await createTestVariety(DENVA_ORG_ID);
+  const templateHolder: { template: TemplateRow | null } = { template: null };
+
+  try {
+    const firstCsv = importGrid(variety.name, "15082026", "Class 1", "SM", "10");
+    const firstUpload = await uploadTestFile(DENVA_ORG_ID, firstCsv, `import-append-1-${randomUUID()}.csv`);
+    const template = await createTemplate(DENVA_ORG_ID, TEST_USER_ID, importTemplateBody(firstUpload.sourceFileId, `Import Append Test ${randomUUID()}`));
+    templateHolder.template = template;
+
+    const firstPreview = await buildCsvPreview(DENVA_ORG_ID, { sourceFileId: firstUpload.sourceFileId, templateId: template.id });
+    const firstGroup = firstPreview.preview.groups[0];
+    const firstResult = await importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, {
+      sourceFileId: firstUpload.sourceFileId,
+      templateId: template.id,
+      groupKey: firstGroup.groupKey,
+      approvedGroup: firstGroup
+    });
+    assert.equal(firstResult.mode, "create");
+    await cleanupSourceFile(firstUpload.sourceFileId);
+
+    // Same variety, same week, a SECOND file/lot — must append, not overwrite.
+    const secondCsv = importGrid(variety.name, "16082026", "Class 1", "SM", "7");
+    const secondUpload = await uploadTestFile(DENVA_ORG_ID, secondCsv, `import-append-2-${randomUUID()}.csv`);
+    try {
+      const secondPreview = await buildCsvPreview(DENVA_ORG_ID, { sourceFileId: secondUpload.sourceFileId, templateId: template.id });
+      const secondGroup = secondPreview.preview.groups[0];
+      const secondResult = await importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, {
+        sourceFileId: secondUpload.sourceFileId,
+        templateId: template.id,
+        groupKey: secondGroup.groupKey,
+        approvedGroup: secondGroup
+      });
+
+      assert.equal(secondResult.mode, "append");
+      assert.equal(secondResult.entryId, firstResult.entryId);
+
+      const { data: entry } = await supabase.from("yield_entries").select("total_kg").eq("id", firstResult.entryId).single();
+      assert.equal(entry?.total_kg, 17); // 10 + 7, not 7 (overwrite) or double-counted
+    } finally {
+      await cleanupSourceFile(secondUpload.sourceFileId);
+    }
+  } finally {
+    if (templateHolder.template) await cleanupTemplateGroup(templateHolder.template.template_group_id);
+    await cleanupTestVarietyAndEntries(DENVA_ORG_ID, variety.id);
+  }
+});
+
+test("importCsvTemplateGroup: re-importing the identical data is blocked as a duplicate (same raw kg never imported twice)", async () => {
+  const variety = await createTestVariety(DENVA_ORG_ID);
+  const csv = importGrid(variety.name, "15082026", "Class 1", "SM", "5");
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, csv, `import-dup-${randomUUID()}.csv`);
+  const template = await createTemplate(DENVA_ORG_ID, TEST_USER_ID, importTemplateBody(uploaded.sourceFileId, `Import Dup Test ${randomUUID()}`));
+
+  try {
+    const preview = await buildCsvPreview(DENVA_ORG_ID, { sourceFileId: uploaded.sourceFileId, templateId: template.id });
+    const group = preview.preview.groups[0];
+    const importInput = { sourceFileId: uploaded.sourceFileId, templateId: template.id, groupKey: group.groupKey, approvedGroup: group };
+
+    const first = await importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, importInput);
+    assert.equal(first.mode, "create");
+
+    // Re-run with the SAME sourceFileId/group (simulating a double-click or
+    // retried request) — the deterministic pseudo-lot claim must reject it.
+    await assert.rejects(() => importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, importInput), TemplateConflictError);
+  } finally {
+    await cleanupTemplateGroup(template.template_group_id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+    await cleanupTestVarietyAndEntries(DENVA_ORG_ID, variety.id);
+  }
+});
+
+test("importCsvTemplateGroup: a stale approvedGroup (data changed since preview) is rejected, never written", async () => {
+  const variety = await createTestVariety(DENVA_ORG_ID);
+  const csv = importGrid(variety.name, "15082026", "Class 1", "SM", "9");
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, csv, `import-stale-${randomUUID()}.csv`);
+  const template = await createTemplate(DENVA_ORG_ID, TEST_USER_ID, importTemplateBody(uploaded.sourceFileId, `Import Stale Test ${randomUUID()}`));
+
+  try {
+    const preview = await buildCsvPreview(DENVA_ORG_ID, { sourceFileId: uploaded.sourceFileId, templateId: template.id });
+    const group = preview.preview.groups[0];
+    const tamperedGroup = { ...group, sizeKg: { ...group.sizeKg }, reconciliation: { ...group.reconciliation, recognizedSizeKg: 9999 } };
+
+    await assert.rejects(
+      () =>
+        importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, {
+          sourceFileId: uploaded.sourceFileId,
+          templateId: template.id,
+          groupKey: group.groupKey,
+          approvedGroup: tamperedGroup
+        }),
+      TemplateConflictError
+    );
+
+    const { count } = await supabase
+      .from("yield_entries")
+      .select("*", { count: "exact", head: true })
+      .eq("organization_id", DENVA_ORG_ID)
+      .eq("variety_id", variety.id);
+    assert.equal(count, 0);
+  } finally {
+    await cleanupTemplateGroup(template.template_group_id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+    await cleanupTestVarietyAndEntries(DENVA_ORG_ID, variety.id);
+  }
+});
+
+test("importCsvTemplateGroup: a variety with no matching active organization variety blocks import", async () => {
+  const csv = importGrid(`Nonexistent Variety ${randomUUID()}`, "15082026", "Class 1", "SM", "5");
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, csv, `import-novariety-${randomUUID()}.csv`);
+  const template = await createTemplate(DENVA_ORG_ID, TEST_USER_ID, importTemplateBody(uploaded.sourceFileId, `Import No Variety Test ${randomUUID()}`));
+
+  try {
+    const preview = await buildCsvPreview(DENVA_ORG_ID, { sourceFileId: uploaded.sourceFileId, templateId: template.id });
+    assert.equal(preview.preview.canImport, false);
+    assert.ok(preview.preview.validationIssues.some((i) => i.code === "variety_unresolved"));
+
+    const group = preview.preview.groups[0];
+    await assert.rejects(
+      () =>
+        importCsvTemplateGroup(DENVA_ORG_ID, TEST_USER_ID, {
+          sourceFileId: uploaded.sourceFileId,
+          templateId: template.id,
+          groupKey: group.groupKey,
+          approvedGroup: group
+        }),
+      TemplateValidationError
+    );
+  } finally {
+    await cleanupTemplateGroup(template.template_group_id);
     await cleanupSourceFile(uploaded.sourceFileId);
   }
 });
