@@ -139,6 +139,7 @@ export type CsvGridParseResult = {
   rowCount: number;
   columnCount: number;
   delimiter: string;
+  encoding: string;
   hadBom: boolean;
 };
 
