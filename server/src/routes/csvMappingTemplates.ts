@@ -691,6 +691,131 @@ export async function buildCsvPreview(organizationId: string, body: PreviewInput
 }
 
 // ---------------------------------------------------------------------------
+// Pending-import queue (data_source_type = 'csv_template')
+//
+// Deliberately additive, not a modification of agentPendingImports.ts: its
+// PATCH/DELETE routes are already generic over any agent_pending_imports
+// row (id + organization_id filtered, no data_source_type branching) and
+// keep working unchanged for csv_template rows. Its GET route, however,
+// rebuilds previews via buildPreviewFile, which only understands FlowMaster
+// CSV/PDF shapes — so csv_template rows get their own GET/list here instead,
+// rebuilt via buildCsvPreview (the engine above), reading the same
+// preserved raw CSV text so a pending file can always be reopened and
+// reprocessed against current template/rule state without re-upload.
+//
+// NOTE (intentionally deferred, see final report): this only covers the
+// pending-queue *surface* — listing and reprocessing rows already in
+// agent_pending_imports with data_source_type = 'csv_template'. The
+// unattended GrowLink Agent's own upload endpoint does not yet route CSV
+// uploads through CSV-template fingerprint matching to populate these rows
+// automatically; today they can be created via createPendingCsvTemplateImport
+// below (e.g. from an interactive "stage for review" action) but the
+// headless agent still only recognizes FlowMaster/generic_csv layouts.
+// ---------------------------------------------------------------------------
+
+export type PendingCsvTemplateRow = {
+  id: string;
+  organization_id: string;
+  source_filename: string;
+  source_file_id: string | null;
+  csv_mapping_template_id: string | null;
+  needs_template: boolean;
+  uploaded_at: string;
+};
+
+export async function createPendingCsvTemplateImport(
+  organizationId: string,
+  sourceFileId: string,
+  sourceFilename: string,
+  templateId: string | null,
+  needsTemplate: boolean
+): Promise<PendingCsvTemplateRow> {
+  const { data, error } = await supabase
+    .from("agent_pending_imports")
+    .insert({
+      organization_id: organizationId,
+      source_filename: sourceFilename,
+      data_source_type: "csv_template",
+      source_file_id: sourceFileId,
+      csv_mapping_template_id: templateId,
+      needs_template: needsTemplate,
+      source_type: "browser"
+    })
+    .select("id, organization_id, source_filename, source_file_id, csv_mapping_template_id, needs_template, uploaded_at")
+    .single();
+
+  if (error) throw error;
+  return data as PendingCsvTemplateRow;
+}
+
+export type PendingCsvTemplatePreviewItem = {
+  id: string;
+  sourceFilename: string;
+  uploadedAt: string;
+  needsTemplate: boolean;
+  templateId: string | null;
+  preview: NormalizedPreview | null;
+  error: string | null;
+};
+
+/** Lists every csv_template pending row for the org, each reprocessed live from its preserved raw text (never trusting stale stored columns). */
+export async function listPendingCsvTemplateImports(organizationId: string): Promise<PendingCsvTemplatePreviewItem[]> {
+  const { data, error } = await supabase
+    .from("agent_pending_imports")
+    .select("id, source_filename, source_file_id, csv_mapping_template_id, needs_template, uploaded_at")
+    .eq("organization_id", organizationId)
+    .eq("data_source_type", "csv_template")
+    .order("uploaded_at", { ascending: false });
+  if (error) throw error;
+
+  const rows = (data ?? []) as PendingCsvTemplateRow[];
+  const items: PendingCsvTemplatePreviewItem[] = [];
+
+  for (const row of rows) {
+    if (!row.source_file_id || !row.csv_mapping_template_id || row.needs_template) {
+      items.push({
+        id: row.id,
+        sourceFilename: row.source_filename,
+        uploadedAt: row.uploaded_at,
+        needsTemplate: true,
+        templateId: row.csv_mapping_template_id,
+        preview: null,
+        error: null
+      });
+      continue;
+    }
+
+    try {
+      const result = await buildCsvPreview(organizationId, {
+        sourceFileId: row.source_file_id,
+        templateId: row.csv_mapping_template_id
+      });
+      items.push({
+        id: row.id,
+        sourceFilename: row.source_filename,
+        uploadedAt: row.uploaded_at,
+        needsTemplate: false,
+        templateId: row.csv_mapping_template_id,
+        preview: result.preview,
+        error: null
+      });
+    } catch (err) {
+      items.push({
+        id: row.id,
+        sourceFilename: row.source_filename,
+        uploadedAt: row.uploaded_at,
+        needsTemplate: false,
+        templateId: row.csv_mapping_template_id,
+        preview: null,
+        error: err instanceof Error ? err.message : "Failed to rebuild preview."
+      });
+    }
+  }
+
+  return items;
+}
+
+// ---------------------------------------------------------------------------
 // Routes — thin wrappers translating the functions above to HTTP.
 // ---------------------------------------------------------------------------
 
@@ -820,6 +945,33 @@ csvMappingTemplatesRouter.post("/csv-templates/preview", canView, async (req, re
     return res.json(result);
   } catch (error) {
     return handleKnownError(res, error, "Failed to build CSV preview.", "csv-templates preview error:");
+  }
+});
+
+csvMappingTemplatesRouter.get("/csv-templates/pending", canView, async (req, res) => {
+  try {
+    const items = await listPendingCsvTemplateImports(req.organizationId);
+    return res.json({ files: items });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load pending CSV imports.", "csv-templates pending list error:");
+  }
+});
+
+csvMappingTemplatesRouter.post("/csv-templates/pending", canEdit, async (req, res) => {
+  try {
+    const sourceFileId = typeof req.body?.sourceFileId === "string" ? req.body.sourceFileId : "";
+    const sourceFilename = typeof req.body?.sourceFilename === "string" ? req.body.sourceFilename : "";
+    const templateId = typeof req.body?.templateId === "string" ? req.body.templateId : null;
+    const needsTemplate = req.body?.needsTemplate === true || !templateId;
+
+    if (!sourceFileId || !sourceFilename) {
+      return res.status(400).json({ message: "sourceFileId and sourceFilename are required." });
+    }
+
+    const row = await createPendingCsvTemplateImport(req.organizationId, sourceFileId, sourceFilename, templateId, needsTemplate);
+    return res.status(201).json(row);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to stage CSV file for review.", "csv-templates pending create error:");
   }
 });
 

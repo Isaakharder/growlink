@@ -21,6 +21,8 @@ import {
   deleteTemplateIfUnused,
   buildCsvPreview,
   parseTemplateWriteBody,
+  createPendingCsvTemplateImport,
+  listPendingCsvTemplateImports,
   TemplateNotFoundError,
   TemplateNotCurrentError,
   TemplateConflictError,
@@ -65,9 +67,13 @@ function simpleWriteBody(sourceFileId: string, name = `Test Template ${randomUUI
       { columnIndex: 2, field: "size_weight_kg" }
     ],
     fixedCellMappings: [],
+    // "create" resolves via newSizeName directly, with no dependency on a
+    // real yield_sizes row existing in whichever org these tests run
+    // against — appropriate for CRUD/versioning tests that don't care
+    // about actual size resolution.
     valueMappings: [
-      { sourceField: "size_label", rawValue: "SM", action: "map", targetSizeId: "s1" },
-      { sourceField: "size_label", rawValue: "MD", action: "map", targetSizeId: "s2" }
+      { sourceField: "size_label", rawValue: "SM", action: "create", newSizeName: "Small" },
+      { sourceField: "size_label", rawValue: "MD", action: "create", newSizeName: "Medium" }
     ],
     rules: []
   });
@@ -305,4 +311,62 @@ test("buildCsvPreview: a saved template whose fingerprint no longer matches the 
 test("getTemplateById returns null for a nonexistent id rather than throwing", async () => {
   const result = await getTemplateById(DENVA_ORG_ID, randomUUID());
   assert.equal(result, null);
+});
+
+test("pending CSV template queue: a matched pending row reprocesses its preserved raw text into a live preview", async () => {
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, SIMPLE_CSV, "pending-matched.csv");
+  const template = await createTemplate(DENVA_ORG_ID, TEST_USER_ID, simpleWriteBody(uploaded.sourceFileId));
+  const pending = await createPendingCsvTemplateImport(
+    DENVA_ORG_ID,
+    uploaded.sourceFileId,
+    "pending-matched.csv",
+    template.id,
+    false
+  );
+
+  try {
+    const list = await listPendingCsvTemplateImports(DENVA_ORG_ID);
+    const item = list.find((i) => i.id === pending.id);
+    assert.ok(item);
+    assert.equal(item?.needsTemplate, false);
+    assert.equal(item?.error, null);
+    assert.ok(item?.preview);
+    // Raw CSV reprocessing: the preview was rebuilt from csv_import_source_files.raw_text,
+    // not from any stale stored columns on the pending row itself (which has none here).
+    assert.equal(item?.preview?.groups.length, 1);
+    assert.ok((item?.preview?.groups[0].reconciliation.recognizedSizeKg ?? 0) > 0);
+  } finally {
+    await supabase.from("agent_pending_imports").delete().eq("id", pending.id);
+    await cleanupTemplateGroup(template.template_group_id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+  }
+});
+
+test("pending CSV template queue: a row with no matched template (needs_template) is listed without a preview, awaiting the builder", async () => {
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, `Unmatched${randomUUID()},Col2\nx,1\n`, "pending-unmatched.csv");
+  const pending = await createPendingCsvTemplateImport(DENVA_ORG_ID, uploaded.sourceFileId, "pending-unmatched.csv", null, true);
+
+  try {
+    const list = await listPendingCsvTemplateImports(DENVA_ORG_ID);
+    const item = list.find((i) => i.id === pending.id);
+    assert.ok(item);
+    assert.equal(item?.needsTemplate, true);
+    assert.equal(item?.preview, null);
+  } finally {
+    await supabase.from("agent_pending_imports").delete().eq("id", pending.id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+  }
+});
+
+test("pending CSV template queue is org-isolated", async () => {
+  const uploaded = await uploadTestFile(DENVA_ORG_ID, SIMPLE_CSV, "pending-isolation.csv");
+  const pending = await createPendingCsvTemplateImport(DENVA_ORG_ID, uploaded.sourceFileId, "pending-isolation.csv", null, true);
+
+  try {
+    const otherOrgList = await listPendingCsvTemplateImports(FIRST_LIGHT_ORG_ID);
+    assert.ok(!otherOrgList.some((i) => i.id === pending.id));
+  } finally {
+    await supabase.from("agent_pending_imports").delete().eq("id", pending.id);
+    await cleanupSourceFile(uploaded.sourceFileId);
+  }
 });
