@@ -262,7 +262,13 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
 const MAX_RECENT_LIMIT = 100;
 const DEFAULT_RECENT_LIMIT = 7;
 
-export type RecentEntriesCursor = { packedDate: string | null; id: string };
+// Ordering: year DESC, week DESC, packed_date DESC (nulls last within the
+// week), id DESC as the final stable tiebreaker. Week takes priority over
+// packed_date so a null-packed_date entry (e.g. an early FlowMaster PDF
+// import that predates reliable date extraction — see investigation notes
+// in yieldEntriesRecent.test.ts) sorts alongside its own week's other
+// entries instead of being pushed behind all dated history.
+export type RecentEntriesCursor = { year: number; week: number; packedDate: string | null; id: string };
 
 const UUID_RE = /^[0-9a-fA-F-]{36}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -270,21 +276,22 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export function parseRecentCursor(raw: unknown): RecentEntriesCursor | null {
   if (typeof raw !== "string" || !raw) return null;
 
-  const separatorIndex = raw.lastIndexOf("_");
-  if (separatorIndex === -1) return null;
+  const parts = raw.split("_");
+  if (parts.length !== 4) return null;
 
-  const packedDatePart = raw.slice(0, separatorIndex);
-  const id = raw.slice(separatorIndex + 1);
+  const [yearPart, weekPart, packedDatePart, id] = parts;
+  const year = Number(yearPart);
+  const week = Number(weekPart);
 
+  if (!Number.isInteger(year) || !Number.isInteger(week)) return null;
   if (!UUID_RE.test(id)) return null;
-  if (packedDatePart === "null") return { packedDate: null, id };
-  if (!DATE_RE.test(packedDatePart)) return null;
+  if (packedDatePart !== "null" && !DATE_RE.test(packedDatePart)) return null;
 
-  return { packedDate: packedDatePart, id };
+  return { year, week, packedDate: packedDatePart === "null" ? null : packedDatePart, id };
 }
 
-export function encodeRecentCursor(packedDate: string | null, id: string): string {
-  return `${packedDate ?? "null"}_${id}`;
+export function encodeRecentCursor(year: number, week: number, packedDate: string | null, id: string): string {
+  return `${year}_${week}_${packedDate ?? "null"}_${id}`;
 }
 
 export function resolveRecentLimit(raw: unknown): number {
@@ -294,13 +301,41 @@ export function resolveRecentLimit(raw: unknown): number {
     : DEFAULT_RECENT_LIMIT;
 }
 
-// Cursor-based pagination for the KgEntriesTab "Recent Entries" table, sorted
-// newest-to-oldest by packed_date (nulls last) with id as a stable tiebreaker
-// so rows sharing a packed_date never duplicate or get skipped across pages.
-// Keyset pagination (vs. offset) also means concurrent inserts/deletes can't
-// shift already-fetched pages out from under the client. Exported so it can
-// be exercised directly against the live DB in tests without standing up an
-// HTTP server.
+// Builds the keyset ("seek") predicate for "every row strictly after `cursor`
+// in (year desc, week desc, packed_date desc nulls last, id desc) order".
+// Expressed as a flat OR of AND-groups (one group per tiebreak level) rather
+// than nesting or() inside and() — PostgREST's filter-string grammar accepts
+// arbitrary nesting, but flat groups are easier to verify by inspection and
+// exercise in tests than a nested tree.
+export function buildRecentCursorFilter(cursor: RecentEntriesCursor): string {
+  const { year, week, packedDate, id } = cursor;
+  const clauses = [
+    `year.lt.${year}`,
+    `and(year.eq.${year},week.lt.${week})`
+  ];
+
+  if (packedDate !== null) {
+    clauses.push(
+      `and(year.eq.${year},week.eq.${week},packed_date.lt.${packedDate})`,
+      `and(year.eq.${year},week.eq.${week},packed_date.is.null)`,
+      `and(year.eq.${year},week.eq.${week},packed_date.eq.${packedDate},id.lt.${id})`
+    );
+  } else {
+    // The cursor row itself has no packed_date, i.e. it's already in the
+    // nulls-last tail for this (year, week) — the only rows still "after"
+    // it are other null-packed_date rows in the same week with a smaller id.
+    clauses.push(`and(year.eq.${year},week.eq.${week},packed_date.is.null,id.lt.${id})`);
+  }
+
+  return clauses.join(",");
+}
+
+// Cursor-based pagination for the KgEntriesTab "Recent Entries" table. Keyset
+// pagination (vs. offset) means concurrent inserts/deletes can't shift
+// already-fetched pages out from under the client, and the composite id
+// tiebreaker means rows sharing every other sort key never duplicate or get
+// skipped across pages. Exported so it can be exercised directly against the
+// live DB in tests without standing up an HTTP server.
 export async function fetchRecentYieldEntriesPage(
   organizationId: string,
   limit: number,
@@ -310,17 +345,15 @@ export async function fetchRecentYieldEntriesPage(
     .from("yield_entries")
     .select(YIELD_ENTRY_SELECT)
     .eq("organization_id", organizationId)
+    .order("year", { ascending: false })
+    .order("week", { ascending: false })
     .order("packed_date", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     // Fetch one extra row so hasMore can be determined without a separate count query.
     .limit(limit + 1);
 
   if (cursor) {
-    query = cursor.packedDate !== null
-      ? query.or(
-          `packed_date.lt.${cursor.packedDate},and(packed_date.eq.${cursor.packedDate},id.lt.${cursor.id}),packed_date.is.null`
-        )
-      : query.or(`and(packed_date.is.null,id.lt.${cursor.id})`);
+    query = query.or(buildRecentCursorFilter(cursor));
   }
 
   const { data, error } = await query;
@@ -336,7 +369,10 @@ export async function fetchRecentYieldEntriesPage(
 
   return {
     entries: page.map((entry) => mapYieldEntryRow(entry as RawYieldEntryRow)),
-    nextCursor: hasMore && lastRow ? encodeRecentCursor(lastRow.packed_date, lastRow.id) : null,
+    nextCursor:
+      hasMore && lastRow
+        ? encodeRecentCursor(lastRow.year, lastRow.week, lastRow.packed_date, lastRow.id)
+        : null,
     hasMore
   };
 }

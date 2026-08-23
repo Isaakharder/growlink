@@ -1934,7 +1934,7 @@ export function KgEntriesTab() {
                       <td>{entry.variety_name}</td>
                       <td>{entry.year}</td>
                       <td>{entry.week}</td>
-                      <td>{entry.packed_date ?? "—"}</td>
+                      <td>{entry.packed_date ?? "Not recorded"}</td>
                       <td>{roundTo(entry.total_kg, 3)}</td>
                       <td>{roundTo(entry.kg_per_m2, 3)}</td>
                       <td>{roundTo(entry.total_cases, 3)}</td>
