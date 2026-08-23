@@ -98,7 +98,7 @@ adminUploadKeysRouter.post(
 
     const orgId = organizationId.trim();
     const keyLabel = label.trim();
-    const allowedTypes = ["flowmaster", "generic_csv"] as const;
+    const allowedTypes = ["flowmaster", "generic_csv", "csv_template"] as const;
     const sourceType =
       typeof dataSourceType === "string" &&
       allowedTypes.includes(dataSourceType as typeof allowedTypes[number])

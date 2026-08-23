@@ -7128,3 +7128,35 @@ textarea.cleaning-checklist-response-input {
 .csv-template-issue-list {
   margin: 0.5rem 0;
 }
+
+.csv-template-pending-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.csv-template-pending-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.csv-template-pending-header h3 {
+  margin: 0;
+}
+
+.csv-template-pending-card {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.csv-template-pending-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}

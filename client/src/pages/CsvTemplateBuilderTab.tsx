@@ -148,6 +148,30 @@ type NormalizedPreview = { groups: NormalizedGroup[]; validationIssues: Validati
 
 type PreviewResponse = { preview: NormalizedPreview; templateId: string | null; templateVersion: number | null; layoutMismatch: boolean };
 
+type PendingCsvItem = {
+  id: string;
+  sourceFilename: string;
+  sourceFileId: string | null;
+  uploadedAt: string;
+  needsTemplate: boolean;
+  templateId: string | null;
+  templateName: string | null;
+  templateVersion: number | null;
+  matchKind: "close" | "none" | null;
+  preview: NormalizedPreview | null;
+  error: string | null;
+};
+
+type SourceFileGridResponse = {
+  sourceFileId: string;
+  filename: string;
+  grid: string[][];
+  rowCount: number;
+  columnCount: number;
+  delimiter: string;
+  match: { kind: "exact" | "close" | "none"; templateId: string | null; templateName: string | null; similarity: number | null };
+};
+
 type YieldSizeOption = { id: string; name: string };
 
 const PARSE_GRID_URL = "/api/csv-templates/parse-grid";
@@ -155,6 +179,8 @@ const PREVIEW_URL = "/api/csv-templates/preview";
 const TEMPLATES_URL = "/api/csv-templates";
 const IMPORT_URL = "/api/csv-templates/import";
 const YIELD_SIZES_URL = "/api/yield-sizes";
+const PENDING_URL = "/api/csv-templates/pending";
+const sourceFileGridUrl = (id: string) => `/api/csv-templates/source-files/${id}/grid`;
 
 function emptyDraft(): DraftConfig {
   return {
@@ -198,6 +224,10 @@ export function CsvTemplateBuilderTab() {
   const [saving, setSaving] = useState(false);
   const [importingKey, setImportingKey] = useState<string | null>(null);
   const [importStatus, setImportStatus] = useState<Record<string, string>>({});
+  const [pendingItems, setPendingItems] = useState<PendingCsvItem[]>([]);
+  const [pendingLoading, setPendingLoading] = useState(true);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [resumingPendingId, setResumingPendingId] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -206,7 +236,97 @@ export function CsvTemplateBuilderTab() {
       const body = (await res.json()) as YieldSizeOption[];
       setYieldSizes(body);
     })();
+    void fetchPendingItems();
   }, []);
+
+  async function fetchPendingItems() {
+    setPendingLoading(true);
+    setPendingError(null);
+    try {
+      const res = await apiFetch(PENDING_URL);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load pending CSV imports (${res.status})`);
+      }
+      const body = (await res.json()) as { files: PendingCsvItem[] };
+      setPendingItems(body.files);
+    } catch (err) {
+      setPendingError(err instanceof Error ? err.message : "Failed to load pending CSV imports.");
+    } finally {
+      setPendingLoading(false);
+    }
+  }
+
+  // "Set up CSV Template" — resumes the grid builder from an already-uploaded
+  // pending file's preserved raw text, without requiring a re-upload.
+  async function handleSetUpTemplateFromPending(item: PendingCsvItem) {
+    if (!item.sourceFileId) return;
+    setResumingPendingId(item.id);
+    setUploadError(null);
+    try {
+      const res = await apiFetch(sourceFileGridUrl(item.sourceFileId));
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load source file (${res.status})`);
+      }
+      const body = (await res.json()) as SourceFileGridResponse;
+
+      setPreview(null);
+      setActiveTemplateId(null);
+      setCloseMatchChoice(body.match.kind === "close" ? "pending" : "build");
+      setTemplateName(body.filename.replace(/\.csv$/i, ""));
+      setDraft((current) => ({ ...emptyDraft(), delimiter: body.delimiter, headerRowIndex: 0, dataStartRowIndex: 1, valueMappings: current.valueMappings }));
+      setParsed({
+        sourceFileId: body.sourceFileId,
+        grid: body.grid,
+        rowCount: body.rowCount,
+        columnCount: body.columnCount,
+        delimiter: body.delimiter,
+        encoding: "utf-8",
+        match: body.match
+      });
+
+      if (body.match.kind === "exact" && body.match.templateId) {
+        setActiveTemplateId(body.match.templateId);
+        await fetchPreviewForTemplate(body.sourceFileId, body.match.templateId);
+      }
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Failed to resume this file in the builder.");
+    } finally {
+      setResumingPendingId(null);
+    }
+  }
+
+  async function handleImportPendingGroup(item: PendingCsvItem, group: NormalizedGroup) {
+    if (!item.sourceFileId || !item.templateId) return;
+    setImportingKey(group.groupKey);
+    setImportStatus((current) => ({ ...current, [group.groupKey]: "" }));
+    try {
+      const res = await apiFetch(IMPORT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          sourceFileId: item.sourceFileId,
+          templateId: item.templateId,
+          groupKey: group.groupKey,
+          approvedGroup: group
+        })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Import failed (${res.status})`);
+      }
+      const body = (await res.json()) as { mode: "create" | "append" };
+      setImportStatus((current) => ({ ...current, [group.groupKey]: `Imported (${body.mode}).` }));
+      void fetchPendingItems();
+    } catch (err) {
+      setImportStatus((current) => ({
+        ...current,
+        [group.groupKey]: err instanceof Error ? err.message : "Import failed."
+      }));
+    } finally {
+      setImportingKey(null);
+    }
+  }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -462,6 +582,19 @@ export function CsvTemplateBuilderTab() {
         map its columns once and save it as a reusable template for your organization.
       </p>
 
+      <PendingCsvImportsSection
+        items={pendingItems}
+        loading={pendingLoading}
+        error={pendingError}
+        resumingPendingId={resumingPendingId}
+        importingKey={importingKey}
+        importStatus={importStatus}
+        onSetUpTemplate={handleSetUpTemplateFromPending}
+        onImportGroup={handleImportPendingGroup}
+        onRefresh={fetchPendingItems}
+      />
+
+      <h3>Upload a new file</h3>
       <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={uploading} />
       {uploading && <p>Parsing file&hellip;</p>}
       {uploadError && <p className="form-error">{uploadError}</p>}
@@ -835,6 +968,122 @@ function RuleEditor({
       <button type="button" onClick={onAdd}>
         + Add rule
       </button>
+    </div>
+  );
+}
+
+function formatUploadedAt(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function PendingCsvImportsSection({
+  items,
+  loading,
+  error,
+  resumingPendingId,
+  importingKey,
+  importStatus,
+  onSetUpTemplate,
+  onImportGroup,
+  onRefresh
+}: {
+  items: PendingCsvItem[];
+  loading: boolean;
+  error: string | null;
+  resumingPendingId: string | null;
+  importingKey: string | null;
+  importStatus: Record<string, string>;
+  onSetUpTemplate: (item: PendingCsvItem) => void;
+  onImportGroup: (item: PendingCsvItem, group: NormalizedGroup) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="csv-template-pending-section">
+      <div className="csv-template-pending-header">
+        <h3>Pending CSV Imports</h3>
+        <button type="button" onClick={onRefresh} disabled={loading}>
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {error && <p className="form-error">{error}</p>}
+      {!loading && items.length === 0 && !error && <p>No pending CSV imports right now.</p>}
+
+      {items.map((item) => (
+        <div key={item.id} className="csv-template-pending-card">
+          <div className="csv-template-pending-card-header">
+            <strong>{item.sourceFilename}</strong>
+            <span className="recent-entries-footer">{formatUploadedAt(item.uploadedAt)}</span>
+          </div>
+
+          {item.error && <p className="form-error">{item.error}</p>}
+
+          {item.needsTemplate ? (
+            <>
+              <p>
+                {item.matchKind === "close"
+                  ? "This file's layout closely resembles a saved template, but doesn't match exactly. Review and confirm before importing."
+                  : "No saved template matches this file's layout yet."}
+              </p>
+              <button
+                type="button"
+                className="cases-entry-open-button"
+                disabled={resumingPendingId === item.id || !item.sourceFileId}
+                onClick={() => onSetUpTemplate(item)}
+              >
+                {resumingPendingId === item.id ? "Loading..." : "Set up CSV Template"}
+              </button>
+            </>
+          ) : (
+            <>
+              <p>
+                Matched template: <strong>{item.templateName ?? "Unknown"}</strong>
+                {item.templateVersion !== null ? ` (v${item.templateVersion})` : ""} &middot; <span className="form-success">Exact match</span>
+              </p>
+
+              {item.preview?.groups.map((group) => {
+                const groupIssues = item.preview!.validationIssues.filter((i) => !i.groupKey || i.groupKey === group.groupKey);
+                const canImportGroup = groupIssues.length === 0;
+                return (
+                  <div key={group.groupKey} className="csv-template-preview-group">
+                    <p>
+                      <strong>{group.varietyRaw ?? "Unknown variety"}</strong> &middot; {group.packedDate ?? "Not recorded"} &middot; Year{" "}
+                      {group.isoYear ?? "?"} Week {group.isoWeek ?? "?"}
+                      {group.lotNumber ? ` · Lot ${group.lotNumber}` : ""}
+                    </p>
+                    <p>
+                      Final mapped kg: {group.reconciliation.recognizedSizeKg.toFixed(2)} &middot; AFW{" "}
+                      {group.averageFruitWeightG !== null ? `${group.averageFruitWeightG.toFixed(1)} g` : "-"} &middot; Reconciliation:{" "}
+                      {group.reconciliation.unexplainedDifference ? (
+                        <span className="form-error">unexplained difference</span>
+                      ) : (
+                        <span className="form-success">OK</span>
+                      )}
+                    </p>
+                    {groupIssues.length > 0 && (
+                      <ul className="form-error">
+                        {groupIssues.map((issue, i) => (
+                          <li key={i}>{issue.message}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <button
+                      type="button"
+                      className="cases-entry-open-button"
+                      disabled={!canImportGroup || importingKey === group.groupKey}
+                      onClick={() => onImportGroup(item, group)}
+                    >
+                      {importingKey === group.groupKey ? "Importing..." : "Import"}
+                    </button>
+                    {importStatus[group.groupKey] && <span> {importStatus[group.groupKey]}</span>}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

@@ -199,7 +199,7 @@ export type ParseAndMatchResult = {
 
 export async function parseAndMatchCsvFile(
   organizationId: string,
-  userId: string,
+  userId: string | null,
   file: { buffer: Buffer; originalname: string }
 ): Promise<ParseAndMatchResult> {
   const grid = parseCsvGridFromBuffer(file.buffer);
@@ -248,6 +248,51 @@ export async function parseAndMatchCsvFile(
     delimiter: grid.delimiter,
     encoding: grid.encoding,
     hadBom: grid.hadBom,
+    match: {
+      kind: match.kind,
+      templateId: match.template?.id ?? null,
+      templateName: match.template?.name ?? null,
+      similarity: match.similarity ?? null
+    }
+  };
+}
+
+/**
+ * Re-fetches an already-stored source file's grid + current fingerprint
+ * match, without needing the original bytes again — this is what lets the
+ * Template Builder UI resume a pending (e.g. agent-uploaded) file's "Set up
+ * CSV template" action from its preserved raw text instead of requiring a
+ * fresh upload.
+ */
+export async function getSourceFileGridAndMatch(
+  organizationId: string,
+  sourceFileId: string
+): Promise<ParseAndMatchResult & { filename: string }> {
+  const { data: sourceFile, error } = await supabase
+    .from("csv_import_source_files")
+    .select("filename, delimiter")
+    .eq("id", sourceFileId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!sourceFile) throw new TemplateNotFoundError("Source file not found.");
+
+  const grid = await loadSourceFileGrid(organizationId, sourceFileId, sourceFile.delimiter as string);
+
+  const candidateFingerprint = computeFingerprint(grid.rows, grid.delimiter, 0);
+  const candidateHash = computeFingerprintHash(candidateFingerprint);
+  const savedTemplates = await loadCurrentActiveTemplates(organizationId);
+  const match = matchFingerprint(candidateFingerprint, candidateHash, toFingerprintCandidates(savedTemplates));
+
+  return {
+    sourceFileId,
+    filename: sourceFile.filename as string,
+    grid: grid.rows,
+    rowCount: grid.rowCount,
+    columnCount: grid.columnCount,
+    delimiter: grid.delimiter,
+    encoding: "utf-8",
+    hadBom: false,
     match: {
       kind: match.kind,
       templateId: match.template?.id ?? null,
@@ -666,6 +711,7 @@ function checkGroupVarietyIssues(
 export type PreviewResult = {
   preview: NormalizedPreview;
   templateId: string | null;
+  templateName: string | null;
   templateVersion: number | null;
   layoutMismatch: boolean;
 };
@@ -738,6 +784,7 @@ export async function buildCsvPreview(organizationId: string, body: PreviewInput
   return {
     preview: finalPreview,
     templateId: templateRow?.id ?? null,
+    templateName: templateRow?.name ?? null,
     templateVersion: templateRow?.version ?? null,
     layoutMismatch
   };
@@ -804,9 +851,14 @@ export async function createPendingCsvTemplateImport(
 export type PendingCsvTemplatePreviewItem = {
   id: string;
   sourceFilename: string;
+  sourceFileId: string | null;
   uploadedAt: string;
   needsTemplate: boolean;
   templateId: string | null;
+  templateName: string | null;
+  templateVersion: number | null;
+  /** Set only for needsTemplate rows: whether the layout closely resembles a saved template (requires review) or matched nothing at all. Recomputed live, not stored, so it always reflects the org's current templates. */
+  matchKind: "close" | "none" | null;
   preview: NormalizedPreview | null;
   error: string | null;
 };
@@ -826,12 +878,30 @@ export async function listPendingCsvTemplateImports(organizationId: string): Pro
 
   for (const row of rows) {
     if (!row.source_file_id || !row.csv_mapping_template_id || row.needs_template) {
+      let matchKind: "close" | "none" | null = null;
+      if (row.source_file_id) {
+        try {
+          const sourceGrid = await loadSourceFileGrid(organizationId, row.source_file_id);
+          const candidateFingerprint = computeFingerprint(sourceGrid.rows, sourceGrid.delimiter, 0);
+          const candidateHash = computeFingerprintHash(candidateFingerprint);
+          const savedTemplates = await loadCurrentActiveTemplates(organizationId);
+          const match = matchFingerprint(candidateFingerprint, candidateHash, toFingerprintCandidates(savedTemplates));
+          matchKind = match.kind === "exact" ? null : match.kind;
+        } catch {
+          // Non-fatal — the UI just won't show a close/none distinction for this row.
+        }
+      }
+
       items.push({
         id: row.id,
         sourceFilename: row.source_filename,
+        sourceFileId: row.source_file_id,
         uploadedAt: row.uploaded_at,
         needsTemplate: true,
         templateId: row.csv_mapping_template_id,
+        templateName: null,
+        templateVersion: null,
+        matchKind,
         preview: null,
         error: null
       });
@@ -846,9 +916,13 @@ export async function listPendingCsvTemplateImports(organizationId: string): Pro
       items.push({
         id: row.id,
         sourceFilename: row.source_filename,
+        sourceFileId: row.source_file_id,
         uploadedAt: row.uploaded_at,
         needsTemplate: false,
         templateId: row.csv_mapping_template_id,
+        templateName: result.templateName,
+        templateVersion: result.templateVersion,
+        matchKind: null,
         preview: result.preview,
         error: null
       });
@@ -856,9 +930,13 @@ export async function listPendingCsvTemplateImports(organizationId: string): Pro
       items.push({
         id: row.id,
         sourceFilename: row.source_filename,
+        sourceFileId: row.source_file_id,
         uploadedAt: row.uploaded_at,
         needsTemplate: false,
         templateId: row.csv_mapping_template_id,
+        templateName: null,
+        templateVersion: null,
+        matchKind: null,
         preview: null,
         error: err instanceof Error ? err.message : "Failed to rebuild preview."
       });
@@ -1284,6 +1362,18 @@ csvMappingTemplatesRouter.get("/csv-templates/pending", canView, async (req, res
     return res.json({ files: items });
   } catch (error) {
     return handleKnownError(res, error, "Failed to load pending CSV imports.", "csv-templates pending list error:");
+  }
+});
+
+// Lets the Template Builder UI resume an already-uploaded source file (e.g.
+// from a pending review row's "Set up CSV template" action) without
+// requiring the raw bytes to be uploaded again.
+csvMappingTemplatesRouter.get("/csv-templates/source-files/:id/grid", canView, async (req, res) => {
+  try {
+    const result = await getSourceFileGridAndMatch(req.organizationId, String(req.params.id));
+    return res.json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load source file.", "csv-templates source-file grid error:");
   }
 });
 

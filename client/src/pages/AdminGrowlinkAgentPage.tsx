@@ -82,6 +82,12 @@ const DATA_SOURCES = [
     name: "Climate Agent",
     description: "Weather station + block summary CSV exports from the Windows Climate Agent",
     status: "enabled" as const
+  },
+  {
+    id: "csv-template",
+    name: "CSV Template Import",
+    description: "Any CSV export matched against an organization's own saved mapping template, configured self-service via the Template Builder",
+    status: "enabled" as const
   }
 ];
 
@@ -522,8 +528,8 @@ export function AdminGrowlinkAgentPage() {
                         </span>
                       </td>
                       <td style={tableCellStyle}>
-                        <span style={row.dataSourceType === "generic_csv" ? genericCsvBadgeStyle : flowmasterBadgeStyle}>
-                          {row.dataSourceType === "generic_csv" ? "Generic CSV" : "FlowMaster"}
+                        <span style={dataSourceBadgeStyle(row.dataSourceType)}>
+                          {dataSourceLabel(row.dataSourceType)}
                         </span>
                       </td>
                       <td style={tableCellStyle}>{formatDateTime(row.createdAt)}</td>
@@ -607,6 +613,7 @@ export function AdminGrowlinkAgentPage() {
               >
                 <option value="flowmaster">FlowMaster</option>
                 <option value="generic_csv">Generic CSV</option>
+                <option value="csv_template">CSV Template (org self-service)</option>
               </select>
             </div>
             <div style={{ alignSelf: "end" }}>
@@ -745,8 +752,8 @@ export function AdminGrowlinkAgentPage() {
                         </span>
                       </td>
                       <td style={tableCellStyle}>
-                        <span style={row.dataSourceType === "generic_csv" ? genericCsvBadgeStyle : flowmasterBadgeStyle}>
-                          {row.dataSourceType === "generic_csv" ? "Generic CSV" : "FlowMaster"}
+                        <span style={dataSourceBadgeStyle(row.dataSourceType)}>
+                          {dataSourceLabel(row.dataSourceType)}
                         </span>
                       </td>
                       <td style={tableCellStyle}>{formatDateTime(row.createdAt)}</td>
@@ -1359,6 +1366,28 @@ const genericCsvBadgeStyle: CSSProperties = {
   color: "#1a4a8f",
   border: "1px solid #b8d0f7"
 };
+
+const csvTemplateBadgeStyle: CSSProperties = {
+  display: "inline-block",
+  borderRadius: 999,
+  padding: "0.1rem 0.45rem",
+  fontSize: "0.72rem",
+  background: "#eefaf0",
+  color: "#0f7660",
+  border: "1px solid #b8e6cc"
+};
+
+function dataSourceBadgeStyle(dataSourceType: string): CSSProperties {
+  if (dataSourceType === "generic_csv") return genericCsvBadgeStyle;
+  if (dataSourceType === "csv_template") return csvTemplateBadgeStyle;
+  return flowmasterBadgeStyle;
+}
+
+function dataSourceLabel(dataSourceType: string): string {
+  if (dataSourceType === "generic_csv") return "Generic CSV";
+  if (dataSourceType === "csv_template") return "CSV Template";
+  return "FlowMaster";
+}
 
 const configureLinkStyle: CSSProperties = {
   fontSize: "0.78rem",
