@@ -7033,3 +7033,98 @@ textarea.cleaning-checklist-response-input {
   color: var(--brand, #0f7660);
   font-weight: 600;
 }
+
+/* CSV Import Template Builder — functional-first v1 grid/mapping UI.
+   Deliberately plain: no sticky headers, virtualization, or search yet
+   (see project notes — those are an explicit fast-follow). */
+.csv-template-summary {
+  margin: 0.6rem 0;
+}
+
+.csv-template-grid-wrapper {
+  margin-top: 0.75rem;
+  overflow: auto;
+  max-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.csv-template-grid {
+  min-width: 100%;
+  font-size: 0.82rem;
+}
+
+.csv-template-grid th,
+.csv-template-grid td {
+  white-space: nowrap;
+  padding: 0.35rem 0.5rem;
+}
+
+.csv-template-grid select {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+}
+
+.csv-template-header-row {
+  background: var(--brand-soft);
+}
+
+.csv-template-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-muted);
+}
+
+.csv-template-row-controls button {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.csv-template-fixed-cell {
+  background: var(--brand-soft);
+  outline: 1px dashed var(--brand, #0f7660);
+}
+
+.csv-template-value-mapping,
+.csv-template-rules,
+.csv-template-preview {
+  margin-top: 1.25rem;
+}
+
+.csv-template-rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.csv-template-rule-condition {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.csv-template-save-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.csv-template-preview-group {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.csv-template-reconciliation td:first-child {
+  color: var(--text-muted);
+}
+
+.csv-template-issue-list {
+  margin: 0.5rem 0;
+}

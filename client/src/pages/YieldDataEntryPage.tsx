@@ -4,8 +4,9 @@ import { CasesEntryTab } from "./CasesEntryTab";
 import { PackHistoryTab } from "./PackHistoryTab";
 import { WasteImportsTab } from "./WasteImportsTab";
 import { ProjectedTab } from "./ProjectedTab";
+import { CsvTemplateBuilderTab } from "./CsvTemplateBuilderTab";
 
-type TabType = "kg" | "cases" | "packHistory" | "waste" | "projected";
+type TabType = "kg" | "cases" | "packHistory" | "waste" | "projected" | "csvTemplates";
 
 export function YieldDataEntryPage() {
   const [activeTab, setActiveTab] = useState<TabType>("kg");
@@ -48,6 +49,12 @@ export function YieldDataEntryPage() {
         >
           Projected
         </button>
+        <button
+          className={`tab-button ${activeTab === "csvTemplates" ? "active" : ""}`}
+          onClick={() => setActiveTab("csvTemplates")}
+        >
+          CSV Templates
+        </button>
       </div>
 
       {activeTab === "kg" ? (
@@ -77,6 +84,12 @@ export function YieldDataEntryPage() {
       {activeTab === "projected" ? (
         <div className="tab-content">
           <ProjectedTab />
+        </div>
+      ) : null}
+
+      {activeTab === "csvTemplates" ? (
+        <div className="tab-content">
+          <CsvTemplateBuilderTab />
         </div>
       ) : null}
     </section>
