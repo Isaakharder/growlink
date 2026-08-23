@@ -174,59 +174,184 @@ yieldEntriesRouter.get("/yield-entry-options", canYieldView, async (req, res) =>
   });
 });
 
+const YIELD_ENTRY_SELECT =
+  "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg, average_fruit_weight_g)";
+
+type RawYieldEntryRow = {
+  id: string;
+  variety_id: string;
+  year: number;
+  week: number;
+  packed_date: string | null;
+  size_kg: unknown;
+  total_kg: number;
+  average_fruit_weight_g: number | null;
+  kg_per_m2: number;
+  total_cases: number;
+  created_at: string;
+  updated_at: string;
+  varieties: { name?: string } | Array<{ name?: string }> | null;
+  yield_entry_daily_breakdown: Array<{
+    id?: string;
+    packed_date?: string | null;
+    size_kg?: Record<string, unknown> | null;
+    total_kg?: number | null;
+    average_fruit_weight_g?: number | null;
+  }> | null;
+};
+
+function mapYieldEntryRow(entry: RawYieldEntryRow) {
+  const varietyRef = entry.varieties;
+  const varietyName = Array.isArray(varietyRef)
+    ? (varietyRef[0]?.name ?? "-")
+    : (varietyRef?.name ?? "-");
+
+  const daily_breakdowns = (entry.yield_entry_daily_breakdown ?? []).map((b) => ({
+    id: b.id ?? "",
+    packed_date: b.packed_date ?? null,
+    size_kg: (b.size_kg ?? {}) as Record<string, number>,
+    total_kg: Number(b.total_kg ?? 0),
+    average_fruit_weight_g: b.average_fruit_weight_g ?? null
+  }));
+
+  const { varieties, yield_entry_daily_breakdown, ...rest } = entry;
+  void varieties;
+  void yield_entry_daily_breakdown;
+
+  return {
+    ...rest,
+    variety_name: varietyName,
+    daily_breakdowns
+  };
+}
+
 yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
   const organizationId = req.organizationId;
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("yield_entries")
-    .select(
-      "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg, average_fruit_weight_g)"
-    )
-    .eq("organization_id", organizationId)
-    .order("created_at", { ascending: false });
+    .select(YIELD_ENTRY_SELECT)
+    .eq("organization_id", organizationId);
+
+  // Optional narrowing used by callers that only need one week's worth of
+  // entries (e.g. the KgEntriesTab weekly summary / duplicate-week check).
+  // Omitting both keeps the historical full-history behaviour relied on by
+  // Yield Analytics, the dashboard, and pack history.
+  if (req.query.year !== undefined) {
+    const year = Number(req.query.year);
+    if (Number.isInteger(year)) {
+      query = query.eq("year", year);
+    }
+  }
+  if (req.query.week !== undefined) {
+    const week = Number(req.query.week);
+    if (Number.isInteger(week)) {
+      query = query.eq("week", week);
+    }
+  }
+
+  const { data, error } = await query.order("created_at", { ascending: false });
 
   if (error) {
     return sendSafeError(res, 500, "Failed to load yield entries.", "Yield entries fetch error:", error);
   }
 
-  const entries = (data ?? []).map((entry) => {
-    const varietyRef = entry.varieties as
-      | { name?: string }
-      | Array<{ name?: string }>
-      | null;
+  return res.json((data ?? []).map((entry) => mapYieldEntryRow(entry as RawYieldEntryRow)));
+});
 
-    const varietyName = Array.isArray(varietyRef)
-      ? (varietyRef[0]?.name ?? "-")
-      : (varietyRef?.name ?? "-");
+const MAX_RECENT_LIMIT = 100;
+const DEFAULT_RECENT_LIMIT = 7;
 
-    const rawBreakdowns = entry.yield_entry_daily_breakdown as Array<{
-      id?: string;
-      packed_date?: string | null;
-      size_kg?: Record<string, unknown> | null;
-      total_kg?: number | null;
-      average_fruit_weight_g?: number | null;
-    }> | null;
+export type RecentEntriesCursor = { packedDate: string | null; id: string };
 
-    const daily_breakdowns = (rawBreakdowns ?? []).map((b) => ({
-      id: b.id ?? "",
-      packed_date: b.packed_date ?? null,
-      size_kg: (b.size_kg ?? {}) as Record<string, number>,
-      total_kg: Number(b.total_kg ?? 0),
-      average_fruit_weight_g: b.average_fruit_weight_g ?? null
-    }));
+const UUID_RE = /^[0-9a-fA-F-]{36}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-    const { varieties, yield_entry_daily_breakdown, ...rest } = entry;
-    void varieties;
-    void yield_entry_daily_breakdown;
+export function parseRecentCursor(raw: unknown): RecentEntriesCursor | null {
+  if (typeof raw !== "string" || !raw) return null;
 
-    return {
-      ...rest,
-      variety_name: varietyName,
-      daily_breakdowns
-    };
-  });
+  const separatorIndex = raw.lastIndexOf("_");
+  if (separatorIndex === -1) return null;
 
-  return res.json(entries);
+  const packedDatePart = raw.slice(0, separatorIndex);
+  const id = raw.slice(separatorIndex + 1);
+
+  if (!UUID_RE.test(id)) return null;
+  if (packedDatePart === "null") return { packedDate: null, id };
+  if (!DATE_RE.test(packedDatePart)) return null;
+
+  return { packedDate: packedDatePart, id };
+}
+
+export function encodeRecentCursor(packedDate: string | null, id: string): string {
+  return `${packedDate ?? "null"}_${id}`;
+}
+
+export function resolveRecentLimit(raw: unknown): number {
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_RECENT_LIMIT
+    ? parsed
+    : DEFAULT_RECENT_LIMIT;
+}
+
+// Cursor-based pagination for the KgEntriesTab "Recent Entries" table, sorted
+// newest-to-oldest by packed_date (nulls last) with id as a stable tiebreaker
+// so rows sharing a packed_date never duplicate or get skipped across pages.
+// Keyset pagination (vs. offset) also means concurrent inserts/deletes can't
+// shift already-fetched pages out from under the client. Exported so it can
+// be exercised directly against the live DB in tests without standing up an
+// HTTP server.
+export async function fetchRecentYieldEntriesPage(
+  organizationId: string,
+  limit: number,
+  cursor: RecentEntriesCursor | null
+) {
+  let query = supabase
+    .from("yield_entries")
+    .select(YIELD_ENTRY_SELECT)
+    .eq("organization_id", organizationId)
+    .order("packed_date", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false })
+    // Fetch one extra row so hasMore can be determined without a separate count query.
+    .limit(limit + 1);
+
+  if (cursor) {
+    query = cursor.packedDate !== null
+      ? query.or(
+          `packed_date.lt.${cursor.packedDate},and(packed_date.eq.${cursor.packedDate},id.lt.${cursor.id}),packed_date.is.null`
+        )
+      : query.or(`and(packed_date.is.null,id.lt.${cursor.id})`);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw error;
+  }
+
+  const rows = data ?? [];
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const lastRow = page[page.length - 1];
+
+  return {
+    entries: page.map((entry) => mapYieldEntryRow(entry as RawYieldEntryRow)),
+    nextCursor: hasMore && lastRow ? encodeRecentCursor(lastRow.packed_date, lastRow.id) : null,
+    hasMore
+  };
+}
+
+yieldEntriesRouter.get("/yield-entries/recent", canYieldView, async (req, res) => {
+  const organizationId = req.organizationId;
+  const limit = resolveRecentLimit(req.query.limit);
+  const cursor = parseRecentCursor(req.query.cursor);
+
+  try {
+    const result = await fetchRecentYieldEntriesPage(organizationId, limit, cursor);
+    return res.json(result);
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to load recent yield entries.", "Recent yield entries fetch error:", error);
+  }
 });
 
 yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {

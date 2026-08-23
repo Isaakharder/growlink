@@ -46,6 +46,12 @@ type YieldEntry = {
   daily_breakdowns: DailyBreakdown[];
 };
 
+type RecentEntriesResponse = {
+  entries: YieldEntry[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
 type YieldEntryFormState = {
   variety_id: string;
   year: string;
@@ -62,6 +68,9 @@ type WeekOption = {
 
 const OPTIONS_URL = "/api/yield-entry-options";
 const ENTRIES_URL = "/api/yield-entries";
+const RECENT_ENTRIES_URL = "/api/yield-entries/recent";
+const RECENT_ENTRIES_INITIAL_LIMIT = 7;
+const RECENT_ENTRIES_PAGE_LIMIT = 25;
 const PDF_PREVIEW_URL = "/api/pdf-import/preview";
 const PDF_IMPORT_URL = "/api/pdf-import/import";
 const PDF_REMAP_SIZES_URL = "/api/pdf-import/remap-sizes";
@@ -298,7 +307,20 @@ export function KgEntriesTab() {
   const currentYear = new Date().getFullYear();
   const [varieties, setVarieties] = useState<VarietyOption[]>([]);
   const [yieldSizes, setYieldSizes] = useState<YieldSizeOption[]>([]);
-  const [entries, setEntries] = useState<YieldEntry[]>([]);
+  // Entries scoped to the currently selected form.year/form.week — used for
+  // the weekly color-share summary and the duplicate-week-entry check.
+  // Deliberately NOT the full org history: see recentEntries below.
+  const [weekEntries, setWeekEntries] = useState<YieldEntry[]>([]);
+  // Cursor-paginated "Recent Entries" table state. loadedRecentEntries grows
+  // as "Show more entries" is clicked; recentEntriesCollapsed toggles
+  // between showing just the newest 7 and the full loaded list so
+  // "Show less" doesn't need to discard already-fetched data.
+  const [loadedRecentEntries, setLoadedRecentEntries] = useState<YieldEntry[]>([]);
+  const [recentEntriesCursor, setRecentEntriesCursor] = useState<string | null>(null);
+  const [recentEntriesHasMore, setRecentEntriesHasMore] = useState(false);
+  const [recentEntriesCollapsed, setRecentEntriesCollapsed] = useState(true);
+  const [recentEntriesLoadingMore, setRecentEntriesLoadingMore] = useState(false);
+  const [recentEntriesError, setRecentEntriesError] = useState<string | null>(null);
   const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -397,17 +419,10 @@ export function KgEntriesTab() {
     setError(null);
 
     try {
-      const [optionsResponse, entriesResponse] = await Promise.all([
-        apiFetch(OPTIONS_URL),
-        apiFetch(ENTRIES_URL)
-      ]);
+      const optionsResponse = await apiFetch(OPTIONS_URL);
 
       if (!optionsResponse.ok) {
         throw new Error(`Failed to load entry options (${optionsResponse.status})`);
-      }
-
-      if (!entriesResponse.ok) {
-        throw new Error(`Failed to load entries (${entriesResponse.status})`);
       }
 
       const optionsData = (await optionsResponse.json()) as {
@@ -415,14 +430,12 @@ export function KgEntriesTab() {
         yieldSizes: YieldSizeOption[];
       };
 
-      const entriesData = (await entriesResponse.json()) as YieldEntry[];
       const sortedSizes = [...optionsData.yieldSizes].sort(
         (a, b) => a.sort_order - b.sort_order
       );
 
       setVarieties(optionsData.varieties);
       setYieldSizes(sortedSizes);
-      setEntries(entriesData);
 
       setForm((current) => {
         const hasCurrentVariety = optionsData.varieties.some(
@@ -451,6 +464,111 @@ export function KgEntriesTab() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Scoped to a single variety-independent year/week so the weekly
+  // color-share summary and the duplicate-entry check never need the full
+  // organization history.
+  async function fetchWeekEntries(year: number, week: number) {
+    try {
+      const res = await apiFetch(`${ENTRIES_URL}?year=${year}&week=${week}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as YieldEntry[];
+      setWeekEntries(data);
+    } catch {
+      // Non-critical — the weekly summary/duplicate check will just retry next time.
+    }
+  }
+
+  async function checkExistingWeekEntry(
+    varietyId: string,
+    year: number,
+    week: number
+  ): Promise<YieldEntry | null> {
+    try {
+      const res = await apiFetch(`${ENTRIES_URL}?year=${year}&week=${week}`);
+      if (!res.ok) return null;
+      const data = (await res.json()) as YieldEntry[];
+      return data.find((e) => e.variety_id === varietyId) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Re-fetches the Recent Entries table from the top, sized to whatever was
+  // already loaded (at least the initial 7) so a create/update/delete is
+  // reflected immediately without ever pulling the full org history.
+  async function refreshRecentEntries() {
+    const limit = Math.max(loadedRecentEntries.length, RECENT_ENTRIES_INITIAL_LIMIT);
+
+    try {
+      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${limit}`);
+      if (!res.ok) return;
+      const body = (await res.json()) as RecentEntriesResponse;
+      setLoadedRecentEntries(body.entries);
+      setRecentEntriesCursor(body.nextCursor);
+      setRecentEntriesHasMore(body.hasMore);
+    } catch {
+      // Non-critical — the table simply keeps showing its last known state.
+    }
+  }
+
+  async function fetchInitialRecentEntries() {
+    setRecentEntriesError(null);
+
+    try {
+      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${RECENT_ENTRIES_INITIAL_LIMIT}`);
+      if (!res.ok) {
+        throw new Error(`Failed to load recent entries (${res.status})`);
+      }
+      const body = (await res.json()) as RecentEntriesResponse;
+      setLoadedRecentEntries(body.entries);
+      setRecentEntriesCursor(body.nextCursor);
+      setRecentEntriesHasMore(body.hasMore);
+      setRecentEntriesCollapsed(true);
+    } catch (fetchError) {
+      setRecentEntriesError(
+        fetchError instanceof Error ? fetchError.message : "Failed to load recent entries"
+      );
+    }
+  }
+
+  async function handleShowMoreEntries() {
+    // Already-loaded rows just need to be revealed — no network round trip.
+    if (recentEntriesCollapsed && loadedRecentEntries.length > RECENT_ENTRIES_INITIAL_LIMIT) {
+      setRecentEntriesCollapsed(false);
+      return;
+    }
+
+    if (!recentEntriesHasMore) {
+      return;
+    }
+
+    setRecentEntriesError(null);
+    setRecentEntriesLoadingMore(true);
+
+    try {
+      const cursorParam = recentEntriesCursor ? `&cursor=${encodeURIComponent(recentEntriesCursor)}` : "";
+      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${RECENT_ENTRIES_PAGE_LIMIT}${cursorParam}`);
+      if (!res.ok) {
+        throw new Error(`Failed to load more entries (${res.status})`);
+      }
+      const body = (await res.json()) as RecentEntriesResponse;
+      setLoadedRecentEntries((current) => [...current, ...body.entries]);
+      setRecentEntriesCursor(body.nextCursor);
+      setRecentEntriesHasMore(body.hasMore);
+      setRecentEntriesCollapsed(false);
+    } catch (fetchError) {
+      setRecentEntriesError(
+        fetchError instanceof Error ? fetchError.message : "Failed to load more entries"
+      );
+    } finally {
+      setRecentEntriesLoadingMore(false);
+    }
+  }
+
+  function handleShowLessEntries() {
+    setRecentEntriesCollapsed(true);
   }
 
   async function fetchPendingWeeks() {
@@ -738,9 +856,17 @@ export function KgEntriesTab() {
 
   useEffect(() => {
     void fetchOptionsAndEntries();
+    void fetchInitialRecentEntries();
     void fetchPendingWeeks();
     void fetchSizeRules();
   }, []);
+
+  useEffect(() => {
+    const year = Number(form.year);
+    const week = Number(form.week);
+    if (!Number.isInteger(year) || !Number.isInteger(week)) return;
+    void fetchWeekEntries(year, week);
+  }, [form.year, form.week]);
 
   async function executeSubmit(submitPayload: {
     variety_id: string;
@@ -793,13 +919,10 @@ export function KgEntriesTab() {
       }));
       setIsEntryModalOpen(false);
 
-      const entriesResponse = await apiFetch(ENTRIES_URL);
-      if (!entriesResponse.ok) {
-        throw new Error("Saved, but failed to refresh entries");
-      }
-
-      const entriesData = (await entriesResponse.json()) as YieldEntry[];
-      setEntries(entriesData);
+      await Promise.all([
+        fetchWeekEntries(submitPayload.year, submitPayload.week),
+        refreshRecentEntries()
+      ]);
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -861,13 +984,15 @@ export function KgEntriesTab() {
       return;
     }
 
-    // For new entries, check if a weekly entry already exists and ask for confirmation
+    // For new entries, check if a weekly entry already exists and ask for confirmation.
+    // Fetched fresh (rather than relying on the reactive weekEntries state) so a
+    // just-changed year/week can't race the in-flight weekEntries fetch and miss
+    // an existing entry.
     if (!editingId) {
-      const existingEntry = entries.find(
-        (e) =>
-          e.variety_id === submitPayload.variety_id &&
-          e.year === submitPayload.year &&
-          e.week === submitPayload.week
+      const existingEntry = await checkExistingWeekEntry(
+        submitPayload.variety_id,
+        submitPayload.year,
+        submitPayload.week
       );
 
       if (existingEntry) {
@@ -948,13 +1073,10 @@ export function KgEntriesTab() {
         setEditingId(null);
       }
 
-      const entriesResponse = await apiFetch(ENTRIES_URL);
-      if (!entriesResponse.ok) {
-        throw new Error("Deleted, but failed to refresh entries");
-      }
-
-      const entriesData = (await entriesResponse.json()) as YieldEntry[];
-      setEntries(entriesData);
+      await Promise.all([
+        fetchWeekEntries(Number(form.year), Number(form.week)),
+        refreshRecentEntries()
+      ]);
     } catch (deleteError) {
       setError(
         deleteError instanceof Error
@@ -1051,13 +1173,10 @@ export function KgEntriesTab() {
   }
 
   async function refreshEntriesAfterImport() {
-    const entriesResponse = await apiFetch(ENTRIES_URL);
-    if (!entriesResponse.ok) {
-      return;
-    }
-
-    const entriesData = (await entriesResponse.json()) as YieldEntry[];
-    setEntries(entriesData);
+    await Promise.all([
+      fetchWeekEntries(Number(form.year), Number(form.week)),
+      refreshRecentEntries()
+    ]);
   }
 
   interface ColorGroupData {
@@ -1071,15 +1190,27 @@ export function KgEntriesTab() {
     }>;
   }
 
+  const visibleRecentEntries = useMemo(
+    () =>
+      recentEntriesCollapsed
+        ? loadedRecentEntries.slice(0, RECENT_ENTRIES_INITIAL_LIMIT)
+        : loadedRecentEntries,
+    [loadedRecentEntries, recentEntriesCollapsed]
+  );
+
+  const canExpandRecentEntries =
+    (recentEntriesCollapsed && loadedRecentEntries.length > RECENT_ENTRIES_INITIAL_LIMIT) ||
+    recentEntriesHasMore;
+
   const colorGroups = useMemo(() => {
     const selectedYear = Number(form.year);
     const selectedWeek = Number(form.week);
 
-    const weekEntries = entries.filter(
+    const matchingWeekEntries = weekEntries.filter(
       (entry) => entry.year === selectedYear && entry.week === selectedWeek
     );
 
-    if (weekEntries.length === 0) {
+    if (matchingWeekEntries.length === 0) {
       return [];
     }
 
@@ -1090,7 +1221,7 @@ export function KgEntriesTab() {
 
     const grouped = new Map<VarietyColor, Map<string, YieldEntry>>();
 
-    for (const entry of weekEntries) {
+    for (const entry of matchingWeekEntries) {
       const variety = varietyMap.get(entry.variety_id);
       if (!variety) continue;
 
@@ -1130,7 +1261,7 @@ export function KgEntriesTab() {
     }
 
     return result;
-  }, [entries, form.year, form.week, varieties]);
+  }, [weekEntries, form.year, form.week, varieties]);
 
   const pdfPreviewFailures = useMemo(
     () => pdfPreviewFiles.filter((file): file is PdfPreviewFileFailure => !file.success),
@@ -1776,10 +1907,11 @@ export function KgEntriesTab() {
 
           {error && <p className="form-error">{error}</p>}
           {successMessage && <p className="form-success">{successMessage}</p>}
+          {recentEntriesError && <p className="form-error">{recentEntriesError}</p>}
 
-          {entries.length === 0 && <p>No yield entries yet.</p>}
+          {loadedRecentEntries.length === 0 && !recentEntriesError && <p>No yield entries yet.</p>}
 
-          {entries.length > 0 && (
+          {loadedRecentEntries.length > 0 && (
             <>
             <div className="varieties-table-wrapper yield-entry-table-wrapper">
               <table className="varieties-table yield-entry-table">
@@ -1797,7 +1929,7 @@ export function KgEntriesTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.slice(0, 7).map((entry) => (
+                  {visibleRecentEntries.map((entry) => (
                     <tr key={entry.id}>
                       <td>{entry.variety_name}</td>
                       <td>{entry.year}</td>
@@ -1830,7 +1962,28 @@ export function KgEntriesTab() {
                 </tbody>
               </table>
             </div>
-            <p className="recent-entries-footer">Showing 7 most recent entries</p>
+
+            <div className="recent-entries-pagination">
+              {canExpandRecentEntries ? (
+                <button
+                  type="button"
+                  className="cases-entry-open-button"
+                  onClick={handleShowMoreEntries}
+                  disabled={recentEntriesLoadingMore}
+                >
+                  {recentEntriesLoadingMore ? "Loading..." : "Show more entries"}
+                </button>
+              ) : (
+                loadedRecentEntries.length > RECENT_ENTRIES_INITIAL_LIMIT && (
+                  <p className="recent-entries-footer">All entries loaded.</p>
+                )
+              )}
+              {!recentEntriesCollapsed && loadedRecentEntries.length > RECENT_ENTRIES_INITIAL_LIMIT && (
+                <button type="button" className="cases-entry-open-button" onClick={handleShowLessEntries}>
+                  Show less
+                </button>
+              )}
+            </div>
             </>
           )}
         </div>

@@ -2101,6 +2101,18 @@ body {
   text-align: right;
 }
 
+.recent-entries-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.recent-entries-pagination .recent-entries-footer {
+  margin: 0;
+}
+
 .sync-button {
   padding: 0.5rem 0.9rem;
   background: var(--brand-soft);
