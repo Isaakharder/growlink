@@ -8,7 +8,10 @@ import "dotenv/config";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import express from "express";
+import type { AddressInfo } from "node:net";
 import { supabase } from "../../config/supabase";
+import { csvMappingTemplatesRouter } from "../csvMappingTemplates";
 import {
   parseAndMatchCsvFile,
   listTemplatesForOrg,
@@ -586,5 +589,46 @@ test("importCsvTemplateGroup: a variety with no matching active organization var
   } finally {
     await cleanupTemplateGroup(template.template_group_id);
     await cleanupSourceFile(uploaded.sourceFileId);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Real-HTTP route-ordering regression. Every test above calls the exported
+// functions directly, which never exercises Express's route matching — that
+// gap is exactly how GET /csv-templates/:id being registered before GET
+// /csv-templates/pending shipped once: Express matched "pending" as the :id
+// param, getTemplateById("pending") threw on the invalid-uuid filter, and
+// the pending list silently returned "Failed to load the CSV template."
+// instead of the pending queue. This mounts the real router (bypassing only
+// requireOrganizationContext's JWT check, which can't be faked in a test —
+// see adminUploadKeysDataSourceType.test.ts for the same constraint) so the
+// literal-segment route is proven to win over the :id route by actual HTTP
+// request, not by reading the source.
+// ---------------------------------------------------------------------------
+
+const REAL_DENVA_OWNER_ID = "55317379-f5a0-4163-b668-f2adc6e08ac4";
+
+test("GET /csv-templates/pending is not shadowed by GET /csv-templates/:id (route registration order)", async () => {
+  const testApp = express();
+  testApp.use(express.json());
+  testApp.use((req, _res, next) => {
+    req.userId = REAL_DENVA_OWNER_ID;
+    req.organizationId = DENVA_ORG_ID;
+    next();
+  });
+  testApp.use("/api", csvMappingTemplatesRouter);
+
+  const server = testApp.listen(0);
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/csv-templates/pending`);
+    const body = (await res.json().catch(() => null)) as { files?: unknown; message?: string } | null;
+
+    assert.equal(res.status, 200, `expected the pending list, got: ${JSON.stringify(body)}`);
+    assert.ok(Array.isArray(body?.files), "response should have a files array, not a template-detail/error shape");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
 });

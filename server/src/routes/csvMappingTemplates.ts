@@ -1267,6 +1267,19 @@ csvMappingTemplatesRouter.get("/csv-templates", canView, async (req, res) => {
   }
 });
 
+// Must be registered before GET /csv-templates/:id — otherwise Express
+// matches "pending" as the :id param (a single path segment satisfies :id)
+// and getTemplateById("pending") fails with a Postgres invalid-uuid error,
+// surfacing as the detail route's generic 500 instead of the pending list.
+csvMappingTemplatesRouter.get("/csv-templates/pending", canView, async (req, res) => {
+  try {
+    const items = await listPendingCsvTemplateImports(req.organizationId);
+    return res.json({ files: items });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load pending CSV imports.", "csv-templates pending list error:");
+  }
+});
+
 csvMappingTemplatesRouter.get("/csv-templates/:id", canView, async (req, res) => {
   try {
     const row = await getTemplateById(req.organizationId, String(req.params.id));
@@ -1353,15 +1366,6 @@ csvMappingTemplatesRouter.post("/csv-templates/preview", canView, async (req, re
     return res.json(result);
   } catch (error) {
     return handleKnownError(res, error, "Failed to build CSV preview.", "csv-templates preview error:");
-  }
-});
-
-csvMappingTemplatesRouter.get("/csv-templates/pending", canView, async (req, res) => {
-  try {
-    const items = await listPendingCsvTemplateImports(req.organizationId);
-    return res.json({ files: items });
-  } catch (error) {
-    return handleKnownError(res, error, "Failed to load pending CSV imports.", "csv-templates pending list error:");
   }
 });
 
