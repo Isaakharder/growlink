@@ -15,8 +15,25 @@ type UploadKeyRow = {
   status: "active" | "revoked";
   dataSourceType: string;
   hasTemplate: boolean;
+  hasActiveCsvTemplate: boolean;
   createdAt: string;
   lastUsedAt: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+type DataSourceChangeConfirmState = {
+  keyId: string;
+  label: string;
+  organizationId: string;
+  organizationName: string;
+  oldType: string;
+  newType: string;
+};
+
+type NoActiveTemplateBlockState = {
+  organizationId: string;
+  organizationName: string;
 };
 
 type ImportRunRow = {
@@ -120,6 +137,11 @@ export function AdminGrowlinkAgentPage() {
   const [keyDeleteConfirm, setKeyDeleteConfirm] = useState<{ ids: string[] } | null>(null);
   const [keyDeleteBusy, setKeyDeleteBusy] = useState(false);
   const [keyDeleteResult, setKeyDeleteResult] = useState<string | null>(null);
+  const [dataSourceChangeConfirm, setDataSourceChangeConfirm] = useState<DataSourceChangeConfirmState | null>(null);
+  const [dataSourceChangeBusyId, setDataSourceChangeBusyId] = useState<string | null>(null);
+  const [dataSourceChangeError, setDataSourceChangeError] = useState<string | null>(null);
+  const [dataSourceChangeResult, setDataSourceChangeResult] = useState<string | null>(null);
+  const [noActiveTemplateBlock, setNoActiveTemplateBlock] = useState<NoActiveTemplateBlockState | null>(null);
 
   const agentHealth = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -415,6 +437,59 @@ export function AdminGrowlinkAgentPage() {
     }
   }
 
+  function handleDataSourceTypeSelect(row: UploadKeyRow, newType: string) {
+    if (newType === row.dataSourceType || dataSourceChangeBusyId) return;
+    setDataSourceChangeError(null);
+    setDataSourceChangeResult(null);
+    setNoActiveTemplateBlock(null);
+    setDataSourceChangeConfirm({
+      keyId: row.id,
+      label: row.label,
+      organizationId: row.organizationId,
+      organizationName: row.organizationName,
+      oldType: row.dataSourceType,
+      newType
+    });
+  }
+
+  async function executeDataSourceTypeChange() {
+    if (!dataSourceChangeConfirm) return;
+    const { keyId, newType, organizationId, organizationName, label } = dataSourceChangeConfirm;
+    setDataSourceChangeBusyId(keyId);
+    setDataSourceChangeError(null);
+    try {
+      const res = await apiFetch(`/api/admin/upload-keys/${keyId}/data-source-type`, {
+        method: "PATCH",
+        body: JSON.stringify({ dataSourceType: newType })
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        code?: string;
+        organizationId?: string;
+        unchanged?: boolean;
+      };
+      if (!res.ok) {
+        if (res.status === 409 && body.code === "no_active_template") {
+          setNoActiveTemplateBlock({ organizationId: body.organizationId ?? organizationId, organizationName });
+        } else {
+          setDataSourceChangeError(getResponseMessage(body, "Failed to update data source type."));
+        }
+        return;
+      }
+      setDataSourceChangeResult(
+        body.unchanged
+          ? `${label} is already set to ${dataSourceLabel(newType)}.`
+          : `${label} now uses ${dataSourceLabel(newType)}.`
+      );
+      await loadKeys();
+    } catch {
+      setDataSourceChangeError("Network error while updating data source type.");
+    } finally {
+      setDataSourceChangeBusyId(null);
+      setDataSourceChangeConfirm(null);
+    }
+  }
+
   function toggleImportRunSelection(id: string) {
     setSelectedImportRunIds((prev) => {
       const next = new Set(prev);
@@ -666,6 +741,35 @@ export function AdminGrowlinkAgentPage() {
 
         {managementError && <p style={errorBannerStyle}>{managementError}</p>}
         {keyDeleteResult && <p style={successBannerStyle}>{keyDeleteResult}</p>}
+        {dataSourceChangeError && <p style={errorBannerStyle}>{dataSourceChangeError}</p>}
+        {dataSourceChangeResult && <p style={successBannerStyle}>{dataSourceChangeResult}</p>}
+        {noActiveTemplateBlock && (
+          <div style={{ ...errorBannerStyle, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <span>
+              {noActiveTemplateBlock.organizationName} has no active CSV template yet, so this key can&rsquo;t switch to
+              CSV Template import.
+            </span>
+            <span>
+              An organization admin needs to build and activate one under Yield &gt; Data Entry &gt; CSV Import
+              Templates first.
+            </span>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <Link to="/yield/data-entry" style={configureLinkStyle}>
+                Open CSV Import Templates
+              </Link>
+              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                (opens in your own organization&rsquo;s context, not {noActiveTemplateBlock.organizationName}&rsquo;s)
+              </span>
+              <button
+                type="button"
+                onClick={() => setNoActiveTemplateBlock(null)}
+                style={{ ...secondaryButtonStyle, marginTop: 0 }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.65rem", flexWrap: "wrap", gap: "0.5rem" }}>
@@ -761,6 +865,17 @@ export function AdminGrowlinkAgentPage() {
                       <td style={tableCellStyle}>
                         {row.status === "active" ? (
                           <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+                            <select
+                              aria-label={`Change data source type for ${row.label}`}
+                              value={row.dataSourceType}
+                              disabled={dataSourceChangeBusyId === row.id}
+                              onChange={(e) => handleDataSourceTypeSelect(row, e.target.value)}
+                              style={smallSelectStyle}
+                            >
+                              <option value="flowmaster">FlowMaster</option>
+                              <option value="generic_csv">Generic CSV</option>
+                              <option value="csv_template">CSV Template</option>
+                            </select>
                             {row.dataSourceType === "generic_csv" && (
                               <Link
                                 to={`/admin/import-templates/${row.id}`}
@@ -1120,6 +1235,39 @@ export function AdminGrowlinkAgentPage() {
           </div>
         </div>
       )}
+
+      {dataSourceChangeConfirm && (
+        <div style={modalOverlayStyle}>
+          <div style={modalPanelStyle}>
+            <h3 style={modalTitleStyle}>
+              Switch {dataSourceChangeConfirm.label} to {dataSourceLabel(dataSourceChangeConfirm.newType)}?
+            </h3>
+            <p style={modalBodyStyle}>
+              Future CSV uploads on this key will use the {dataSourceLabel(dataSourceChangeConfirm.newType)} system.
+              PDF uploads will continue to use the FlowMaster PDF path regardless of this setting.
+            </p>
+            <p style={modalBodyStyle}>The upload key itself is not changed or regenerated.</p>
+            <div style={modalActionsStyle}>
+              <button
+                type="button"
+                onClick={() => setDataSourceChangeConfirm(null)}
+                style={secondaryButtonStyle}
+                disabled={dataSourceChangeBusyId === dataSourceChangeConfirm.keyId}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void executeDataSourceTypeChange()}
+                style={primaryButtonStyle}
+                disabled={dataSourceChangeBusyId === dataSourceChangeConfirm.keyId}
+              >
+                {dataSourceChangeBusyId === dataSourceChangeConfirm.keyId ? "Saving..." : "Confirm change"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1253,6 +1401,16 @@ const secondaryButtonStyle: CSSProperties = {
   cursor: "pointer",
   fontSize: "0.8rem",
   fontWeight: 500
+};
+
+const smallSelectStyle: CSSProperties = {
+  padding: "0.25rem 0.4rem",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  fontSize: "0.78rem",
+  color: "var(--text)",
+  background: "var(--surface-soft)",
+  outline: "none"
 };
 
 const smallDangerButtonStyle: CSSProperties = {

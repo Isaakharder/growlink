@@ -16,7 +16,7 @@ adminUploadKeysRouter.get(
   async (_req: Request, res: Response) => {
     const { data: keys, error: keysError } = await supabase
       .from("organization_upload_keys")
-      .select("id, organization_id, label, status, created_at, last_used_at, data_source_type")
+      .select("id, organization_id, label, status, created_at, last_used_at, data_source_type, updated_at, updated_by")
       .order("created_at", { ascending: false });
 
     if (keysError) {
@@ -43,6 +43,22 @@ adminUploadKeysRouter.get(
     const organizationIds = Array.from(
       new Set((keys ?? []).map(key => key.organization_id).filter(Boolean))
     );
+
+    // Orgs with at least one active, current csv_mapping_templates row —
+    // lets the UI pre-emptively disable/warn on the csv_template option
+    // rather than only finding out after a rejected PATCH.
+    const orgsWithActiveCsvTemplate = new Set<string>();
+    if (organizationIds.length > 0) {
+      const { data: activeTemplates } = await supabase
+        .from("csv_mapping_templates")
+        .select("organization_id")
+        .in("organization_id", organizationIds)
+        .eq("is_current", true)
+        .eq("is_active", true);
+      for (const t of activeTemplates ?? []) {
+        orgsWithActiveCsvTemplate.add(t.organization_id as string);
+      }
+    }
 
     const organizationsById = new Map<string, string>();
     if (organizationIds.length > 0) {
@@ -75,8 +91,11 @@ adminUploadKeysRouter.get(
         status: key.status,
         dataSourceType: key.data_source_type ?? "flowmaster",
         hasTemplate: templateKeyIds.has(key.id),
+        hasActiveCsvTemplate: orgsWithActiveCsvTemplate.has(key.organization_id),
         createdAt: key.created_at,
-        lastUsedAt: key.last_used_at
+        lastUsedAt: key.last_used_at,
+        updatedAt: key.updated_at ?? null,
+        updatedBy: key.updated_by ?? null
       }))
     });
   }
@@ -161,6 +180,138 @@ adminUploadKeysRouter.post(
       createdAt: inserted.created_at,
       key: rawKey
     });
+  }
+);
+
+export const UPLOAD_KEY_DATA_SOURCE_TYPES = ["flowmaster", "generic_csv", "csv_template"] as const;
+export type UploadKeyDataSourceType = (typeof UPLOAD_KEY_DATA_SOURCE_TYPES)[number];
+
+export class UploadKeyValidationError extends Error {}
+export class UploadKeyNotFoundError extends Error {}
+export class UploadKeyNoActiveTemplateError extends Error {
+  organizationId: string;
+  constructor(message: string, organizationId: string) {
+    super(message);
+    this.organizationId = organizationId;
+  }
+}
+
+export type UpdateDataSourceTypeResult = {
+  id: string;
+  dataSourceType: UploadKeyDataSourceType;
+  unchanged: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+/**
+ * Core logic for changing an existing upload key's data_source_type,
+ * exported so it's directly testable without needing a real admin auth
+ * session (see the integration tests — requireAdminUser needs a live
+ * Supabase-issued JWT for a user id baked into ADMIN_USER_IDS at process
+ * startup, which can't be fabricated in a test). Never touches key_hash —
+ * the raw key is never regenerated or returned by this path.
+ */
+export async function updateUploadKeyDataSourceType(
+  keyId: string,
+  dataSourceType: unknown,
+  adminUserId: string | null
+): Promise<UpdateDataSourceTypeResult> {
+  if (
+    typeof dataSourceType !== "string" ||
+    !UPLOAD_KEY_DATA_SOURCE_TYPES.includes(dataSourceType as UploadKeyDataSourceType)
+  ) {
+    throw new UploadKeyValidationError(`dataSourceType must be one of: ${UPLOAD_KEY_DATA_SOURCE_TYPES.join(", ")}`);
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("organization_upload_keys")
+    .select("id, organization_id, label, data_source_type")
+    .eq("id", keyId)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+  if (!existing) throw new UploadKeyNotFoundError("Upload key not found.");
+
+  if (existing.data_source_type === dataSourceType) {
+    return { id: existing.id, dataSourceType: existing.data_source_type as UploadKeyDataSourceType, unchanged: true, updatedAt: null, updatedBy: null };
+  }
+
+  if (dataSourceType === "csv_template") {
+    const { count, error: templateCheckError } = await supabase
+      .from("csv_mapping_templates")
+      .select("*", { count: "exact", head: true })
+      .eq("organization_id", existing.organization_id)
+      .eq("is_current", true)
+      .eq("is_active", true);
+
+    if (templateCheckError) throw templateCheckError;
+
+    if (!count || count === 0) {
+      throw new UploadKeyNoActiveTemplateError(
+        "This organization has no active CSV template yet. Ask them to create and approve one " +
+          "in Yield Data Entry → CSV Templates before switching this key.",
+        existing.organization_id
+      );
+    }
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from("organization_upload_keys")
+    .update({
+      data_source_type: dataSourceType,
+      updated_at: new Date().toISOString(),
+      updated_by: adminUserId
+    })
+    .eq("id", keyId)
+    .select("id, data_source_type, updated_at, updated_by")
+    .single();
+
+  if (updateError || !updated) throw updateError ?? new Error("Failed to update upload key.");
+
+  console.log(
+    `Admin upload key data_source_type changed: key_id=${keyId} label="${existing.label}" ` +
+      `${existing.data_source_type} -> ${dataSourceType} by user=${adminUserId ?? "(unknown)"}`
+  );
+
+  return {
+    id: updated.id,
+    dataSourceType: updated.data_source_type as UploadKeyDataSourceType,
+    unchanged: false,
+    updatedAt: updated.updated_at,
+    updatedBy: updated.updated_by
+  };
+}
+
+// PATCH /admin/upload-keys/:id/data-source-type
+// Changes an EXISTING key's routing without regenerating or exposing the
+// raw key value. Switching to 'csv_template' is blocked unless the
+// organization already has an active (current + active) saved template —
+// otherwise a csv_template key would immediately start dropping every CSV
+// into "needs_template" with nothing to actually process it.
+adminUploadKeysRouter.patch(
+  "/admin/upload-keys/:id/data-source-type",
+  requireAdminUser,
+  async (req: Request, res: Response) => {
+    try {
+      const result = await updateUploadKeyDataSourceType(String(req.params.id), req.body?.dataSourceType, req.userId ?? null);
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof UploadKeyValidationError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof UploadKeyNotFoundError) {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error instanceof UploadKeyNoActiveTemplateError) {
+        return res.status(409).json({
+          message: error.message,
+          code: "no_active_template",
+          organizationId: error.organizationId
+        });
+      }
+      return sendSafeError(res, 500, "Failed to update upload key.", "Upload key data-source-type update error:", error);
+    }
   }
 );
 
