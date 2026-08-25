@@ -1,6 +1,6 @@
 import cors from "cors";
 import express from "express";
-import { rateLimit } from "express-rate-limit";
+import { createApiLimiter, createStrictLimiter, createPreviewLimiter } from "./middleware/rateLimiters";
 import { requireOrganizationContext } from "./middleware/requireOrganizationContext";
 import { adminCustomersRouter } from "./routes/adminCustomers";
 import { adminDocklinkIntegrationsRouter } from "./routes/adminDocklinkIntegrations";
@@ -62,25 +62,12 @@ function buildAllowedOrigins(): Set<string> {
 
 const allowedOrigins = buildAllowedOrigins();
 
-// General API limiter — applied to every /api route.
-// Generous enough not to affect normal use, tight enough to blunt abuse.
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,   // 15 minutes
-  limit: 300,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  message: { message: "Too many requests. Please try again later." }
-});
-
-// Strict limiter for expensive write-heavy endpoints:
-// DockLink sync (full-table fetch) and PDF batch upload (CPU + DB intensive).
-const strictLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,   // 15 minutes
-  limit: 20,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  message: { message: "Too many requests for this operation. Please wait before retrying." }
-});
+// See ./middleware/rateLimiters.ts for the limiter configurations and why
+// preview/save use separate buckets. Factories (not shared singletons) so
+// tests can construct fresh, isolated instances.
+const apiLimiter = createApiLimiter();
+const strictLimiter = createStrictLimiter();
+const previewLimiter = createPreviewLimiter();
 
 const app = express();
 
@@ -108,6 +95,10 @@ app.use(
       }
     },
     allowedHeaders: ["Authorization", "Content-Type", "X-Upload-Key", "X-Integration-Key"],
+    // Custom response headers aren't readable by browser JS unless listed
+    // here — exposes rate-limit info for callers that prefer headers over
+    // the JSON body (the body always carries the same info regardless).
+    exposedHeaders: ["RateLimit", "RateLimit-Policy", "Retry-After"],
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
   })
@@ -121,6 +112,7 @@ app.use("/api/agent/pdf-import", strictLimiter);
 app.use("/api/integrations/docklink/sync-color-cases", strictLimiter);
 app.use("/api/integrations/docklink/sync-waste", strictLimiter);
 app.use("/api/pdf-import", strictLimiter);
+app.use("/api/csv-templates/preview", previewLimiter);
 app.use("/api/csv-templates", strictLimiter);
 
 app.use("/api", healthRouter);
