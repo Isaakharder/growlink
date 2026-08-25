@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../lib/api";
 import {
   MAPPING_TYPES,
@@ -180,6 +180,56 @@ type PendingCsvItem = {
   error: string | null;
 };
 
+type TemplateSummary = {
+  id: string;
+  templateGroupId: string;
+  name: string;
+  version: number;
+  isActive: boolean;
+  isCurrent: boolean;
+  delimiter: string;
+  headerRowIndex: number;
+  columnCount: number | null;
+  layoutSummary: string;
+  mappedFieldsCount: number;
+  rulesCount: number;
+  valueMappingsCount: number;
+  createdBy: string;
+  updatedBy: string;
+  createdByName: string;
+  updatedByName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type TemplateDetail = TemplateSummary & {
+  dataStartRowIndex: number;
+  dataEndRowIndex: number | null;
+  skipRowIndexes: number[];
+  blankRowBehavior: "skip" | "stop";
+  columnMappings: ColumnMapping[];
+  fixedCellMappings: FixedCellMapping[];
+  valueMappings: ValueMapping[];
+  rules: ConditionalRowRule[];
+};
+
+const TEMPLATE_FIELD_LABELS: Partial<Record<MappedField, string>> = {
+  variety: "Variety",
+  packed_date: "Pack Date",
+  lot_number: "Lot Number",
+  size_label: "Size Label",
+  size_weight_kg: "Size Weight kg",
+  average_fruit_weight_g: "Average Fruit Weight g",
+  run_number: "Run Number",
+  piece_count: "Piece Count",
+  market_grade: "Market/Grade",
+  year: "Year",
+  week: "Week",
+  waste_kg: "Waste kg",
+  total_lot_weight: "Total Lot Weight",
+  custom: "Custom"
+};
+
 type SourceFileGridResponse = {
   sourceFileId: string;
   filename: string;
@@ -310,6 +360,28 @@ export function CsvTemplateBuilderTab() {
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [restoredNotice, setRestoredNotice] = useState(false);
 
+  // ── Saved CSV Templates ─────────────────────────────────────────────────
+  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [highlightedTemplateId, setHighlightedTemplateId] = useState<string | null>(null);
+  const [viewingTemplate, setViewingTemplate] = useState<TemplateDetail | null>(null);
+  const [viewingTemplateLoading, setViewingTemplateLoading] = useState(false);
+  const [viewingTemplateError, setViewingTemplateError] = useState<string | null>(null);
+  const [testingTemplate, setTestingTemplate] = useState<TemplateSummary | null>(null);
+  const [testingBusy, setTestingBusy] = useState(false);
+  const [testResult, setTestResult] = useState<PreviewResponse | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [deleteConfirmTemplate, setDeleteConfirmTemplate] = useState<TemplateSummary | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [templateActionError, setTemplateActionError] = useState<string | null>(null);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editingTemplateName, setEditingTemplateName] = useState<string | null>(null);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const testFileInputRef = useRef<HTMLInputElement | null>(null);
+
   // ── Visual mapping tool state ──────────────────────────────────────────
   const [activeTool, setActiveTool] = useState<MappingType>("variety");
   const [packDateFormat, setPackDateFormat] = useState<DateFormat>("YYYY-MM-DD");
@@ -345,6 +417,7 @@ export function CsvTemplateBuilderTab() {
       setYieldSizes(body);
     })();
     void fetchPendingItems();
+    void fetchTemplates();
 
     // Restore any in-progress mapping work — e.g. after a refresh that
     // followed a failed/rate-limited save — so it is never silently lost.
@@ -361,7 +434,9 @@ export function CsvTemplateBuilderTab() {
     }
   }, []);
 
-  const isBuildingDraft = parsed !== null && (parsed.match.kind === "none" || (parsed.match.kind === "close" && closeMatchChoice === "build"));
+  const isBuildingDraft =
+    parsed !== null &&
+    (parsed.match.kind === "none" || (parsed.match.kind === "close" && closeMatchChoice === "build") || editingTemplateId !== null);
 
   // Persist in-progress mapping work locally (debounced) so a refresh —
   // including one that follows a failed or rate-limited save — never
@@ -411,6 +486,23 @@ export function CsvTemplateBuilderTab() {
       setPendingError(err instanceof Error ? err.message : "Failed to load pending CSV imports.");
     } finally {
       setPendingLoading(false);
+    }
+  }
+
+  async function fetchTemplates() {
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    try {
+      const res = await apiFetch(TEMPLATES_URL);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load saved templates (${res.status})`);
+      }
+      setTemplates((await res.json()) as TemplateSummary[]);
+    } catch (err) {
+      setTemplatesError(err instanceof Error ? err.message : "Failed to load saved templates.");
+    } finally {
+      setTemplatesLoading(false);
     }
   }
 
@@ -504,6 +596,8 @@ export function CsvTemplateBuilderTab() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const wasEditing = editingTemplateId;
+
     setUploadError(null);
     setUploading(true);
     setParsed(null);
@@ -512,7 +606,7 @@ export function CsvTemplateBuilderTab() {
     setCloseMatchChoice("pending");
     setDraft(emptyDraft());
     resetVisualState();
-    setTemplateName(file.name.replace(/\.csv$/i, ""));
+    setTemplateName(wasEditing && editingTemplateName ? editingTemplateName : file.name.replace(/\.csv$/i, ""));
 
     const formData = new FormData();
     formData.append("file", file);
@@ -527,7 +621,9 @@ export function CsvTemplateBuilderTab() {
       setParsed(body);
       setDraft((current) => ({ ...current, delimiter: body.delimiter }));
 
-      if (body.match.kind === "exact" && body.match.templateId) {
+      if (wasEditing) {
+        await loadTemplateIntoBuilder(wasEditing);
+      } else if (body.match.kind === "exact" && body.match.templateId) {
         setActiveTemplateId(body.match.templateId);
         await fetchPreviewForTemplate(body.sourceFileId, body.match.templateId);
       }
@@ -536,6 +632,48 @@ export function CsvTemplateBuilderTab() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  // Reverse-projects a saved template's column mappings into the visual
+  // tool's columnAssignments (best-effort: only the 9 user-facing field
+  // types are representable visually — anything else, e.g. an older
+  // template's market_grade/custom column, still loads into draft.rules/
+  // draft.columnMappings via the raw config but won't show as a colored
+  // column until re-assigned). Rules and value mappings load as-is into
+  // the Advanced editor and the Size/Market values panel respectively.
+  async function loadTemplateIntoBuilder(templateId: string) {
+    try {
+      const res = await apiFetch(`${TEMPLATES_URL}/${templateId}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load template for editing (${res.status})`);
+      }
+      const detail = (await res.json()) as TemplateDetail;
+
+      const nextAssignments: ColumnAssignments = new Map();
+      let packDate: DateFormat = "YYYY-MM-DD";
+      for (const m of detail.columnMappings) {
+        if ((MAPPING_TYPES as readonly string[]).includes(m.field)) {
+          nextAssignments.set(m.columnIndex, m.field as MappingType);
+          if (m.field === "packed_date" && m.dateFormat) packDate = m.dateFormat;
+        }
+      }
+      setColumnAssignments(nextAssignments);
+      setPackDateFormat(packDate);
+      setDraft((current) => ({
+        ...current,
+        headerRowIndex: detail.headerRowIndex,
+        dataStartRowIndex: detail.dataStartRowIndex,
+        dataEndRowIndex: detail.dataEndRowIndex,
+        skipRowIndexes: detail.skipRowIndexes,
+        blankRowBehavior: detail.blankRowBehavior,
+        fixedCellMappings: detail.fixedCellMappings,
+        valueMappings: detail.valueMappings,
+        rules: detail.rules
+      }));
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Failed to load the template's existing mappings.");
     }
   }
 
@@ -1002,15 +1140,49 @@ export function CsvTemplateBuilderTab() {
     void handleSaveTemplate();
   }
 
+  // Resets the builder to its idle "no file uploaded" state. Called ONLY
+  // after the server has actually confirmed a save succeeded — never on
+  // failure, so a failed/rate-limited save always leaves every mapping
+  // exactly as the user left it.
+  function clearBuilderAfterSave() {
+    // A preview request from just before the save may still be in flight
+    // (or queued in the debounce timer) — without cancelling it here, its
+    // response could arrive after the clear below and resurrect stale
+    // preview data. Aborting also resets lastPreviewPayloadRef implicitly
+    // via the next upload's fresh payload key.
+    if (previewDebounceRef.current) {
+      clearTimeout(previewDebounceRef.current);
+      previewDebounceRef.current = null;
+    }
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    lastPreviewPayloadRef.current = null;
+    setPreviewLoading(false);
+    setPreviewError(null);
+
+    setParsed(null);
+    setPreview(null);
+    setActiveTemplateId(null);
+    setCloseMatchChoice("pending");
+    setDraft(emptyDraft());
+    resetVisualState();
+    setTemplateName("");
+    setEditingTemplateId(null);
+    setEditingTemplateName(null);
+    setUploadError(null);
+  }
+
   async function handleSaveTemplate() {
     if (!parsed || savingRef.current) return;
     savingRef.current = true;
     setSaveConfirm(null);
     setSaving(true);
     setSaveStatus(null);
+    setSaveSuccessMessage(null);
     try {
-      const res = await apiFetch(TEMPLATES_URL, {
-        method: "POST",
+      const isEdit = editingTemplateId !== null;
+      const res = await apiFetch(isEdit ? `${TEMPLATES_URL}/${editingTemplateId}` : TEMPLATES_URL, {
+        method: isEdit ? "PUT" : "POST",
         body: JSON.stringify({
           name: templateName || "Untitled template",
           sourceFileId: parsed.sourceFileId,
@@ -1025,15 +1197,25 @@ export function CsvTemplateBuilderTab() {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Save failed (${res.status})`);
       }
-      const created = (await res.json()) as { id: string };
-      setActiveTemplateId(created.id);
-      setSaveStatus("Template saved.");
+      const savedTemplate = (await res.json()) as TemplateDetail;
+
+      // Confirmed by the server — safe to refresh the list and clear the
+      // builder now. Never leave the user wondering whether it saved.
+      setSaveSuccessMessage(
+        isEdit
+          ? `Template "${savedTemplate.name}" updated (now version ${savedTemplate.version}). See it in Saved CSV Templates below.`
+          : `Template "${savedTemplate.name}" saved. See it in Saved CSV Templates below.`
+      );
+      setHighlightedTemplateId(savedTemplate.id);
+      await fetchTemplates();
       clearPersistedBuilderState();
-      await fetchPreviewForTemplate(parsed.sourceFileId, created.id);
+      clearBuilderAfterSave();
     } catch (err) {
       // Deliberately does not touch draft/columnAssignments/rowIgnoreSelections —
       // a failed save must never lose the user's in-progress mapping work.
-      setSaveStatus(err instanceof Error ? err.message : "Failed to save template.");
+      setSaveStatus(
+        `Template was NOT saved: ${err instanceof Error ? err.message : "an unexpected error occurred."} Your mappings are unchanged — fix the issue and try Save again.`
+      );
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -1070,6 +1252,142 @@ export function CsvTemplateBuilderTab() {
     }
   }
 
+  // ── Saved CSV Templates: actions ───────────────────────────────────────
+
+  useEffect(() => {
+    if (!highlightedTemplateId) return;
+    const timeout = setTimeout(() => setHighlightedTemplateId(null), 5000);
+    return () => clearTimeout(timeout);
+  }, [highlightedTemplateId]);
+
+  async function handleViewMappings(template: TemplateSummary) {
+    setViewingTemplateLoading(true);
+    setViewingTemplateError(null);
+    setViewingTemplate(null);
+    try {
+      const res = await apiFetch(`${TEMPLATES_URL}/${template.id}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load template (${res.status})`);
+      }
+      setViewingTemplate((await res.json()) as TemplateDetail);
+    } catch (err) {
+      setViewingTemplateError(err instanceof Error ? err.message : "Failed to load template.");
+    } finally {
+      setViewingTemplateLoading(false);
+    }
+  }
+
+  function handleEditTemplate(template: TemplateSummary) {
+    setEditingTemplateId(template.id);
+    setEditingTemplateName(template.name);
+    setTemplateActionError(null);
+    fileInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  async function handleDuplicateTemplate(template: TemplateSummary) {
+    const name = window.prompt("Name for the duplicate:", `${template.name} (copy)`);
+    if (name === null) return;
+    setDuplicatingId(template.id);
+    setTemplateActionError(null);
+    try {
+      const res = await apiFetch(`${TEMPLATES_URL}/${template.id}/duplicate`, {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim() || undefined })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to duplicate template (${res.status})`);
+      }
+      const duplicated = (await res.json()) as TemplateDetail;
+      setHighlightedTemplateId(duplicated.id);
+      await fetchTemplates();
+    } catch (err) {
+      setTemplateActionError(err instanceof Error ? err.message : "Failed to duplicate template.");
+    } finally {
+      setDuplicatingId(null);
+    }
+  }
+
+  async function handleToggleActive(template: TemplateSummary) {
+    setTogglingId(template.id);
+    setTemplateActionError(null);
+    try {
+      const res = await apiFetch(`${TEMPLATES_URL}/${template.id}/active`, {
+        method: "PATCH",
+        body: JSON.stringify({ isActive: !template.isActive })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to update template status (${res.status})`);
+      }
+      await fetchTemplates();
+    } catch (err) {
+      setTemplateActionError(err instanceof Error ? err.message : "Failed to update template status.");
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  async function executeDeleteTemplate() {
+    if (!deleteConfirmTemplate) return;
+    const template = deleteConfirmTemplate;
+    setDeletingId(template.id);
+    setTemplateActionError(null);
+    try {
+      const res = await apiFetch(`${TEMPLATES_URL}/${template.id}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to delete template (${res.status})`);
+      }
+      await fetchTemplates();
+    } catch (err) {
+      setTemplateActionError(err instanceof Error ? err.message : "Failed to delete template.");
+    } finally {
+      setDeletingId(null);
+      setDeleteConfirmTemplate(null);
+    }
+  }
+
+  function handleTestClick(template: TemplateSummary) {
+    setTestingTemplate(template);
+    setTestResult(null);
+    setTestError(null);
+    testFileInputRef.current?.click();
+  }
+
+  async function handleTestFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !testingTemplate) return;
+    setTestingBusy(true);
+    setTestError(null);
+    setTestResult(null);
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const parseRes = await apiFetch(PARSE_GRID_URL, { method: "POST", body: formData });
+      if (!parseRes.ok) {
+        const body = (await parseRes.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Upload failed (${parseRes.status})`);
+      }
+      const parsedFile = (await parseRes.json()) as ParseGridResponse;
+      const previewRes = await apiFetch(PREVIEW_URL, {
+        method: "POST",
+        body: JSON.stringify({ sourceFileId: parsedFile.sourceFileId, templateId: testingTemplate.id })
+      });
+      if (!previewRes.ok) {
+        const body = (await previewRes.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Preview failed (${previewRes.status})`);
+      }
+      setTestResult((await previewRes.json()) as PreviewResponse);
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : "Failed to test this file against the template.");
+    } finally {
+      setTestingBusy(false);
+      if (testFileInputRef.current) testFileInputRef.current.value = "";
+    }
+  }
+
   const totalSourceKg = useMemo(() => {
     if (!preview) return 0;
     return preview.preview.groups.reduce((sum, g) => sum + g.reconciliation.rawRowWeightKg, 0);
@@ -1095,14 +1413,17 @@ export function CsvTemplateBuilderTab() {
 
       {rateLimitNotice && (
         <div className="form-error csv-template-rate-limit-notice">
-          <p>{rateLimitNotice.message}</p>
+          <p>
+            {rateLimitNotice.source === "save" ? <strong>Your template was NOT saved. </strong> : null}
+            {rateLimitNotice.message}
+          </p>
           <p>
             {rateLimitCountdown > 0
               ? `You can try again in ${rateLimitCountdown}s.`
               : "You can try again now."}
             {" "}
             {rateLimitNotice.source === "save"
-              ? "Your mapping work has not been lost — nothing was cleared."
+              ? "Nothing was cleared — your mappings are exactly as you left them."
               : "The grid is unaffected — your mappings are unchanged."}
           </p>
           {rateLimitCountdown === 0 && (
@@ -1118,6 +1439,13 @@ export function CsvTemplateBuilderTab() {
         </div>
       )}
 
+      {saveSuccessMessage && (
+        <div className="form-success csv-template-restored-notice">
+          <p>&#10003; {saveSuccessMessage}</p>
+          <button type="button" onClick={() => setSaveSuccessMessage(null)}>Dismiss</button>
+        </div>
+      )}
+
       <PendingCsvImportsSection
         items={pendingItems}
         loading={pendingLoading}
@@ -1130,7 +1458,15 @@ export function CsvTemplateBuilderTab() {
         onRefresh={fetchPendingItems}
       />
 
-      <h3>Upload a new file</h3>
+      <h3>{editingTemplateId ? `Editing "${editingTemplateName}"` : "Upload a new file"}</h3>
+      {editingTemplateId && (
+        <p>
+          Upload a CSV matching this template&rsquo;s layout to load its current mappings for editing.{" "}
+          <button type="button" onClick={() => { setEditingTemplateId(null); setEditingTemplateName(null); }}>
+            Cancel editing
+          </button>
+        </p>
+      )}
       <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={uploading} />
       {uploading && <p>Parsing file&hellip;</p>}
       {uploadError && <p className="form-error">{uploadError}</p>}
@@ -1330,9 +1666,9 @@ export function CsvTemplateBuilderTab() {
               placeholder="Template name (e.g. FlowMaster CSV Export)"
             />
             <button type="button" className="cases-entry-open-button" onClick={handleSaveClick} disabled={saving || !templateName.trim()}>
-              {saving ? "Saving..." : "Save as template"}
+              {saving ? "Saving..." : editingTemplateId ? "Save new version" : "Save as template"}
             </button>
-            {saveStatus && <span>{saveStatus}</span>}
+            {saveStatus && <span className="form-error">{saveStatus}</span>}
           </div>
         </>
       )}
@@ -1352,6 +1688,111 @@ export function CsvTemplateBuilderTab() {
             onImport={handleImportGroup}
           />
         </>
+      )}
+
+      <input
+        ref={testFileInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        style={{ display: "none" }}
+        onChange={handleTestFileChange}
+      />
+
+      <SavedTemplatesSection
+        templates={templates}
+        loading={templatesLoading}
+        error={templatesError}
+        actionError={templateActionError}
+        highlightedId={highlightedTemplateId}
+        duplicatingId={duplicatingId}
+        togglingId={togglingId}
+        deletingId={deletingId}
+        testingBusy={testingBusy}
+        testingTemplateId={testingTemplate?.id ?? null}
+        onRefresh={fetchTemplates}
+        onView={handleViewMappings}
+        onTest={handleTestClick}
+        onEdit={handleEditTemplate}
+        onDuplicate={handleDuplicateTemplate}
+        onToggleActive={handleToggleActive}
+        onDeleteRequest={setDeleteConfirmTemplate}
+      />
+
+      {(viewingTemplate || viewingTemplateLoading || viewingTemplateError) && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal csv-template-mappings-modal">
+            <h3>{viewingTemplate ? `${viewingTemplate.name} — mappings` : "Loading mappings…"}</h3>
+            {viewingTemplateLoading && <p>Loading&hellip;</p>}
+            {viewingTemplateError && <p className="form-error">{viewingTemplateError}</p>}
+            {viewingTemplate && <TemplateMappingsView template={viewingTemplate} />}
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => { setViewingTemplate(null); setViewingTemplateError(null); }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(testingTemplate && (testingBusy || testResult || testError)) && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal csv-template-mappings-modal">
+            <h3>Test &ldquo;{testingTemplate.name}&rdquo; with a CSV</h3>
+            {testingBusy && <p>Uploading and building a preview&hellip;</p>}
+            {testError && <p className="form-error">{testError}</p>}
+            {testResult && (
+              <>
+                {testResult.layoutMismatch && (
+                  <p className="form-error">This file&rsquo;s structure doesn&rsquo;t match the template. Review carefully.</p>
+                )}
+                {testResult.preview.validationIssues.length > 0 && (
+                  <ul className="form-error csv-template-issue-list">
+                    {testResult.preview.validationIssues.map((issue, i) => (
+                      <li key={i}>{issue.message}</li>
+                    ))}
+                  </ul>
+                )}
+                {testResult.preview.groups.length === 0 && <p>No data rows were found.</p>}
+                {testResult.preview.groups.map((group) => (
+                  <div key={group.groupKey} className="csv-template-preview-group">
+                    <h4>
+                      {group.varietyRaw ?? "Unknown variety"} &middot; {group.packedDate ?? "Not recorded"}
+                      {group.lotNumber ? ` · Lot ${group.lotNumber}` : ""}
+                    </h4>
+                    <table className="varieties-table">
+                      <thead><tr><th>Size</th><th>kg</th></tr></thead>
+                      <tbody>
+                        {Object.entries(group.sizeKg).map(([name, kg]) => (
+                          <tr key={name}><td>{name}</td><td>{kg.toFixed(2)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p>
+                      Recognized: {group.reconciliation.recognizedSizeKg.toFixed(2)} kg &middot; Ignored:{" "}
+                      {group.reconciliation.ignoredKg.toFixed(2)} kg &middot; Unresolved: {group.reconciliation.unresolvedKg.toFixed(2)} kg
+                    </p>
+                  </div>
+                ))}
+              </>
+            )}
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => { setTestingTemplate(null); setTestResult(null); setTestError(null); }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirmTemplate && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal">
+            <h3>Delete &ldquo;{deleteConfirmTemplate.name}&rdquo;?</h3>
+            <p>This cannot be undone. Templates that have been used for imports can&rsquo;t be deleted — disable them instead.</p>
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => setDeleteConfirmTemplate(null)}>Cancel</button>
+              <button type="button" className="danger" onClick={() => void executeDeleteTemplate()} disabled={deletingId === deleteConfirmTemplate.id}>
+                {deletingId === deleteConfirmTemplate.id ? "Deleting..." : "Delete Permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {nonTranslatableWarning && (
@@ -1954,6 +2395,182 @@ function PreviewPanel({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function templateBadgeStyle(isActive: boolean): CSSProperties {
+  return isActive
+    ? { display: "inline-block", borderRadius: 999, padding: "0.1rem 0.5rem", fontSize: "0.72rem", background: "#e8f8ef", color: "#1f7a42", border: "1px solid #bfe9cf" }
+    : { display: "inline-block", borderRadius: 999, padding: "0.1rem 0.5rem", fontSize: "0.72rem", background: "#f9eaea", color: "#8f2d1f", border: "1px solid #f0c5be" };
+}
+
+function SavedTemplatesSection({
+  templates,
+  loading,
+  error,
+  actionError,
+  highlightedId,
+  duplicatingId,
+  togglingId,
+  deletingId,
+  testingBusy,
+  testingTemplateId,
+  onRefresh,
+  onView,
+  onTest,
+  onEdit,
+  onDuplicate,
+  onToggleActive,
+  onDeleteRequest
+}: {
+  templates: TemplateSummary[];
+  loading: boolean;
+  error: string | null;
+  actionError: string | null;
+  highlightedId: string | null;
+  duplicatingId: string | null;
+  togglingId: string | null;
+  deletingId: string | null;
+  testingBusy: boolean;
+  testingTemplateId: string | null;
+  onRefresh: () => void;
+  onView: (t: TemplateSummary) => void;
+  onTest: (t: TemplateSummary) => void;
+  onEdit: (t: TemplateSummary) => void;
+  onDuplicate: (t: TemplateSummary) => void;
+  onToggleActive: (t: TemplateSummary) => void;
+  onDeleteRequest: (t: TemplateSummary) => void;
+}) {
+  return (
+    <div className="csv-template-pending-section csv-template-saved-section">
+      <div className="csv-template-pending-header">
+        <h3>Saved CSV Templates</h3>
+        <button type="button" onClick={onRefresh} disabled={loading}>
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {error && <p className="form-error">{error}</p>}
+      {actionError && <p className="form-error">{actionError}</p>}
+      {!loading && templates.length === 0 && !error && <p>No saved templates yet — build one above and it will appear here.</p>}
+
+      {templates.map((t) => (
+        <div key={t.id} className={`csv-template-pending-card${t.id === highlightedId ? " csv-template-cell-flash" : ""}`}>
+          <div className="csv-template-pending-card-header">
+            <strong>{t.name}</strong>
+            <span style={templateBadgeStyle(t.isActive)}>{t.isActive ? "Active" : "Disabled"}</span>
+          </div>
+          <p>
+            Version {t.version} &middot; {t.layoutSummary}
+          </p>
+          <p>
+            {t.mappedFieldsCount} mapped field{t.mappedFieldsCount === 1 ? "" : "s"} &middot; {t.rulesCount} rule{t.rulesCount === 1 ? "" : "s"} &middot;{" "}
+            {t.valueMappingsCount} value mapping{t.valueMappingsCount === 1 ? "" : "s"}
+          </p>
+          <p className="recent-entries-footer">
+            Created {formatUploadedAt(t.createdAt)} by {t.createdByName} &middot; Updated {formatUploadedAt(t.updatedAt)} by {t.updatedByName}
+          </p>
+          <div className="csv-template-saved-actions">
+            <button type="button" onClick={() => onView(t)}>View mappings</button>
+            <button type="button" onClick={() => onTest(t)} disabled={testingBusy && testingTemplateId === t.id}>
+              {testingBusy && testingTemplateId === t.id ? "Testing..." : "Test with a CSV"}
+            </button>
+            <button type="button" onClick={() => onEdit(t)}>Edit</button>
+            <button type="button" onClick={() => onDuplicate(t)} disabled={duplicatingId === t.id}>
+              {duplicatingId === t.id ? "Duplicating..." : "Duplicate"}
+            </button>
+            <button type="button" onClick={() => onToggleActive(t)} disabled={togglingId === t.id}>
+              {togglingId === t.id ? "Updating..." : t.isActive ? "Disable" : "Enable"}
+            </button>
+            <button type="button" className="danger" onClick={() => onDeleteRequest(t)} disabled={deletingId === t.id}>
+              {deletingId === t.id ? "Deleting..." : "Delete"}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TemplateMappingsView({ template }: { template: TemplateDetail }) {
+  return (
+    <div className="csv-template-mappings-view">
+      <p>
+        Version {template.version} &middot; {template.layoutSummary} &middot; <span style={templateBadgeStyle(template.isActive)}>{template.isActive ? "Active" : "Disabled"}</span>
+      </p>
+      <p className="recent-entries-footer">
+        Created {formatUploadedAt(template.createdAt)} by {template.createdByName} &middot; Updated {formatUploadedAt(template.updatedAt)} by {template.updatedByName}
+      </p>
+
+      <h4>Column mappings</h4>
+      <table className="varieties-table">
+        <thead>
+          <tr><th>Column</th><th>Field</th></tr>
+        </thead>
+        <tbody>
+          {template.columnMappings.map((m) => (
+            <tr key={m.columnIndex}>
+              <td>{columnLetter(m.columnIndex)}</td>
+              <td>{TEMPLATE_FIELD_LABELS[m.field] ?? m.field}{m.dateFormat ? ` (${m.dateFormat})` : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {template.fixedCellMappings.length > 0 && (
+        <>
+          <h4>Fixed cell mappings</h4>
+          <table className="varieties-table">
+            <thead>
+              <tr><th>Cell</th><th>Field</th></tr>
+            </thead>
+            <tbody>
+              {template.fixedCellMappings.map((m, i) => (
+                <tr key={i}>
+                  <td>{columnLetter(m.columnIndex)}{m.rowIndex + 1}</td>
+                  <td>{TEMPLATE_FIELD_LABELS[m.field] ?? m.field}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <h4>Size &amp; Market/Grade values ({template.valueMappings.length})</h4>
+      {template.valueMappings.length === 0 ? (
+        <p>None configured.</p>
+      ) : (
+        <table className="varieties-table">
+          <thead>
+            <tr><th>Raw value</th><th>Field</th><th>Action</th></tr>
+          </thead>
+          <tbody>
+            {template.valueMappings.map((v, i) => (
+              <tr key={i}>
+                <td>{v.rawValue}</td>
+                <td>{v.sourceField}</td>
+                <td>{v.action}{v.newSizeName ? `: ${v.newSizeName}` : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h4>Conditional row rules ({template.rules.length})</h4>
+      {template.rules.length === 0 ? (
+        <p>None configured.</p>
+      ) : (
+        template.rules.map((r) => (
+          <p key={r.id}>
+            #{r.priority}: {r.conditionLogic === "AND" ? "when all of" : "when any of"}{" "}
+            {r.conditions
+              .map((c) => `${c.field ? (TEMPLATE_FIELD_LABELS[c.field] ?? c.field) : `Column ${(c.columnIndex ?? 0) + 1}`} ${c.operator} ${c.value ?? ""}`)
+              .join("; ")}{" "}
+            &rarr; {r.action}
+          </p>
+        ))
+      )}
     </div>
   );
 }

@@ -111,20 +111,62 @@ export function templateRowToConfig(row: TemplateRow): TemplateConfig {
 
 export function templateRowToSummary(row: TemplateRow) {
   const headers = (row.fingerprint as { headers?: unknown[] } | null)?.headers;
+  const columnCount = Array.isArray(headers) ? headers.length : null;
+  const delimiterLabel = row.delimiter === "\t" ? "\\t" : row.delimiter;
+  const layoutSummary =
+    (columnCount !== null ? `${columnCount} column${columnCount === 1 ? "" : "s"}` : "unknown column count") +
+    ` · delimiter "${delimiterLabel}" · header row ${row.header_row_index + 1}`;
+
   return {
     id: row.id,
     templateGroupId: row.template_group_id,
     name: row.name,
     version: row.version,
     isActive: row.is_active,
+    isCurrent: row.is_current,
     delimiter: row.delimiter,
     headerRowIndex: row.header_row_index,
-    columnCount: Array.isArray(headers) ? headers.length : null,
+    columnCount,
+    layoutSummary,
+    mappedFieldsCount: (row.column_mappings?.length ?? 0) + (row.fixed_cell_mappings?.length ?? 0),
+    rulesCount: row.rules?.length ?? 0,
+    valueMappingsCount: row.value_mappings?.length ?? 0,
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+/**
+ * Resolves a batch of user ids to a display name each (full_name from user
+ * metadata, falling back to the email's local part) — same convention as
+ * foodSafety/services/actorIdentity.ts's single-user resolveActor, just
+ * batched and tolerant of individual lookup failures (a deleted/unknown
+ * user shows as "Unknown" rather than failing the whole list).
+ */
+export async function resolveUserDisplayNames(userIds: string[]): Promise<Map<string, string>> {
+  const uniqueIds = Array.from(new Set(userIds.filter(Boolean)));
+  const result = new Map<string, string>();
+
+  await Promise.all(
+    uniqueIds.map(async (id) => {
+      try {
+        const { data, error } = await supabase.auth.admin.getUserById(id);
+        if (error || !data?.user) {
+          result.set(id, "Unknown");
+          return;
+        }
+        const fullName =
+          typeof data.user.user_metadata?.full_name === "string" ? data.user.user_metadata.full_name.trim() : "";
+        result.set(id, fullName || data.user.email?.split("@")[0] || "Unknown");
+      } catch {
+        result.set(id, "Unknown");
+      }
+    })
+  );
+
+  return result;
 }
 
 export function templateRowToDetail(row: TemplateRow) {
@@ -1261,7 +1303,14 @@ csvMappingTemplatesRouter.post("/csv-templates/parse-grid", canView, upload.sing
 csvMappingTemplatesRouter.get("/csv-templates", canView, async (req, res) => {
   try {
     const rows = await listTemplatesForOrg(req.organizationId);
-    return res.json(rows.map(templateRowToSummary));
+    const names = await resolveUserDisplayNames(rows.flatMap((r) => [r.created_by, r.updated_by]));
+    return res.json(
+      rows.map((row) => ({
+        ...templateRowToSummary(row),
+        createdByName: names.get(row.created_by) ?? "Unknown",
+        updatedByName: names.get(row.updated_by) ?? "Unknown"
+      }))
+    );
   } catch (error) {
     return handleKnownError(res, error, "Failed to load CSV templates.", "csv-templates list error:");
   }
@@ -1284,7 +1333,12 @@ csvMappingTemplatesRouter.get("/csv-templates/:id", canView, async (req, res) =>
   try {
     const row = await getTemplateById(req.organizationId, String(req.params.id));
     if (!row) return res.status(404).json({ message: "Template not found." });
-    return res.json(templateRowToDetail(row));
+    const names = await resolveUserDisplayNames([row.created_by, row.updated_by]);
+    return res.json({
+      ...templateRowToDetail(row),
+      createdByName: names.get(row.created_by) ?? "Unknown",
+      updatedByName: names.get(row.updated_by) ?? "Unknown"
+    });
   } catch (error) {
     return handleKnownError(res, error, "Failed to load the CSV template.", "csv-templates detail error:");
   }

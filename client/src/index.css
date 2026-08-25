@@ -7310,3 +7310,24 @@ textarea.cleaning-checklist-response-input {
   gap: 0.6rem;
   margin-top: 1rem;
 }
+
+.csv-template-saved-section {
+  margin-top: 1.5rem;
+}
+
+.csv-template-saved-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.csv-template-mappings-modal {
+  max-width: 640px;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+}
+
+.csv-template-mappings-view h4 {
+  margin: 1rem 0 0.4rem;
+}
