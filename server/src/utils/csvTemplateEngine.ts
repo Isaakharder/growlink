@@ -238,8 +238,13 @@ function getMappingFormat(template: TemplateConfig, field: MappedField): ColumnM
 // Rule evaluation
 // ---------------------------------------------------------------------------
 
-function evaluateCondition(condition: RuleCondition, rowValues: ResolvedRowValues): boolean {
-  const raw = rowValues[condition.field] ?? null;
+function evaluateCondition(condition: RuleCondition, rowValues: ResolvedRowValues, grid: string[][], rowIndex: number): boolean {
+  const raw =
+    condition.columnIndex !== undefined
+      ? grid[rowIndex]?.[condition.columnIndex] ?? null
+      : condition.field !== undefined
+        ? (rowValues[condition.field] ?? null)
+        : null;
 
   switch (condition.operator) {
     case "is_blank":
@@ -257,11 +262,11 @@ function evaluateCondition(condition: RuleCondition, rowValues: ResolvedRowValue
   }
 }
 
-function evaluateRule(rule: ConditionalRowRule, rowValues: ResolvedRowValues): boolean {
+function evaluateRule(rule: ConditionalRowRule, rowValues: ResolvedRowValues, grid: string[][], rowIndex: number): boolean {
   if (rule.conditions.length === 0) return false;
   return rule.conditionLogic === "AND"
-    ? rule.conditions.every((c) => evaluateCondition(c, rowValues))
-    : rule.conditions.some((c) => evaluateCondition(c, rowValues));
+    ? rule.conditions.every((c) => evaluateCondition(c, rowValues, grid, rowIndex))
+    : rule.conditions.some((c) => evaluateCondition(c, rowValues, grid, rowIndex));
 }
 
 function normalizeValueKey(raw: string | null): string {
@@ -304,12 +309,14 @@ function resolveTargetSizeName(id: string | undefined, context: EngineContext): 
 function classifyRow(
   rowValues: ResolvedRowValues,
   template: TemplateConfig,
-  context: EngineContext
+  context: EngineContext,
+  grid: string[][],
+  rowIndex: number
 ): RowClassification {
   const sortedRules = [...template.rules].sort((a, b) => a.priority - b.priority);
 
   for (const rule of sortedRules) {
-    if (!evaluateRule(rule, rowValues)) continue;
+    if (!evaluateRule(rule, rowValues, grid, rowIndex)) continue;
 
     switch (rule.action) {
       case "ignore":
@@ -494,7 +501,7 @@ export function normalizeCsvWithTemplate(
     const wasteResult = parseRowNumber(rowValues, "waste_kg", template);
     const totalLotWeightResult = parseRowNumber(rowValues, "total_lot_weight", template);
 
-    const classification = classifyRow(rowValues, template, context);
+    const classification = classifyRow(rowValues, template, context, grid, rowIndex);
 
     const parseErrors: string[] = [];
     if (sizeWeight.error) parseErrors.push(sizeWeight.error);
@@ -742,6 +749,30 @@ export function validateNormalizedPreview(
         message: `Reconciliation difference of ${group.reconciliation.difference} kg is unexplained for ${group.groupKey}.`,
         groupKey: group.groupKey
       });
+    }
+
+    // Heuristic double-counting guard: a repeated lot-total column mapped
+    // as Size Weight kg (instead of the true per-row weight column) shows
+    // up as the identical value repeated across many rows of the same lot.
+    const includedWeights = group.rows.filter(
+      (r) => r.action === "included" && r.sizeWeightKg !== null && r.sizeWeightKg > 0
+    );
+    const weightRepeatCounts = new Map<number, number>();
+    for (const row of includedWeights) {
+      const key = row.sizeWeightKg as number;
+      weightRepeatCounts.set(key, (weightRepeatCounts.get(key) ?? 0) + 1);
+    }
+    for (const [weight, count] of weightRepeatCounts) {
+      if (count < 2) continue;
+      const repeatedTotalKg = weight * count;
+      if (group.reconciliation.recognizedSizeKg > 0 && repeatedTotalKg / group.reconciliation.recognizedSizeKg > 0.5) {
+        issues.push({
+          code: "possible_duplicate_weight_source",
+          message: `The column mapped to Size Weight kg has the same value (${weight}) repeated across ${count} rows of ${group.groupKey} — this looks like a lot total, not a per-row weight.`,
+          groupKey: group.groupKey
+        });
+        break;
+      }
     }
   }
 

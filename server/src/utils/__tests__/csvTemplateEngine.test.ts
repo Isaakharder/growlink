@@ -428,6 +428,61 @@ test("conditional rule with OR logic matches if either condition is true", () =>
   assert.ok(group.rows.every((r) => r.action === "ignored"));
 });
 
+test("raw-column condition: a rule can key off a column that was never mapped to any field", () => {
+  // "InternalCode" (column 2) is never given a ColumnMapping — the visual
+  // mapping tool needs rules to be able to reference a column like this
+  // (e.g. FlowMaster's MARKET) purely by position, without exposing it as
+  // one of the user-facing assignable field types.
+  const grid = [
+    ["Size", "Kg", "InternalCode"],
+    ["SM", "10", "X"],
+    ["SM", "5", "DROP"]
+  ];
+  const template = baseLayout({
+    columnMappings: [
+      { columnIndex: 0, field: "size_label" },
+      { columnIndex: 1, field: "size_weight_kg" }
+    ],
+    valueMappings: [{ sourceField: "size_label", rawValue: "SM", action: "map", targetSizeId: "s1" }],
+    rules: [{ id: "r1", priority: 1, conditionLogic: "AND", conditions: [{ columnIndex: 2, operator: "equals", value: "DROP" }], action: "ignore" }]
+  });
+  const preview = normalizeCsvWithTemplate(grid, template, ctx({ s1: "Small" }));
+  assert.equal(preview.groups[0].sizeKg["Small"], 10);
+  const droppedRow = preview.groups[0].rows.find((r) => r.rowIndex === 2);
+  assert.equal(droppedRow?.action, "ignored");
+  assert.equal(droppedRow?.matchedRuleId, "r1");
+});
+
+test("raw-column condition: an AND rule can mix a mapped field and a raw column together", () => {
+  const grid = [
+    ["Market", "Size", "Kg", "InternalCode"],
+    ["Class 1", "SM", "10", "DROP"],
+    ["Class 1", "SM", "20", "KEEP"]
+  ];
+  const template = baseLayout({
+    columnMappings: [
+      { columnIndex: 0, field: "market_grade" },
+      { columnIndex: 1, field: "size_label" },
+      { columnIndex: 2, field: "size_weight_kg" }
+    ],
+    valueMappings: [{ sourceField: "size_label", rawValue: "SM", action: "map", targetSizeId: "s1" }],
+    rules: [
+      {
+        id: "r1",
+        priority: 1,
+        conditionLogic: "AND",
+        conditions: [
+          { field: "market_grade", operator: "equals", value: "Class 1" },
+          { columnIndex: 3, operator: "equals", value: "DROP" }
+        ],
+        action: "ignore"
+      }
+    ]
+  });
+  const preview = normalizeCsvWithTemplate(grid, template, ctx({ s1: "Small" }));
+  assert.equal(preview.groups[0].sizeKg["Small"], 20);
+});
+
 test("ignore rule: matching rows contribute to ignoredKg, not recognizedSizeKg", () => {
   const grid = sizeGrid([["waste", "junk", "8"]]);
   const template = sizeTemplate({
@@ -620,6 +675,55 @@ test("validation: an explained difference (lot total accounted for by ignored kg
   assert.equal(group.reconciliation.ignoredKg, 8);
   assert.equal(group.reconciliation.difference, 0);
   assert.equal(preview.canImport, true);
+});
+
+test("validation: possible_duplicate_weight_source flags a value repeated across most of a lot's rows as Size Weight kg", () => {
+  const grid = sizeGrid([
+    ["Class 1", "SM", "500"],
+    ["Class 1", "MD", "500"],
+    ["Class 1", "LG", "500"]
+  ]);
+  const template = sizeTemplate({
+    valueMappings: [
+      { sourceField: "size_label", rawValue: "SM", action: "map", targetSizeId: "s1" },
+      { sourceField: "size_label", rawValue: "MD", action: "map", targetSizeId: "s2" },
+      { sourceField: "size_label", rawValue: "LG", action: "map", targetSizeId: "s3" }
+    ]
+  });
+  const preview = normalizeCsvWithTemplate(grid, template, ctx({ s1: "Small", s2: "Medium", s3: "Large" }));
+  assert.ok(preview.validationIssues.some((i) => i.code === "possible_duplicate_weight_source"));
+  assert.equal(preview.canImport, false);
+});
+
+test("validation: possible_duplicate_weight_source does NOT fire when rows legitimately have different weights", () => {
+  const grid = sizeGrid([
+    ["Class 1", "SM", "10"],
+    ["Class 1", "MD", "20"],
+    ["Class 1", "LG", "30"]
+  ]);
+  const template = sizeTemplate({
+    valueMappings: [
+      { sourceField: "size_label", rawValue: "SM", action: "map", targetSizeId: "s1" },
+      { sourceField: "size_label", rawValue: "MD", action: "map", targetSizeId: "s2" },
+      { sourceField: "size_label", rawValue: "LG", action: "map", targetSizeId: "s3" }
+    ]
+  });
+  const preview = normalizeCsvWithTemplate(grid, template, ctx({ s1: "Small", s2: "Medium", s3: "Large" }));
+  assert.ok(!preview.validationIssues.some((i) => i.code === "possible_duplicate_weight_source"));
+});
+
+test("validation: possible_duplicate_weight_source catches FlowMaster's real hazard — mapping the repeated lot-total WEIGHT column instead of the per-row one", () => {
+  const mistakenMappings: ColumnMapping[] = FM_COLUMN_MAPPINGS.map((m) =>
+    m.field === "size_weight_kg" ? { ...m, columnIndex: 11 } : m
+  );
+  const template = baseLayout({
+    columnMappings: mistakenMappings,
+    valueMappings: FM_VALUE_MAPPINGS,
+    rules: FM_RULES
+  });
+  const preview = normalizeCsvWithTemplate(fmGrid(), template, ctx(FM_SIZE_ID_TO_NAME));
+  assert.ok(preview.validationIssues.some((i) => i.code === "possible_duplicate_weight_source"));
+  assert.equal(preview.canImport, false);
 });
 
 test("validateNormalizedPreview is a standalone pure function usable outside the full engine run", () => {

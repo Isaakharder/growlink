@@ -94,7 +94,15 @@ export type ValueMapping = {
 export type RuleOperator = "equals" | "not_equals" | "contains" | "is_blank" | "is_not_blank";
 
 export type RuleCondition = {
-  field: MappedField;
+  /** Condition on an already-mapped field's resolved value. Exactly one of `field`/`columnIndex` is set. */
+  field?: MappedField;
+  /**
+   * Condition on a raw grid column's value directly, with no field mapping
+   * required. Lets the visual mapping tool key a rule off a column (e.g.
+   * FlowMaster's MARKET) that was never assigned one of the user-facing
+   * mapped-field types.
+   */
+  columnIndex?: number;
   operator: RuleOperator;
   /** Not required for is_blank / is_not_blank. */
   value?: string;
@@ -212,7 +220,8 @@ export type ValidationIssueCode =
   | "duplicate_raw_kg"
   | "subtotal_and_components_both_included"
   | "layout_mismatch"
-  | "unexplained_reconciliation_difference";
+  | "unexplained_reconciliation_difference"
+  | "possible_duplicate_weight_source";
 
 export type ValidationIssue = {
   code: ValidationIssueCode;

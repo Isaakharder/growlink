@@ -57,9 +57,19 @@ const FLOWMASTER_VALUE_MAPPINGS: ValueMapping[] = [
   { sourceField: "size_label", rawValue: "XXL", action: "create", newSizeName: `RegressionXXL-${randomUUID()}` }
 ];
 
-// Matches how this org's real flowmaster_size_rules are actually
-// configured in production (per the pdfImport.test.ts regression figure,
-// which only sums Class 1 SM-XXL): every other MARKET is ignored.
+// One valid, complete way to configure a FlowMaster template: explicitly
+// resolve every MARKET/SIZE1 value that appears in these 3 real files, so
+// the whole file imports cleanly end-to-end (used by the full-import test
+// below, which reproduces the pdfImport.test.ts regression figure of
+// Class 1 SM-XXL only).
+//
+// This is NOT a claim about what Denva's live flowmaster_size_rules table
+// actually contains today — it doesn't (verified live: only one row,
+// {NOMARKET}->create, plus ignoredSizeLabels=["{OVERSIZED}","ALL SIZES"]).
+// See "genuinely unresolved" test below, which uses that real live
+// configuration and shows Green/Doubles/24ct/underweight are pending
+// today, not auto-ignored — don't assume otherwise when building a
+// template from real saved org settings.
 const FLOWMASTER_RULES: ConditionalRowRule[] = [
   { id: "r-24ct", priority: 1, conditionLogic: "AND", conditions: [{ field: "market_grade", operator: "equals", value: "24ct" }], action: "ignore" },
   { id: "r-green", priority: 2, conditionLogic: "AND", conditions: [{ field: "market_grade", operator: "equals", value: "Green" }], action: "ignore" },
@@ -137,6 +147,46 @@ test("FlowMaster template built via the generic engine: lot 2608170362 (Aug 17) 
   for (const row of group.rows) {
     assert.notEqual(row.sizeWeightKg, 11118.075);
   }
+});
+
+test("FlowMaster template, built with Denva's genuinely live rules (no rules for Green/Doubles/24ct/underweight), leaves them unresolved rather than silently ignored", () => {
+  // Real, currently-live Denva settings verified against the DB during
+  // planning: flowmaster_size_rules has exactly one row ({NOMARKET}
+  // ->create, irrelevant here since MARKET is never blank in this file),
+  // and ignoredSizeLabels is ["{OVERSIZED}", "ALL SIZES"] — nothing else.
+  const liveConfig: TemplateConfig = {
+    ...flowMasterTemplateConfig(),
+    valueMappings: FLOWMASTER_VALUE_MAPPINGS,
+    rules: [
+      { id: "r-oversized", priority: 1, conditionLogic: "AND", conditions: [{ field: "size_label", operator: "equals", value: "{oversized}" }], action: "ignore" }
+      // No rule for 24ct / Green / Doubles / underweight — matches the
+      // real live DB exactly. Do not add ignore rules for them here.
+    ]
+  };
+
+  const grid = parseCsvGrid(LOT_AUG17, ",");
+  const preview = normalizeCsvWithTemplate(grid.rows, liveConfig, { sizeNameById: new Map(), alreadyImportedLotNumbers: new Set() });
+  const group = preview.groups[0];
+
+  const byMarket = (market: string) => group.rows.find((r) => r.marketGradeRaw === market);
+
+  // waste/{oversized} is ignored (matches ignoredSizeLabels).
+  assert.equal(byMarket("waste")?.action, "ignored");
+
+  // 24ct, Green, Doubles, and Class 1/underweight all have no saved rule
+  // today — they must surface as unresolved, not be guessed at.
+  assert.equal(byMarket("24ct")?.action, "unresolved");
+  assert.equal(byMarket("Green")?.action, "unresolved");
+  assert.equal(byMarket("Doubles")?.action, "unresolved");
+  const underweightRow = group.rows.find((r) => r.sizeLabelRaw === "underweight");
+  assert.equal(underweightRow?.action, "unresolved");
+
+  // The Class 1 SM-XXL total is still correct and unaffected.
+  assert.equal(roundToCents(group.reconciliation.directMappedKg), 9982.77);
+
+  // Unresolved, non-zero-kg rows block import until configured.
+  assert.equal(preview.canImport, false);
+  assert.ok(preview.validationIssues.some((i) => i.code === "unresolved_size_label"));
 });
 
 test("FlowMaster template built via the generic engine: each of the 3 real lots keeps its own distinct packed date", () => {

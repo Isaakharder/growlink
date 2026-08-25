@@ -1,5 +1,23 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../lib/api";
+import {
+  MAPPING_TYPES,
+  MAPPING_TYPE_LABELS,
+  MAPPING_TYPE_COLORS,
+  cellKey,
+  parseCellKey,
+  rectCells,
+  applySelectionModifier,
+  coversAllDataRows,
+  inferIgnoreRules,
+  plainLanguageIgnoreRule,
+  type MappingType,
+  type CellCoord,
+  type CellKey,
+  type ColumnAssignments,
+  type SelectionModifier,
+  type InferredIgnoreRule
+} from "./csvVisualMapping";
 
 // ---------------------------------------------------------------------------
 // Types mirroring server/src/utils/csvTemplateTypes.ts (kept independent —
@@ -71,7 +89,7 @@ type ValueMapping = {
 };
 
 type RuleOperator = "equals" | "not_equals" | "contains" | "is_blank" | "is_not_blank";
-type RuleCondition = { field: MappedField; operator: RuleOperator; value?: string };
+type RuleCondition = { field?: MappedField; columnIndex?: number; operator: RuleOperator; value?: string };
 type RuleAction = "map_to_size" | "ignore" | "distribute" | "treat_as_subtotal";
 type ConditionalRowRule = {
   id: string;
@@ -207,6 +225,62 @@ function columnLetter(index: number): string {
   return label;
 }
 
+const VISUAL_RULE_PREFIX = "visual-";
+
+type HistorySnapshot = {
+  columnAssignments: ColumnAssignments;
+  rowIgnoreSelections: Set<number>;
+};
+
+function cloneSnapshot(s: HistorySnapshot): HistorySnapshot {
+  return { columnAssignments: new Map(s.columnAssignments), rowIgnoreSelections: new Set(s.rowIgnoreSelections) };
+}
+
+// ---------------------------------------------------------------------------
+// Local persistence — so a failed save (rate-limited or otherwise) or an
+// accidental refresh never destroys in-progress mapping work. Persists the
+// full grid + draft + visual-tool state; restored automatically on mount.
+// ---------------------------------------------------------------------------
+
+const PERSIST_KEY = "growlink:csv-template-builder:draft:v1";
+
+type PersistedBuilderState = {
+  parsed: ParseGridResponse;
+  draft: DraftConfig;
+  columnAssignments: Array<[number, MappingType]>;
+  rowIgnoreSelections: number[];
+  packDateFormat: DateFormat;
+  templateName: string;
+  closeMatchChoice: "pending" | "use" | "build";
+  savedAt: number;
+};
+
+function savePersistedBuilderState(state: PersistedBuilderState) {
+  try {
+    window.localStorage.setItem(PERSIST_KEY, JSON.stringify(state));
+  } catch {
+    // Storage full/unavailable — persistence is a convenience, not required for correctness.
+  }
+}
+
+function loadPersistedBuilderState(): PersistedBuilderState | null {
+  try {
+    const raw = window.localStorage.getItem(PERSIST_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedBuilderState;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedBuilderState() {
+  try {
+    window.localStorage.removeItem(PERSIST_KEY);
+  } catch {
+    // Ignore — nothing to clean up if storage isn't available.
+  }
+}
+
 export function CsvTemplateBuilderTab() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -229,6 +303,40 @@ export function CsvTemplateBuilderTab() {
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [resumingPendingId, setResumingPendingId] = useState<string | null>(null);
 
+  // Single shared 429 notice for BOTH preview and save — whichever action
+  // hits its rate limit, this is the only place the message renders, so it
+  // never shows up twice (once from previewError, once from saveStatus).
+  const [rateLimitNotice, setRateLimitNotice] = useState<{ message: string; retryAt: number; source: "preview" | "save" } | null>(null);
+  const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
+  const [restoredNotice, setRestoredNotice] = useState(false);
+
+  // ── Visual mapping tool state ──────────────────────────────────────────
+  const [activeTool, setActiveTool] = useState<MappingType>("variety");
+  const [packDateFormat, setPackDateFormat] = useState<DateFormat>("YYYY-MM-DD");
+  const [columnAssignments, setColumnAssignments] = useState<ColumnAssignments>(new Map());
+  const [rowIgnoreSelections, setRowIgnoreSelections] = useState<Set<number>>(new Set());
+  const [selection, setSelection] = useState<Set<CellKey>>(new Set());
+  const [flashCells, setFlashCells] = useState<Set<CellKey>>(new Set());
+  const [rowClickHint, setRowClickHint] = useState<string | null>(null);
+  const [ignoreHint, setIgnoreHint] = useState<string | null>(null);
+  const [nonTranslatableWarning, setNonTranslatableWarning] = useState<string | null>(null);
+  const [clearAllConfirm, setClearAllConfirm] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [saveConfirm, setSaveConfirm] = useState<{ rules: InferredIgnoreRule[]; unresolvedRows: number[] } | null>(null);
+  const [past, setPast] = useState<HistorySnapshot[]>([]);
+  const [future, setFuture] = useState<HistorySnapshot[]>([]);
+  const isDraggingRef = useRef(false);
+  const dragAnchorRef = useRef<CellCoord | null>(null);
+  const lastAnchorRef = useRef<CellCoord | null>(null);
+
+  // Preview-request lifecycle: only one in flight at a time (aborting any
+  // obsolete one), a debounce timer, and the last payload actually sent so
+  // an unchanged draft never re-submits.
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPreviewPayloadRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
+
   useEffect(() => {
     void (async () => {
       const res = await apiFetch(YIELD_SIZES_URL);
@@ -237,7 +345,56 @@ export function CsvTemplateBuilderTab() {
       setYieldSizes(body);
     })();
     void fetchPendingItems();
+
+    // Restore any in-progress mapping work — e.g. after a refresh that
+    // followed a failed/rate-limited save — so it is never silently lost.
+    const persisted = loadPersistedBuilderState();
+    if (persisted) {
+      setParsed(persisted.parsed);
+      setDraft(persisted.draft);
+      setColumnAssignments(new Map(persisted.columnAssignments));
+      setRowIgnoreSelections(new Set(persisted.rowIgnoreSelections));
+      setPackDateFormat(persisted.packDateFormat);
+      setTemplateName(persisted.templateName);
+      setCloseMatchChoice(persisted.closeMatchChoice);
+      setRestoredNotice(true);
+    }
   }, []);
+
+  const isBuildingDraft = parsed !== null && (parsed.match.kind === "none" || (parsed.match.kind === "close" && closeMatchChoice === "build"));
+
+  // Persist in-progress mapping work locally (debounced) so a refresh —
+  // including one that follows a failed or rate-limited save — never
+  // destroys it. Cleared on a successful save (see handleSaveTemplate) or
+  // when the user explicitly starts over with a new upload.
+  useEffect(() => {
+    if (!parsed || !isBuildingDraft) return;
+    const timeout = setTimeout(() => {
+      savePersistedBuilderState({
+        parsed,
+        draft,
+        columnAssignments: Array.from(columnAssignments.entries()),
+        rowIgnoreSelections: Array.from(rowIgnoreSelections),
+        packDateFormat,
+        templateName,
+        closeMatchChoice,
+        savedAt: Date.now()
+      });
+    }, 800);
+    return () => clearTimeout(timeout);
+  }, [parsed, isBuildingDraft, draft, columnAssignments, rowIgnoreSelections, packDateFormat, templateName, closeMatchChoice]);
+
+  // Live countdown for the shared rate-limit notice.
+  useEffect(() => {
+    if (!rateLimitNotice) {
+      setRateLimitCountdown(0);
+      return;
+    }
+    const tick = () => setRateLimitCountdown(Math.max(0, Math.ceil((rateLimitNotice.retryAt - Date.now()) / 1000)));
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [rateLimitNotice]);
 
   async function fetchPendingItems() {
     setPendingLoading(true);
@@ -255,6 +412,20 @@ export function CsvTemplateBuilderTab() {
     } finally {
       setPendingLoading(false);
     }
+  }
+
+  function resetVisualState() {
+    setColumnAssignments(new Map());
+    setRowIgnoreSelections(new Set());
+    setSelection(new Set());
+    setPast([]);
+    setFuture([]);
+    setActiveTool("variety");
+    setPackDateFormat("YYYY-MM-DD");
+    setNonTranslatableWarning(null);
+    setSaveConfirm(null);
+    setRestoredNotice(false);
+    clearPersistedBuilderState();
   }
 
   // "Set up CSV Template" — resumes the grid builder from an already-uploaded
@@ -275,7 +446,8 @@ export function CsvTemplateBuilderTab() {
       setActiveTemplateId(null);
       setCloseMatchChoice(body.match.kind === "close" ? "pending" : "build");
       setTemplateName(body.filename.replace(/\.csv$/i, ""));
-      setDraft((current) => ({ ...emptyDraft(), delimiter: body.delimiter, headerRowIndex: 0, dataStartRowIndex: 1, valueMappings: current.valueMappings }));
+      setDraft((current) => ({ ...emptyDraft(), delimiter: body.delimiter, headerRowIndex: 0, dataStartRowIndex: 1, valueMappings: current.valueMappings, rules: current.rules }));
+      resetVisualState();
       setParsed({
         sourceFileId: body.sourceFileId,
         grid: body.grid,
@@ -339,6 +511,7 @@ export function CsvTemplateBuilderTab() {
     setActiveTemplateId(null);
     setCloseMatchChoice("pending");
     setDraft(emptyDraft());
+    resetVisualState();
     setTemplateName(file.name.replace(/\.csv$/i, ""));
 
     const formData = new FormData();
@@ -366,78 +539,180 @@ export function CsvTemplateBuilderTab() {
     }
   }
 
+  // Parses a 429 response body (see server/src/middleware/rateLimiters.ts)
+  // and records ONE shared notice — this is the single place a rate-limit
+  // message is ever shown, so preview and save hitting 429 back-to-back
+  // never renders the same message twice.
+  async function handleRateLimited(res: Response, source: "preview" | "save") {
+    const body = (await res.json().catch(() => null)) as { message?: string; retryAfterSeconds?: number } | null;
+    const retryAfterSeconds = body?.retryAfterSeconds ?? Number(res.headers.get("retry-after")) ?? 60;
+    setRateLimitNotice({
+      message: body?.message ?? "Too many requests. Please wait before retrying.",
+      retryAt: Date.now() + retryAfterSeconds * 1000,
+      source
+    });
+  }
+
   async function fetchPreviewForTemplate(sourceFileId: string, templateId: string) {
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+
     setPreviewLoading(true);
     setPreviewError(null);
     try {
       const res = await apiFetch(PREVIEW_URL, {
         method: "POST",
-        body: JSON.stringify({ sourceFileId, templateId })
+        body: JSON.stringify({ sourceFileId, templateId }),
+        signal: controller.signal
       });
+      if (res.status === 429) {
+        await handleRateLimited(res, "preview");
+        return;
+      }
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Preview failed (${res.status})`);
       }
       setPreview((await res.json()) as PreviewResponse);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setPreviewError(err instanceof Error ? err.message : "Failed to build preview.");
     } finally {
-      setPreviewLoading(false);
+      if (previewAbortRef.current === controller) {
+        setPreviewLoading(false);
+        previewAbortRef.current = null;
+      }
     }
   }
 
-  async function fetchPreviewForDraft(sourceFileId: string, draftConfig: DraftConfig) {
+  // Single-flight, cancellable, dedup'd preview fetch — the actual fix for
+  // "excessive preview requests": at most one request in flight (any prior
+  // one is aborted, not left to complete and race), and an unchanged
+  // payload (same sourceFileId + draftConfig) is never resubmitted.
+  async function fetchPreviewForDraft(sourceFileId: string, draftConfig: DraftConfig, payloadKey: string) {
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    lastPreviewPayloadRef.current = payloadKey;
+
     setPreviewLoading(true);
     setPreviewError(null);
     try {
       const res = await apiFetch(PREVIEW_URL, {
         method: "POST",
-        body: JSON.stringify({ sourceFileId, draftConfig })
+        body: JSON.stringify({ sourceFileId, draftConfig }),
+        signal: controller.signal
       });
+      if (res.status === 429) {
+        await handleRateLimited(res, "preview");
+        return;
+      }
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Preview failed (${res.status})`);
       }
       setPreview((await res.json()) as PreviewResponse);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return; // superseded by a newer request, not a real failure
       setPreviewError(err instanceof Error ? err.message : "Failed to build preview.");
       setPreview(null);
     } finally {
-      setPreviewLoading(false);
+      if (previewAbortRef.current === controller) {
+        setPreviewLoading(false);
+        previewAbortRef.current = null;
+      }
     }
   }
 
-  const isBuildingDraft = parsed !== null && (parsed.match.kind === "none" || (parsed.match.kind === "close" && closeMatchChoice === "build"));
+  // Every data row index per the current header/data-start/data-end/skip
+  // settings — mirrors the server's resolveDataRowIndexes closely enough
+  // for selection/inference purposes (final import always re-validates).
+  const dataRowIndexes = useMemo(() => {
+    if (!parsed) return [];
+    const skip = new Set(draft.skipRowIndexes);
+    const end = draft.dataEndRowIndex ?? parsed.grid.length - 1;
+    const indexes: number[] = [];
+    for (let i = draft.dataStartRowIndex; i <= end && i < parsed.grid.length; i += 1) {
+      if (i === draft.headerRowIndex) continue;
+      if (skip.has(i)) continue;
+      indexes.push(i);
+    }
+    return indexes;
+  }, [parsed, draft.headerRowIndex, draft.dataStartRowIndex, draft.dataEndRowIndex, draft.skipRowIndexes]);
 
-  // Debounced live preview whenever the draft mapping config changes, while building.
+  const visualIgnoreInference = useMemo(() => {
+    if (!parsed || rowIgnoreSelections.size === 0) return { rules: [] as InferredIgnoreRule[], unresolvedRows: [] as number[] };
+    const kept = dataRowIndexes.filter((r) => !rowIgnoreSelections.has(r));
+    return inferIgnoreRules(Array.from(rowIgnoreSelections), kept, parsed.grid, columnAssignments, parsed.grid[draft.headerRowIndex] ?? []);
+  }, [parsed, rowIgnoreSelections, dataRowIndexes, columnAssignments, draft.headerRowIndex]);
+
+  // Keeps draft.columnMappings / draft.rules in sync with the visual tool's
+  // state — the visual tool is the single source of truth for both; the
+  // Advanced editor's manually-added rules (any id not prefixed "visual-")
+  // are preserved untouched alongside the regenerated visual ones.
   useEffect(() => {
+    setDraft((current) => {
+      const columnMappings: ColumnMapping[] = [];
+      for (const [columnIndex, field] of columnAssignments) {
+        if (field === "ignore") continue;
+        const mapping: ColumnMapping = { columnIndex, field: field as MappedField };
+        if (field === "packed_date") mapping.dateFormat = packDateFormat;
+        columnMappings.push(mapping);
+      }
+
+      const manualRules = current.rules.filter((r) => !r.id.startsWith(VISUAL_RULE_PREFIX));
+      const visualRules: ConditionalRowRule[] = visualIgnoreInference.rules.map((r, i) => ({
+        id: `${VISUAL_RULE_PREFIX}${r.columnIndex}-${i}`,
+        priority: i + 1,
+        conditionLogic: "OR",
+        action: "ignore",
+        conditions: [
+          r.mappedField && r.mappedField !== "ignore"
+            ? { field: r.mappedField as MappedField, operator: "equals" as const, value: r.value }
+            : { columnIndex: r.columnIndex, operator: "equals" as const, value: r.value }
+        ]
+      }));
+
+      return { ...current, columnMappings, rules: [...manualRules, ...visualRules] };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columnAssignments, packDateFormat, visualIgnoreInference]);
+
+  // Debounced live preview whenever the draft mapping config changes, while
+  // building. Guarded three ways against "excessive preview requests":
+  // (1) a payload-content hash skips the fetch entirely when the draft
+  // hasn't actually changed (e.g. a re-render that produced a new object
+  // reference with identical content), so this can never loop even if an
+  // effect dependency's reference churns without a real change; (2) the
+  // debounce timer is cleared/restarted on every dependency change, so a
+  // burst of edits collapses into one request; (3) fetchPreviewForDraft
+  // itself aborts any still-in-flight request before starting a new one.
+  useEffect(() => {
+    if (previewDebounceRef.current) {
+      clearTimeout(previewDebounceRef.current);
+      previewDebounceRef.current = null;
+    }
     if (!parsed || !isBuildingDraft) return;
     const hasSizeWeight = draft.columnMappings.some((m) => m.field === "size_weight_kg") || draft.fixedCellMappings.some((m) => m.field === "size_weight_kg");
     if (!hasSizeWeight && draft.columnMappings.length === 0 && draft.fixedCellMappings.length === 0) return;
 
-    const timeout = setTimeout(() => {
-      void fetchPreviewForDraft(parsed.sourceFileId, draft);
-    }, 400);
-    return () => clearTimeout(timeout);
+    const payloadKey = JSON.stringify({ sourceFileId: parsed.sourceFileId, draft });
+    if (payloadKey === lastPreviewPayloadRef.current) return;
+
+    previewDebounceRef.current = setTimeout(() => {
+      previewDebounceRef.current = null;
+      void fetchPreviewForDraft(parsed.sourceFileId, draft, payloadKey);
+    }, 500);
+
+    return () => {
+      if (previewDebounceRef.current) {
+        clearTimeout(previewDebounceRef.current);
+        previewDebounceRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, parsed, isBuildingDraft]);
-
-  function setColumnField(columnIndex: number, field: MappedField) {
-    setDraft((current) => ({
-      ...current,
-      columnMappings: [
-        ...current.columnMappings.filter((m) => m.columnIndex !== columnIndex),
-        ...(field === "ignore" ? [] : [{ columnIndex, field }])
-      ]
-    }));
-  }
-
-  function setColumnDateFormat(columnIndex: number, dateFormat: DateFormat) {
-    setDraft((current) => ({
-      ...current,
-      columnMappings: current.columnMappings.map((m) => (m.columnIndex === columnIndex ? { ...m, dateFormat } : m))
-    }));
-  }
 
   function toggleFixedCell(rowIndex: number, columnIndex: number, field: MappedField) {
     setDraft((current) => {
@@ -451,17 +726,10 @@ export function CsvTemplateBuilderTab() {
     });
   }
 
-  const columnFieldByIndex = useMemo(() => {
-    const map = new Map<number, MappedField>();
-    for (const m of draft.columnMappings) map.set(m.columnIndex, m.field);
-    return map;
-  }, [draft.columnMappings]);
-
   const fixedCellKeys = useMemo(() => new Set(draft.fixedCellMappings.map((m) => `${m.rowIndex}:${m.columnIndex}`)), [draft.fixedCellMappings]);
 
   // Every unique raw value seen in mapped Size Label / Market Grade columns
-  // across the current preview's rows, with total kg — the spec's "show all
-  // unique detected values with their raw kg totals" requirement.
+  // across the current preview's rows, with total kg.
   const uniqueValues = useMemo(() => {
     if (!preview) return { sizeLabels: [] as Array<{ value: string; kg: number }>, marketGrades: [] as Array<{ value: string; kg: number }> };
 
@@ -516,8 +784,228 @@ export function CsvTemplateBuilderTab() {
     setDraft((current) => ({ ...current, rules: current.rules.filter((r) => r.id !== id) }));
   }
 
+  // ── Visual mapping tool: selection + undo/redo ─────────────────────────
+
+  function currentSnapshot(): HistorySnapshot {
+    return cloneSnapshot({ columnAssignments, rowIgnoreSelections });
+  }
+
+  // Call BEFORE mutating columnAssignments/rowIgnoreSelections — captures
+  // the pre-change state onto the undo stack and clears any redo stack
+  // (a fresh change invalidates whatever could have been redone).
+  function pushHistory() {
+    setPast((p) => [...p, currentSnapshot()].slice(-50));
+    setFuture([]);
+  }
+
+  function handleUndo() {
+    if (past.length === 0) return;
+    const prev = past[past.length - 1];
+    setFuture((f) => [currentSnapshot(), ...f]);
+    setPast((p) => p.slice(0, -1));
+    setColumnAssignments(new Map(prev.columnAssignments));
+    setRowIgnoreSelections(new Set(prev.rowIgnoreSelections));
+  }
+
+  function handleRedo() {
+    if (future.length === 0) return;
+    const next = future[0];
+    setPast((p) => [...p, currentSnapshot()]);
+    setFuture((f) => f.slice(1));
+    setColumnAssignments(new Map(next.columnAssignments));
+    setRowIgnoreSelections(new Set(next.rowIgnoreSelections));
+  }
+
+  function clearSelection() {
+    setSelection(new Set());
+  }
+
+  function requestClearAllMappings() {
+    if (columnAssignments.size === 0 && rowIgnoreSelections.size === 0) return;
+    setClearAllConfirm(true);
+  }
+
+  function executeClearAllMappings() {
+    pushHistory();
+    setColumnAssignments(new Map());
+    setRowIgnoreSelections(new Set());
+    setSelection(new Set());
+    setClearAllConfirm(false);
+  }
+
+  function flash(cells: CellKey[]) {
+    setFlashCells(new Set(cells));
+    setTimeout(() => setFlashCells(new Set()), 600);
+  }
+
+  function applyFieldToColumn(columnIndex: number, cells: CellCoord[]) {
+    const rows = cells.filter((c) => c.col === columnIndex).map((c) => c.row);
+    if (!coversAllDataRows(rows, dataRowIndexes)) {
+      setNonTranslatableWarning(
+        `This selection doesn't cover the whole column, and assigning "${MAPPING_TYPE_LABELS[activeTool]}" to only part of a column isn't supported — select the entire column instead (click its header, or drag through every row), or use Ignore on the rows that don't belong.`
+      );
+      return;
+    }
+    pushHistory();
+    setColumnAssignments((cur) => {
+      const next = new Map(cur);
+      next.set(columnIndex, activeTool);
+      return next;
+    });
+    flash(rows.map((r) => cellKey(r, columnIndex)));
+  }
+
+  function applyIgnoreToCells(cells: CellCoord[]) {
+    const byColumn = new Map<number, number[]>();
+    for (const c of cells) {
+      if (!byColumn.has(c.col)) byColumn.set(c.col, []);
+      byColumn.get(c.col)!.push(c.row);
+    }
+    let appliedAny = false;
+    let partialAny = false;
+    const flashed: CellKey[] = [];
+    pushHistory();
+    setColumnAssignments((cur) => {
+      const next = new Map(cur);
+      for (const [col, rows] of byColumn) {
+        if (coversAllDataRows(rows, dataRowIndexes)) {
+          next.set(col, "ignore");
+          appliedAny = true;
+          for (const r of rows) flashed.push(cellKey(r, col));
+        } else {
+          partialAny = true;
+        }
+      }
+      return next;
+    });
+    if (flashed.length > 0) flash(flashed);
+    if (partialAny) {
+      setIgnoreHint(
+        appliedAny
+          ? "Some selected columns were marked Ignore; partial-column selections were skipped — select a whole column, or use the row-number gutter to exclude specific rows entirely."
+          : "Select a whole column to mark it Ignore, or use the row-number gutter to exclude specific rows entirely."
+      );
+      setTimeout(() => setIgnoreHint(null), 4000);
+    }
+  }
+
+  function toggleRowIgnore(rowIndexes: number[], modifier: SelectionModifier) {
+    pushHistory();
+    setRowIgnoreSelections((cur) => {
+      if (modifier === "toggle") {
+        const next = new Set(cur);
+        for (const r of rowIndexes) {
+          if (next.has(r)) next.delete(r);
+          else next.add(r);
+        }
+        return next;
+      }
+      if (modifier === "range") {
+        return new Set([...cur, ...rowIndexes]);
+      }
+      // replace
+      return new Set(rowIndexes);
+    });
+  }
+
+  function cellsFromInteraction(anchor: CellCoord, target: CellCoord): CellCoord[] {
+    return rectCells(anchor, target).filter((c) => dataRowIndexes.includes(c.row));
+  }
+
+  function handleCellMouseDown(row: number, col: number, e: ReactMouseEvent) {
+    if (e.shiftKey && lastAnchorRef.current) {
+      const cells = cellsFromInteraction(lastAnchorRef.current, { row, col });
+      commitCells(cells, "range");
+      return;
+    }
+    const anchor = { row, col };
+    dragAnchorRef.current = anchor;
+    isDraggingRef.current = true;
+    lastAnchorRef.current = anchor;
+    if (e.ctrlKey || e.metaKey) {
+      commitCells([anchor], "toggle");
+    } else {
+      setSelection(new Set([cellKey(row, col)]));
+    }
+  }
+
+  function handleCellMouseEnter(row: number, col: number, e: ReactMouseEvent) {
+    if (!isDraggingRef.current || !dragAnchorRef.current) return;
+    if (e.buttons !== 1) {
+      isDraggingRef.current = false;
+      return;
+    }
+    const cells = cellsFromInteraction(dragAnchorRef.current, { row, col });
+    setSelection(new Set(cells.map((c) => cellKey(c.row, c.col))));
+  }
+
+  function handleCellMouseUp(row: number, col: number, e: ReactMouseEvent) {
+    const wasDragging = isDraggingRef.current;
+    isDraggingRef.current = false;
+    if (e.ctrlKey || e.metaKey || (e.shiftKey && lastAnchorRef.current)) return; // already committed on mousedown
+
+    if (wasDragging && dragAnchorRef.current) {
+      const cells = cellsFromInteraction(dragAnchorRef.current, { row, col });
+      commitCells(cells, "replace");
+    } else {
+      commitCells([{ row, col }], "replace");
+    }
+  }
+
+  function commitCells(cells: CellCoord[], modifier: SelectionModifier) {
+    setSelection((cur) => applySelectionModifier(cur, cells, modifier));
+    if (activeTool === "ignore") {
+      applyIgnoreToCells(cells);
+    } else {
+      const columns = new Set(cells.map((c) => c.col));
+      for (const col of columns) applyFieldToColumn(col, cells);
+    }
+  }
+
+  function handleColumnHeaderClick(columnIndex: number, e: ReactMouseEvent) {
+    const cells = dataRowIndexes.map((r) => ({ row: r, col: columnIndex }));
+    const modifier: SelectionModifier = e.ctrlKey || e.metaKey ? "toggle" : "replace";
+    setSelection((cur) => applySelectionModifier(modifier === "replace" ? new Set<CellKey>() : cur, cells, modifier === "replace" ? "range" : modifier));
+    if (activeTool === "ignore") {
+      applyIgnoreToCells(cells);
+    } else {
+      applyFieldToColumn(columnIndex, cells);
+    }
+  }
+
+  function handleRowNumberClick(rowIndex: number, e: ReactMouseEvent) {
+    if (activeTool !== "ignore") {
+      setRowClickHint('Row numbers are used with "Ignore" to exclude a whole row. Pick a cell or column header to assign a field.');
+      setTimeout(() => setRowClickHint(null), 3500);
+      return;
+    }
+    let rows = [rowIndex];
+    let modifier: SelectionModifier = "replace";
+    if (e.shiftKey && lastAnchorRef.current) {
+      const start = Math.min(lastAnchorRef.current.row, rowIndex);
+      const end = Math.max(lastAnchorRef.current.row, rowIndex);
+      rows = dataRowIndexes.filter((r) => r >= start && r <= end);
+      modifier = "range";
+    } else if (e.ctrlKey || e.metaKey) {
+      modifier = "toggle";
+    }
+    lastAnchorRef.current = { row: rowIndex, col: 0 };
+    toggleRowIgnore(rows, modifier);
+  }
+
+  function handleSaveClick() {
+    if (savingRef.current) return; // one submission in flight at a time
+    if (visualIgnoreInference.unresolvedRows.length > 0 || visualIgnoreInference.rules.length > 0) {
+      setSaveConfirm({ rules: visualIgnoreInference.rules, unresolvedRows: visualIgnoreInference.unresolvedRows });
+      return;
+    }
+    void handleSaveTemplate();
+  }
+
   async function handleSaveTemplate() {
-    if (!parsed) return;
+    if (!parsed || savingRef.current) return;
+    savingRef.current = true;
+    setSaveConfirm(null);
     setSaving(true);
     setSaveStatus(null);
     try {
@@ -529,6 +1017,10 @@ export function CsvTemplateBuilderTab() {
           ...draft
         })
       });
+      if (res.status === 429) {
+        await handleRateLimited(res, "save");
+        return; // draft/columnAssignments untouched — nothing is cleared on a failed save
+      }
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Save failed (${res.status})`);
@@ -536,10 +1028,14 @@ export function CsvTemplateBuilderTab() {
       const created = (await res.json()) as { id: string };
       setActiveTemplateId(created.id);
       setSaveStatus("Template saved.");
+      clearPersistedBuilderState();
       await fetchPreviewForTemplate(parsed.sourceFileId, created.id);
     } catch (err) {
+      // Deliberately does not touch draft/columnAssignments/rowIgnoreSelections —
+      // a failed save must never lose the user's in-progress mapping work.
       setSaveStatus(err instanceof Error ? err.message : "Failed to save template.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -574,13 +1070,53 @@ export function CsvTemplateBuilderTab() {
     }
   }
 
+  const totalSourceKg = useMemo(() => {
+    if (!preview) return 0;
+    return preview.preview.groups.reduce((sum, g) => sum + g.reconciliation.rawRowWeightKg, 0);
+  }, [preview]);
+
+  const totalImportKg = useMemo(() => {
+    if (!preview) return 0;
+    return preview.preview.groups.reduce((sum, g) => sum + g.reconciliation.recognizedSizeKg, 0);
+  }, [preview]);
+
+  const hasDoubleCountWarning = useMemo(
+    () => (preview?.preview.validationIssues ?? []).some((i) => i.code === "possible_duplicate_weight_source"),
+    [preview]
+  );
+
   return (
     <div className="coming-soon-card csv-template-builder">
       <h2>CSV Import Template Builder</h2>
       <p>
         Upload any CSV export. If its layout matches a saved template, it&rsquo;s recognized automatically. Otherwise,
-        map its columns once and save it as a reusable template for your organization.
+        map its cells visually below and save it as a reusable template for your organization.
       </p>
+
+      {rateLimitNotice && (
+        <div className="form-error csv-template-rate-limit-notice">
+          <p>{rateLimitNotice.message}</p>
+          <p>
+            {rateLimitCountdown > 0
+              ? `You can try again in ${rateLimitCountdown}s.`
+              : "You can try again now."}
+            {" "}
+            {rateLimitNotice.source === "save"
+              ? "Your mapping work has not been lost — nothing was cleared."
+              : "The grid is unaffected — your mappings are unchanged."}
+          </p>
+          {rateLimitCountdown === 0 && (
+            <button type="button" onClick={() => setRateLimitNotice(null)}>Dismiss</button>
+          )}
+        </div>
+      )}
+
+      {restoredNotice && (
+        <div className="form-success csv-template-restored-notice">
+          <p>Restored your in-progress mapping from your last session.</p>
+          <button type="button" onClick={() => setRestoredNotice(false)}>Dismiss</button>
+        </div>
+      )}
 
       <PendingCsvImportsSection
         items={pendingItems}
@@ -625,79 +1161,121 @@ export function CsvTemplateBuilderTab() {
             </div>
           )}
 
-          {parsed.match.kind === "none" && <p>No saved template matches this layout. Map its columns below.</p>}
+          {parsed.match.kind === "none" && <p>No saved template matches this layout. Map it visually below.</p>}
         </div>
       )}
 
       {isBuildingDraft && parsed && (
         <>
-          <div className="csv-template-grid-wrapper">
+          <MappingLegend activeTool={activeTool} onSelectTool={setActiveTool} />
+
+          <div className="csv-template-toolbar">
+            <span className="csv-template-active-tool" style={swatchStyle(activeTool)}>
+              Assigning: {MAPPING_TYPE_LABELS[activeTool]} — select cells or columns.
+            </span>
+            {activeTool === "packed_date" && (
+              <label className="csv-template-inline-picker">
+                Date format:
+                <select value={packDateFormat} onChange={(e) => setPackDateFormat(e.target.value as DateFormat)}>
+                  {DATE_FORMATS.map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <span className="csv-template-toolbar-spacer" />
+            <button type="button" onClick={handleUndo} disabled={past.length === 0}>Undo</button>
+            <button type="button" onClick={handleRedo} disabled={future.length === 0}>Redo</button>
+            <button type="button" onClick={clearSelection} disabled={selection.size === 0}>Clear Selection</button>
+            <button type="button" className="danger" onClick={requestClearAllMappings} disabled={columnAssignments.size === 0 && rowIgnoreSelections.size === 0}>
+              Clear All Mappings
+            </button>
+          </div>
+          {rowClickHint && <p className="form-error">{rowClickHint}</p>}
+          {ignoreHint && <p className="form-error">{ignoreHint}</p>}
+
+          <div className="csv-template-grid-wrapper" onMouseLeave={() => { isDraggingRef.current = false; }}>
             <table className="varieties-table csv-template-grid">
               <thead>
                 <tr>
                   <th />
-                  {parsed.grid[0]?.map((_, colIndex) => (
-                    <th key={colIndex}>
-                      <div>{columnLetter(colIndex)}</div>
-                      <select
-                        value={columnFieldByIndex.get(colIndex) ?? "ignore"}
-                        onChange={(e) => setColumnField(colIndex, e.target.value as MappedField)}
+                  {parsed.grid[0]?.map((_, colIndex) => {
+                    const assignment = columnAssignments.get(colIndex);
+                    return (
+                      <th
+                        key={colIndex}
+                        onClick={(e) => handleColumnHeaderClick(colIndex, e)}
+                        style={assignment ? headerSwatchStyle(assignment) : undefined}
+                        title="Click to assign the whole column; Ctrl/Cmd-click to add to a multi-column selection"
                       >
-                        {MAPPED_FIELDS.map((f) => (
-                          <option key={f} value={f}>
-                            {FIELD_LABELS[f]}
-                          </option>
-                        ))}
-                      </select>
-                      {columnFieldByIndex.get(colIndex) === "packed_date" && (
-                        <select
-                          value={draft.columnMappings.find((m) => m.columnIndex === colIndex)?.dateFormat ?? "YYYY-MM-DD"}
-                          onChange={(e) => setColumnDateFormat(colIndex, e.target.value as DateFormat)}
-                        >
-                          {DATE_FORMATS.map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </th>
-                  ))}
+                        <div>{columnLetter(colIndex)}</div>
+                        {assignment && <div className="csv-template-column-badge">{MAPPING_TYPE_LABELS[assignment]}</div>}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {parsed.grid.slice(0, 500).map((row, rowIndex) => (
-                  <tr key={rowIndex} className={rowIndex === draft.headerRowIndex ? "csv-template-header-row" : undefined}>
-                    <td className="csv-template-row-controls">
-                      <span>{rowIndex + 1}</span>
-                      <button type="button" onClick={() => setDraft((c) => ({ ...c, headerRowIndex: rowIndex }))} title="Set as header row">
-                        H
-                      </button>
-                      <button type="button" onClick={() => setDraft((c) => ({ ...c, dataStartRowIndex: rowIndex }))} title="Set as first data row">
-                        D
-                      </button>
-                    </td>
-                    {row.map((cell, colIndex) => {
-                      const isFixed = fixedCellKeys.has(`${rowIndex}:${colIndex}`);
-                      return (
-                        <td
-                          key={colIndex}
-                          className={isFixed ? "csv-template-fixed-cell" : undefined}
-                          onDoubleClick={() => {
-                            const field = window.prompt(
-                              `Use cell (row ${rowIndex + 1}, ${columnLetter(colIndex)}) as a fixed value for which field? (${MAPPED_FIELDS.join(", ")})`,
-                              "variety"
-                            ) as MappedField | null;
-                            if (field && MAPPED_FIELDS.includes(field)) toggleFixedCell(rowIndex, colIndex, field);
-                          }}
-                          title="Double-click to use this single cell as a fixed value"
+                {parsed.grid.slice(0, 500).map((row, rowIndex) => {
+                  const isIgnoredRow = rowIgnoreSelections.has(rowIndex);
+                  return (
+                    <tr
+                      key={rowIndex}
+                      className={rowIndex === draft.headerRowIndex ? "csv-template-header-row" : undefined}
+                      style={isIgnoredRow ? rowIgnoreStyle() : undefined}
+                    >
+                      <td
+                        className="csv-template-row-controls"
+                      >
+                        <span
+                          className="csv-template-row-number"
+                          onClick={(e) => handleRowNumberClick(rowIndex, e)}
+                          title='Click to exclude this row; only applies when "Ignore" is the active tool'
                         >
-                          {cell}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                          {rowIndex + 1}
+                        </span>
+                        <button type="button" onClick={() => setDraft((c) => ({ ...c, headerRowIndex: rowIndex }))} title="Set as header row">
+                          H
+                        </button>
+                        <button type="button" onClick={() => setDraft((c) => ({ ...c, dataStartRowIndex: rowIndex }))} title="Set as first data row">
+                          D
+                        </button>
+                      </td>
+                      {row.map((cell, colIndex) => {
+                        const isFixed = fixedCellKeys.has(`${rowIndex}:${colIndex}`);
+                        const key = cellKey(rowIndex, colIndex);
+                        const isSelected = selection.has(key);
+                        const isFlashed = flashCells.has(key);
+                        const assignment = columnAssignments.get(colIndex);
+                        const isDataRow = dataRowIndexes.includes(rowIndex);
+                        return (
+                          <td
+                            key={colIndex}
+                            className={[
+                              isFixed ? "csv-template-fixed-cell" : "",
+                              isSelected ? "csv-template-cell-selected" : "",
+                              isFlashed ? "csv-template-cell-flash" : ""
+                            ].filter(Boolean).join(" ") || undefined}
+                            style={isDataRow && assignment ? cellSwatchStyle(assignment) : undefined}
+                            onMouseDown={isDataRow ? (e) => handleCellMouseDown(rowIndex, colIndex, e) : undefined}
+                            onMouseEnter={isDataRow ? (e) => handleCellMouseEnter(rowIndex, colIndex, e) : undefined}
+                            onMouseUp={isDataRow ? (e) => handleCellMouseUp(rowIndex, colIndex, e) : undefined}
+                            onDoubleClick={() => {
+                              const field = window.prompt(
+                                `Use cell (row ${rowIndex + 1}, ${columnLetter(colIndex)}) as a fixed value for which field? (${MAPPED_FIELDS.join(", ")})`,
+                                "variety"
+                              ) as MappedField | null;
+                              if (field && MAPPED_FIELDS.includes(field)) toggleFixedCell(rowIndex, colIndex, field);
+                            }}
+                            title={isDataRow ? "Click, drag, Ctrl/Cmd-click, or Shift-click to assign. Double-click to use as a fixed value." : undefined}
+                          >
+                            {cell}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -706,6 +1284,24 @@ export function CsvTemplateBuilderTab() {
             fixed value instead of a whole column (for report-style files where a value like variety or date appears
             once above the table).
           </p>
+
+          {visualIgnoreInference.rules.length > 0 && (
+            <div className="csv-template-rules-preview">
+              <h3>Rules that will be saved</h3>
+              <ul>
+                {visualIgnoreInference.rules.map((r) => (
+                  <li key={`${r.columnIndex}-${r.value}`}>{plainLanguageIgnoreRule(r)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {visualIgnoreInference.unresolvedRows.length > 0 && (
+            <p className="form-error">
+              {visualIgnoreInference.unresolvedRows.length} ignored row(s) don&rsquo;t match a consistent value pattern in
+              any column, so they can&rsquo;t be safely reproduced on a future export. Row order can change between
+              exports — pick a column/value to match on instead of relying on position.
+            </p>
+          )}
 
           {(uniqueValues.sizeLabels.length > 0 || uniqueValues.marketGrades.length > 0) && (
             <ValueMappingPanel
@@ -717,7 +1313,14 @@ export function CsvTemplateBuilderTab() {
             />
           )}
 
-          <RuleEditor rules={draft.rules} yieldSizes={yieldSizes} onAdd={addRule} onUpdate={updateRule} onRemove={removeRule} />
+          <div className="csv-template-advanced-toggle">
+            <button type="button" onClick={() => setShowAdvanced((v) => !v)}>
+              {showAdvanced ? "Hide" : "Show"} Advanced: Conditional Row Rules
+            </button>
+          </div>
+          {showAdvanced && (
+            <RuleEditor rules={draft.rules} yieldSizes={yieldSizes} onAdd={addRule} onUpdate={updateRule} onRemove={removeRule} />
+          )}
 
           <div className="csv-template-save-row">
             <input
@@ -726,7 +1329,7 @@ export function CsvTemplateBuilderTab() {
               onChange={(e) => setTemplateName(e.target.value)}
               placeholder="Template name (e.g. FlowMaster CSV Export)"
             />
-            <button type="button" className="cases-entry-open-button" onClick={handleSaveTemplate} disabled={saving || !templateName.trim()}>
+            <button type="button" className="cases-entry-open-button" onClick={handleSaveClick} disabled={saving || !templateName.trim()}>
               {saving ? "Saving..." : "Save as template"}
             </button>
             {saveStatus && <span>{saveStatus}</span>}
@@ -738,15 +1341,170 @@ export function CsvTemplateBuilderTab() {
       {previewError && <p className="form-error">{previewError}</p>}
 
       {preview && (
-        <PreviewPanel
-          preview={preview.preview}
-          layoutMismatch={preview.layoutMismatch}
-          canImportOverall={Boolean(activeTemplateId)}
-          importingKey={importingKey}
-          importStatus={importStatus}
-          onImport={handleImportGroup}
-        />
+        <>
+          <MappedResultsPanel preview={preview.preview} totalSourceKg={totalSourceKg} totalImportKg={totalImportKg} hasDoubleCountWarning={hasDoubleCountWarning} />
+          <PreviewPanel
+            preview={preview.preview}
+            layoutMismatch={preview.layoutMismatch}
+            canImportOverall={Boolean(activeTemplateId)}
+            importingKey={importingKey}
+            importStatus={importStatus}
+            onImport={handleImportGroup}
+          />
+        </>
       )}
+
+      {nonTranslatableWarning && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal">
+            <h3>Can&rsquo;t safely reproduce this selection</h3>
+            <p>{nonTranslatableWarning}</p>
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => setNonTranslatableWarning(null)}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clearAllConfirm && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal">
+            <h3>Clear all mappings?</h3>
+            <p>This removes every column assignment and generated rule. This can be undone with Undo afterward.</p>
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => setClearAllConfirm(false)}>Cancel</button>
+              <button type="button" className="danger" onClick={executeClearAllMappings}>Clear All Mappings</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveConfirm && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal">
+            <h3>Review rules before saving</h3>
+            {saveConfirm.rules.length > 0 && (
+              <ul>
+                {saveConfirm.rules.map((r) => (
+                  <li key={`${r.columnIndex}-${r.value}`}>{plainLanguageIgnoreRule(r)}</li>
+                ))}
+              </ul>
+            )}
+            {saveConfirm.unresolvedRows.length > 0 && (
+              <p className="form-error">
+                {saveConfirm.unresolvedRows.length} ignored row(s) still don&rsquo;t match a consistent value pattern and
+                won&rsquo;t be reliably excluded on future exports. Go back and pick a column/value to match on, or
+                continue and accept this only applies to the current file.
+              </p>
+            )}
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => setSaveConfirm(null)}>Go back</button>
+              <button type="button" className="cases-entry-open-button" onClick={() => void handleSaveTemplate()}>
+                Confirm &amp; Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function swatchStyle(type: MappingType) {
+  const c = MAPPING_TYPE_COLORS[type];
+  return { background: c.bg, borderColor: c.border, color: c.text };
+}
+
+function headerSwatchStyle(type: MappingType) {
+  const c = MAPPING_TYPE_COLORS[type];
+  return { background: c.bg, color: c.text };
+}
+
+function cellSwatchStyle(type: MappingType) {
+  const c = MAPPING_TYPE_COLORS[type];
+  return { background: c.bg };
+}
+
+function rowIgnoreStyle() {
+  const c = MAPPING_TYPE_COLORS.ignore;
+  return { background: c.bg };
+}
+
+function MappingLegend({ activeTool, onSelectTool }: { activeTool: MappingType; onSelectTool: (t: MappingType) => void }) {
+  return (
+    <div className="csv-template-legend">
+      <label htmlFor="csv-active-tool" className="csv-template-legend-label">
+        Assign selected cells as
+      </label>
+      <select id="csv-active-tool" value={activeTool} onChange={(e) => onSelectTool(e.target.value as MappingType)}>
+        {MAPPING_TYPES.map((t) => (
+          <option key={t} value={t}>{MAPPING_TYPE_LABELS[t]}</option>
+        ))}
+      </select>
+      <div className="csv-template-legend-chips">
+        {MAPPING_TYPES.map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`csv-template-legend-chip${t === activeTool ? " csv-template-legend-chip-active" : ""}`}
+            style={swatchStyle(t)}
+            onClick={() => onSelectTool(t)}
+          >
+            {MAPPING_TYPE_LABELS[t]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MappedResultsPanel({
+  preview,
+  totalSourceKg,
+  totalImportKg,
+  hasDoubleCountWarning
+}: {
+  preview: NormalizedPreview;
+  totalSourceKg: number;
+  totalImportKg: number;
+  hasDoubleCountWarning: boolean;
+}) {
+  const rows = preview.groups.flatMap((g) => g.rows.map((r) => ({ group: g, row: r })));
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="csv-template-mapped-results">
+      <h3>Mapped results</h3>
+      <p className={hasDoubleCountWarning ? "form-error" : undefined}>
+        Total source kg: {totalSourceKg.toFixed(2)} &middot; Total import kg: {totalImportKg.toFixed(2)}
+        {hasDoubleCountWarning && " — possible double-counting detected (see issues below). Saving is blocked until resolved."}
+      </p>
+      <div className="csv-template-mapped-results-scroll">
+        <table className="varieties-table">
+          <thead>
+            <tr>
+              <th>Variety</th>
+              <th>Pack Date</th>
+              <th>Lot Number</th>
+              <th>Size Label</th>
+              <th>Weight</th>
+              <th>Ignored</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 500).map(({ group, row }) => (
+              <tr key={`${group.groupKey}-${row.rowIndex}`}>
+                <td>{group.varietyRaw ?? "—"}</td>
+                <td>{group.packedDate ?? "—"}</td>
+                <td>{group.lotNumber ?? "—"}</td>
+                <td>{row.sizeLabelRaw ?? "—"}</td>
+                <td>{row.sizeWeightKg !== null ? row.sizeWeightKg.toFixed(3) : "—"}</td>
+                <td>{row.action === "ignored" ? "Yes" : "No"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -871,25 +1629,34 @@ function RuleEditor({
     <div className="csv-template-rules">
       <h3>Conditional row rules</h3>
       <p>Example: if Market/Grade = &ldquo;Class 1&rdquo; and Size Label = &ldquo;SM&rdquo;, map to Small.</p>
+      <p className="recent-entries-footer">
+        Rules generated by the visual tool above (prefixed automatically) also appear here and can be fine-tuned.
+      </p>
       {rules.map((rule) => (
         <div key={rule.id} className="csv-template-rule-row">
           <span>#{rule.priority}</span>
           {rule.conditions.map((cond, condIndex) => (
             <span key={condIndex} className="csv-template-rule-condition">
-              <select
-                value={cond.field}
-                onChange={(e) => {
-                  const conditions = [...rule.conditions];
-                  conditions[condIndex] = { ...cond, field: e.target.value as MappedField };
-                  onUpdate(rule.id, { conditions });
-                }}
-              >
-                {MAPPED_FIELDS.map((f) => (
-                  <option key={f} value={f}>
-                    {FIELD_LABELS[f]}
-                  </option>
-                ))}
-              </select>
+              {cond.field ? (
+                <select
+                  value={cond.field}
+                  onChange={(e) => {
+                    const conditions = [...rule.conditions];
+                    conditions[condIndex] = { field: e.target.value as MappedField, operator: cond.operator, value: cond.value };
+                    onUpdate(rule.id, { conditions });
+                  }}
+                >
+                  {MAPPED_FIELDS.map((f) => (
+                    <option key={f} value={f}>
+                      {FIELD_LABELS[f]}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span title="Generated by the visual tool from a raw column, not one of the mapped fields">
+                  Column {(cond.columnIndex ?? 0) + 1}
+                </span>
+              )}
               <select
                 value={cond.operator}
                 onChange={(e) => {
