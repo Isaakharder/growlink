@@ -248,6 +248,7 @@ const TEMPLATES_URL = "/api/csv-templates";
 const IMPORT_URL = "/api/csv-templates/import";
 const YIELD_SIZES_URL = "/api/yield-sizes";
 const PENDING_URL = "/api/csv-templates/pending";
+const pendingImportUrl = (id: string) => `/api/agent-pending-imports/${id}`;
 const sourceFileGridUrl = (id: string) => `/api/csv-templates/source-files/${id}/grid`;
 
 function emptyDraft(): DraftConfig {
@@ -352,6 +353,8 @@ export function CsvTemplateBuilderTab() {
   const [pendingLoading, setPendingLoading] = useState(true);
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [resumingPendingId, setResumingPendingId] = useState<string | null>(null);
+  const [removingPendingId, setRemovingPendingId] = useState<string | null>(null);
+  const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
 
   // Single shared 429 notice for BOTH preview and save — whichever action
   // hits its rate limit, this is the only place the message renders, so it
@@ -628,6 +631,43 @@ export function CsvTemplateBuilderTab() {
       }));
     } finally {
       setImportingKey(null);
+    }
+  }
+
+  // Hard-deletes a pending CSV review row. This does NOT clear the
+  // preserved source file's content dedup — that is by design, since the
+  // dedup exists to avoid re-parsing identical bytes redundantly, not to
+  // remember "was this reviewed." Resending the same CSV afterward will
+  // reprocess the preserved raw text against the current active template
+  // and create a fresh pending row, unless that lot was already imported
+  // (a real yield_import_runs row for the same source file), matching the
+  // existing "Remove" behavior for FlowMaster pending imports.
+  async function handleRemovePendingImport(item: PendingCsvItem) {
+    const confirmed = window.confirm(
+      `Remove "${item.sourceFilename}" from pending review? This does not delete anything already imported — it only discards this queued file. Re-sending it later will create a fresh pending import.`
+    );
+    if (!confirmed) return;
+
+    setRemoveErrors((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    setRemovingPendingId(item.id);
+    try {
+      const res = await apiFetch(pendingImportUrl(item.id), { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Remove failed (${res.status})`);
+      }
+      setPendingItems((current) => current.filter((i) => i.id !== item.id));
+    } catch (err) {
+      setRemoveErrors((current) => ({
+        ...current,
+        [item.id]: err instanceof Error ? err.message : "Remove failed."
+      }));
+    } finally {
+      setRemovingPendingId(null);
     }
   }
 
@@ -1497,6 +1537,9 @@ export function CsvTemplateBuilderTab() {
         onReprocessWithTemplate={handleReprocessPendingWithTemplate}
         onImportGroup={handleImportPendingGroup}
         onRefresh={fetchPendingItems}
+        removingPendingId={removingPendingId}
+        removeErrors={removeErrors}
+        onRemove={handleRemovePendingImport}
       />
 
       <h3>{editingTemplateId ? `Editing "${editingTemplateName}"` : "Upload a new file"}</h3>
@@ -2237,7 +2280,10 @@ function PendingCsvImportsSection({
   onSetUpTemplate,
   onReprocessWithTemplate,
   onImportGroup,
-  onRefresh
+  onRefresh,
+  removingPendingId,
+  removeErrors,
+  onRemove
 }: {
   items: PendingCsvItem[];
   loading: boolean;
@@ -2250,6 +2296,9 @@ function PendingCsvImportsSection({
   onReprocessWithTemplate: (item: PendingCsvItem, templateId: string) => void;
   onImportGroup: (item: PendingCsvItem, group: NormalizedGroup) => void;
   onRefresh: () => void;
+  removingPendingId: string | null;
+  removeErrors: Record<string, string>;
+  onRemove: (item: PendingCsvItem) => void;
 }) {
   return (
     <div className="csv-template-pending-section">
@@ -2266,10 +2315,21 @@ function PendingCsvImportsSection({
       {items.map((item) => (
         <div key={item.id} className="csv-template-pending-card">
           <div className="csv-template-pending-card-header">
-            <strong>{item.sourceFilename}</strong>
-            <span className="recent-entries-footer">{formatUploadedAt(item.uploadedAt)}</span>
+            <span>
+              <strong>{item.sourceFilename}</strong>{" "}
+              <span className="recent-entries-footer">{formatUploadedAt(item.uploadedAt)}</span>
+            </span>
+            <button
+              type="button"
+              className="pdf-source-reading-remove-button"
+              disabled={removingPendingId === item.id}
+              onClick={() => onRemove(item)}
+            >
+              {removingPendingId === item.id ? "Removing..." : "Remove"}
+            </button>
           </div>
 
+          {removeErrors[item.id] && <p className="form-error">{removeErrors[item.id]}</p>}
           {item.error && <p className="form-error">{item.error}</p>}
 
           {item.needsTemplate ? (

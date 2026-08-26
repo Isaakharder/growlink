@@ -192,6 +192,133 @@ async function processCsvTemplateKeyPdfFile(
   return { filename: file.originalname, status: "queued", lotNumber: parsed.lotNumber };
 }
 
+// Mirrors the essential per-file logic of the csv_template branch below for
+// exactly one CSV file. Extracted (pure code-move, no behavior change) so
+// the idempotency check — "a hard-deleted pending row must be recreated on
+// resend, unless the lot was already imported" — is directly unit-testable
+// against the real database without needing the Agent's upload-key secret
+// to drive it through HTTP.
+async function processCsvTemplateKeyCsvFile(
+  file: Express.Multer.File,
+  organizationId: string
+): Promise<FileResult> {
+  let matchResult: Awaited<ReturnType<typeof parseAndMatchCsvFile>>;
+  try {
+    matchResult = await parseAndMatchCsvFile(organizationId, null, file);
+  } catch (err) {
+    console.error("[agent/pdf-import] csv_template parse/match failed", {
+      organizationId,
+      filename: file.originalname,
+      error: err instanceof Error ? err.message : err,
+    });
+    return {
+      filename: file.originalname,
+      status: "error",
+      reason: err instanceof Error ? err.message : "Failed to process CSV file.",
+    };
+  }
+
+  if (matchResult.rowCount === 0) {
+    return { filename: file.originalname, status: "error", reason: "CSV file is empty." };
+  }
+
+  // Idempotency: the same organization + content hash always resolves
+  // to the same source_file_id (parseAndMatchCsvFile dedupes on
+  // insert). If that source has already produced a pending review row
+  // or a completed import, never create a second one — acknowledge
+  // and let the Agent archive the file under Uploaded as normal. A row
+  // that was hard-deleted (e.g. dismissed from the Pending CSV Imports
+  // review queue) no longer matches either query, so a resend of the
+  // identical file correctly falls through to re-queue it below.
+  const [{ data: existingPendingRows }, { data: existingRunRows }] = await Promise.all([
+    supabase
+      .from("agent_pending_imports")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("source_file_id", matchResult.sourceFileId)
+      .limit(1),
+    supabase
+      .from("yield_import_runs")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("source_file_id", matchResult.sourceFileId)
+      .limit(1),
+  ]);
+
+  const existingPendingId = existingPendingRows?.[0]?.id as string | undefined;
+  const existingRunId = existingRunRows?.[0]?.id as string | undefined;
+
+  if (existingPendingId || existingRunId) {
+    return {
+      filename: file.originalname,
+      status: "duplicate",
+      accepted: true,
+      duplicate: true,
+      pendingImportId: existingPendingId ?? null,
+      importRunId: existingRunId ?? null,
+    };
+  }
+
+  if (matchResult.match.kind === "exact" && matchResult.match.templateId) {
+    // Run complete server-side validation/reconciliation before
+    // ever queuing this for review — a template that throws while
+    // processing this specific file is treated as unsafe, not
+    // silently queued for a human to discover later.
+    try {
+      await buildCsvPreview(organizationId, {
+        sourceFileId: matchResult.sourceFileId,
+        templateId: matchResult.match.templateId,
+      });
+    } catch (err) {
+      console.error("[agent/pdf-import] csv_template matched-template preview failed", {
+        organizationId,
+        filename: file.originalname,
+        templateId: matchResult.match.templateId,
+        error: err instanceof Error ? err.message : err,
+      });
+      return {
+        filename: file.originalname,
+        status: "error",
+        reason: "Matched template failed to process this file safely.",
+      };
+    }
+
+    const pending = await createPendingCsvTemplateImport(
+      organizationId,
+      matchResult.sourceFileId,
+      file.originalname,
+      matchResult.match.templateId,
+      false
+    );
+
+    return {
+      filename: file.originalname,
+      status: "csv_template_queued",
+      pendingImportId: pending.id,
+      templateId: matchResult.match.templateId,
+      templateName: matchResult.match.templateName,
+    };
+  }
+
+  // Close match or no match at all — never fall back to the
+  // hard-coded FlowMaster CSV parser. Preserve the raw source and
+  // surface it for template setup; nothing is auto-imported.
+  const pending = await createPendingCsvTemplateImport(
+    organizationId,
+    matchResult.sourceFileId,
+    file.originalname,
+    null,
+    true
+  );
+
+  return {
+    filename: file.originalname,
+    status: "csv_template_needs_template",
+    pendingImportId: pending.id,
+    matchKind: matchResult.match.kind === "close" ? "close" : "none",
+  };
+}
+
 // POST /api/agent/pdf-import
 // Accepts multipart PDFs/CSVs. Routing by data_source_type:
 //   flowmaster    → existing FlowMaster PDF/CSV parsers (unchanged)
@@ -638,122 +765,7 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
           continue;
         }
 
-        let matchResult: Awaited<ReturnType<typeof parseAndMatchCsvFile>>;
-        try {
-          matchResult = await parseAndMatchCsvFile(organizationId, null, file);
-        } catch (err) {
-          console.error("[agent/pdf-import] csv_template parse/match failed", {
-            organizationId,
-            filename: file.originalname,
-            error: err instanceof Error ? err.message : err,
-          });
-          results.push({
-            filename: file.originalname,
-            status: "error",
-            reason: err instanceof Error ? err.message : "Failed to process CSV file.",
-          });
-          continue;
-        }
-
-        if (matchResult.rowCount === 0) {
-          results.push({ filename: file.originalname, status: "error", reason: "CSV file is empty." });
-          continue;
-        }
-
-        // Idempotency: the same organization + content hash always resolves
-        // to the same source_file_id (parseAndMatchCsvFile dedupes on
-        // insert). If that source has already produced a pending review row
-        // or a completed import, never create a second one — acknowledge
-        // and let the Agent archive the file under Uploaded as normal.
-        const [{ data: existingPendingRows }, { data: existingRunRows }] = await Promise.all([
-          supabase
-            .from("agent_pending_imports")
-            .select("id")
-            .eq("organization_id", organizationId)
-            .eq("source_file_id", matchResult.sourceFileId)
-            .limit(1),
-          supabase
-            .from("yield_import_runs")
-            .select("id")
-            .eq("organization_id", organizationId)
-            .eq("source_file_id", matchResult.sourceFileId)
-            .limit(1),
-        ]);
-
-        const existingPendingId = existingPendingRows?.[0]?.id as string | undefined;
-        const existingRunId = existingRunRows?.[0]?.id as string | undefined;
-
-        if (existingPendingId || existingRunId) {
-          results.push({
-            filename: file.originalname,
-            status: "duplicate",
-            accepted: true,
-            duplicate: true,
-            pendingImportId: existingPendingId ?? null,
-            importRunId: existingRunId ?? null,
-          });
-          continue;
-        }
-
-        if (matchResult.match.kind === "exact" && matchResult.match.templateId) {
-          // Run complete server-side validation/reconciliation before
-          // ever queuing this for review — a template that throws while
-          // processing this specific file is treated as unsafe, not
-          // silently queued for a human to discover later.
-          try {
-            await buildCsvPreview(organizationId, {
-              sourceFileId: matchResult.sourceFileId,
-              templateId: matchResult.match.templateId,
-            });
-          } catch (err) {
-            console.error("[agent/pdf-import] csv_template matched-template preview failed", {
-              organizationId,
-              filename: file.originalname,
-              templateId: matchResult.match.templateId,
-              error: err instanceof Error ? err.message : err,
-            });
-            results.push({
-              filename: file.originalname,
-              status: "error",
-              reason: "Matched template failed to process this file safely.",
-            });
-            continue;
-          }
-
-          const pending = await createPendingCsvTemplateImport(
-            organizationId,
-            matchResult.sourceFileId,
-            file.originalname,
-            matchResult.match.templateId,
-            false
-          );
-
-          results.push({
-            filename: file.originalname,
-            status: "csv_template_queued",
-            pendingImportId: pending.id,
-            templateId: matchResult.match.templateId,
-            templateName: matchResult.match.templateName,
-          });
-        } else {
-          // Close match or no match at all — never fall back to the
-          // hard-coded FlowMaster CSV parser. Preserve the raw source and
-          // surface it for template setup; nothing is auto-imported.
-          const pending = await createPendingCsvTemplateImport(
-            organizationId,
-            matchResult.sourceFileId,
-            file.originalname,
-            null,
-            true
-          );
-
-          results.push({
-            filename: file.originalname,
-            status: "csv_template_needs_template",
-            pendingImportId: pending.id,
-            matchKind: matchResult.match.kind === "close" ? "close" : "none",
-          });
-        }
+        results.push(await processCsvTemplateKeyCsvFile(file, organizationId));
       }
 
       const csvQueued = results.filter((r) => r.status === "csv_template_queued").length;
@@ -967,4 +979,4 @@ agentRouter.post("/agent/pdf-import", requireUploadKey, (req: Request, res: Resp
   });
 });
 
-export { agentRouter };
+export { agentRouter, processCsvTemplateKeyCsvFile };

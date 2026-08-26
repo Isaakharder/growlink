@@ -441,6 +441,70 @@ test("identical CSV uploaded twice via csv_template key: only one pending row is
 });
 
 // ---------------------------------------------------------------------------
+// 8b. A dismissed (hard-deleted) pending row must be recreated on resend,
+// not silently swallowed as a duplicate — this is the exact reported bug:
+// deleting a pending card should not leave the underlying content hash
+// permanently "seen," since dedup exists to avoid redundant re-parsing of
+// identical bytes, not to remember that a file was reviewed and dismissed.
+// ---------------------------------------------------------------------------
+
+test("a pending import dismissed via DELETE /api/agent-pending-imports/:id is recreated when the identical CSV is resent", async () => {
+  const marker = randomUUID();
+  const { id: keyId, rawKey } = await createUploadKey(DENVA_ORG_ID, "csv_template", `redup-${marker}`);
+
+  try {
+    const csv = `RedupHeader${marker},Col2\nx,1\n`;
+
+    const first = await uploadFile(rawKey, `redup-${marker}.csv`, csv, "text/csv");
+    assert.equal(first.status, 200);
+    assert.equal(first.body.results[0].status, "csv_template_needs_template");
+    const firstPendingId = first.body.results[0].pendingImportId;
+
+    // Dismiss it. DELETE /api/agent-pending-imports/:id (the "Remove"
+    // action in the Pending CSV Imports UI) sits behind Bearer-token
+    // browser auth (requireOrganizationContext), not the Agent's
+    // X-Upload-Key auth this test drives — so this replicates exactly
+    // what that route does (see agentPendingImports.ts): a hard delete
+    // filtered by id + organization_id, nothing else.
+    const { error: deleteError } = await supabase
+      .from("agent_pending_imports")
+      .delete()
+      .eq("id", firstPendingId)
+      .eq("organization_id", DENVA_ORG_ID);
+    assert.equal(deleteError, null);
+
+    const { count: afterDeleteCount } = await supabase
+      .from("agent_pending_imports")
+      .select("*", { count: "exact", head: true })
+      .eq("organization_id", DENVA_ORG_ID)
+      .eq("source_filename", `redup-${marker}.csv`);
+    assert.equal(afterDeleteCount, 0, "the pending row must be gone after dismissal");
+
+    // Resend the byte-identical file — must NOT be treated as a duplicate.
+    const second = await uploadFile(rawKey, `redup-${marker}.csv`, csv, "text/csv");
+    assert.equal(second.status, 200);
+    assert.equal(second.body.results[0].status, "csv_template_needs_template", "a fresh pending row must be created, not a duplicate ack");
+    assert.notEqual(second.body.results[0].pendingImportId, firstPendingId);
+
+    const { count: afterResendCount } = await supabase
+      .from("agent_pending_imports")
+      .select("*", { count: "exact", head: true })
+      .eq("organization_id", DENVA_ORG_ID)
+      .eq("source_filename", `redup-${marker}.csv`);
+    assert.equal(afterResendCount, 1, "exactly one pending row must exist after the dismiss-then-resend sequence");
+  } finally {
+    await cleanupAll(() => deleteUploadKey(keyId), () => cleanupBySourceFilename(DENVA_ORG_ID, "redup-"));
+  }
+});
+
+// The companion case — a lot that was already successfully imported must
+// stay deduped even after its pending row is gone — is already covered by
+// "after an exact-match upload is actually approved and imported..." above:
+// that test's own comment notes the pending row is deleted by the import's
+// cleanup step, and the re-upload still correctly comes back as a duplicate
+// referencing the completed yield_import_runs claim, not a new pending row.
+
+// ---------------------------------------------------------------------------
 // 9. Same bytes uploaded by two organizations remain organization-isolated
 // ---------------------------------------------------------------------------
 
