@@ -231,6 +231,7 @@ export type ParseAndMatchResult = {
   delimiter: string;
   encoding: string;
   hadBom: boolean;
+  fingerprintHash: string;
   match: {
     kind: "exact" | "close" | "none";
     templateId: string | null;
@@ -290,6 +291,7 @@ export async function parseAndMatchCsvFile(
     delimiter: grid.delimiter,
     encoding: grid.encoding,
     hadBom: grid.hadBom,
+    fingerprintHash: candidateHash,
     match: {
       kind: match.kind,
       templateId: match.template?.id ?? null,
@@ -297,6 +299,130 @@ export async function parseAndMatchCsvFile(
       similarity: match.similarity ?? null
     }
   };
+}
+
+export type ManualCsvUploadResult =
+  | {
+      kind: "exact";
+      sourceFileId: string;
+      templateId: string;
+      templateName: string;
+      templateVersion: number;
+      preview: NormalizedPreview;
+    }
+  | {
+      kind: "ambiguous";
+      sourceFileId: string;
+      candidates: Array<{ id: string; name: string; version: number }>;
+    }
+  | {
+      kind: "close";
+      sourceFileId: string;
+      closestTemplateId: string;
+      closestTemplateName: string;
+      similarity: number | null;
+      pendingImportId: string;
+    }
+  | {
+      kind: "none";
+      sourceFileId: string;
+      pendingImportId: string;
+    };
+
+/**
+ * The single entry point for "a user just uploaded a CSV and needs to know
+ * what to do with it" — used by the Kg Entries manual-upload flow so it
+ * never re-implements its own matching/normalization and can never disagree
+ * with the CSV Templates tab or the Agent's automated path, which both also
+ * go through parseAndMatchCsvFile/buildCsvPreview.
+ *
+ * "exact" is re-verified for uniqueness here rather than trusting
+ * matchFingerprint's first-match — the DB's partial unique index on
+ * (organization_id, fingerprint_hash) where is_current and is_active
+ * should make more than one impossible, but this is what a saved template
+ * gets applied to a real upload, so it re-checks rather than assumes.
+ */
+export type ExactMatchCandidate = { id: string; name: string; version: number };
+
+/**
+ * Pure decision logic, factored out so it's directly unit-testable without
+ * a live database: today the partial unique index on
+ * (organization_id, fingerprint_hash) where is_current and is_active
+ * guarantees this list can never have more than one row — even a direct
+ * SQL insert bypassing the app is rejected — so "ambiguous" is a defensive
+ * branch for a state the schema currently makes unreachable in practice,
+ * not something a real upload can trigger yet. Kept anyway: constraints
+ * can change, and silently picking "the first one" would be exactly the
+ * kind of guess this whole feature exists to avoid.
+ */
+export function classifyExactMatches(
+  rows: ExactMatchCandidate[]
+): { kind: "none" } | { kind: "exact"; template: ExactMatchCandidate } | { kind: "ambiguous"; candidates: ExactMatchCandidate[] } {
+  if (rows.length === 0) return { kind: "none" };
+  if (rows.length === 1) return { kind: "exact", template: rows[0] };
+  return { kind: "ambiguous", candidates: rows };
+}
+
+export async function previewManualCsvUpload(
+  organizationId: string,
+  userId: string | null,
+  file: { buffer: Buffer; originalname: string }
+): Promise<ManualCsvUploadResult> {
+  const parsed = await parseAndMatchCsvFile(organizationId, userId, file);
+
+  if (parsed.match.kind === "exact" && parsed.match.templateId) {
+    const { data: exactRows, error: exactErr } = await supabase
+      .from("csv_mapping_templates")
+      .select("id, name, version")
+      .eq("organization_id", organizationId)
+      .eq("is_current", true)
+      .eq("is_active", true)
+      .eq("fingerprint_hash", parsed.fingerprintHash);
+    if (exactErr) throw exactErr;
+
+    const classification = classifyExactMatches(
+      (exactRows ?? []).map((r) => ({ id: r.id as string, name: r.name as string, version: r.version as number }))
+    );
+
+    if (classification.kind === "ambiguous") {
+      return { kind: "ambiguous", sourceFileId: parsed.sourceFileId, candidates: classification.candidates };
+    }
+
+    const result = await buildCsvPreview(organizationId, { sourceFileId: parsed.sourceFileId, templateId: parsed.match.templateId });
+    return {
+      kind: "exact",
+      sourceFileId: parsed.sourceFileId,
+      templateId: parsed.match.templateId,
+      templateName: result.templateName ?? parsed.match.templateName ?? "Untitled template",
+      templateVersion: result.templateVersion ?? 1,
+      preview: result.preview
+    };
+  }
+
+  // close or none — never silently guess or fall back to the legacy
+  // FlowMaster parser. Land it in the same pending-review queue the Agent
+  // path already uses, so it's immediately visible in the CSV Templates
+  // tab's Pending CSV Imports with "Set up CSV Template" ready to go.
+  const pending = await createPendingCsvTemplateImport(
+    organizationId,
+    parsed.sourceFileId,
+    file.originalname,
+    parsed.match.kind === "close" ? parsed.match.templateId : null,
+    true
+  );
+
+  if (parsed.match.kind === "close" && parsed.match.templateId && parsed.match.templateName) {
+    return {
+      kind: "close",
+      sourceFileId: parsed.sourceFileId,
+      closestTemplateId: parsed.match.templateId,
+      closestTemplateName: parsed.match.templateName,
+      similarity: parsed.match.similarity,
+      pendingImportId: pending.id
+    };
+  }
+
+  return { kind: "none", sourceFileId: parsed.sourceFileId, pendingImportId: pending.id };
 }
 
 /**
@@ -335,6 +461,7 @@ export async function getSourceFileGridAndMatch(
     delimiter: grid.delimiter,
     encoding: "utf-8",
     hadBom: false,
+    fingerprintHash: candidateHash,
     match: {
       kind: match.kind,
       templateId: match.template?.id ?? null,

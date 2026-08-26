@@ -79,12 +79,70 @@ const YIELD_SIZES_URL = "/api/yield-sizes";
 const PENDING_IMPORTS_URL = "/api/agent-pending-imports";
 const FLOWMASTER_FILTER = "?dataSourceType=flowmaster";
 const CSV_SETTINGS_URL = "/api/greenhouse-setup/csv-size-settings";
+const CSV_TEMPLATES_URL = "/api/csv-templates";
+const CSV_TEMPLATE_PREVIEW_URL = "/api/csv-templates/preview";
+const CSV_TEMPLATE_IMPORT_URL = "/api/csv-templates/import";
 
 type CsvSizeEntry = {
   rawLabel: string;
   mappedSizeName: string | null;
   kg: number;
 };
+
+// ---------------------------------------------------------------------------
+// CSV files uploaded through this same "PDF / CSV Upload" button are routed
+// server-side through the generic CSV Template Builder engine (never the
+// legacy FlowMaster CSV parser) — see server/src/routes/pdfImport.ts's
+// previewCsvFileForKgEntries. These types mirror that response shape.
+// ---------------------------------------------------------------------------
+
+type NormalizedRow = {
+  rowIndex: number;
+  action: "included" | "ignored" | "subtotal" | "unresolved";
+  sizeLabelRaw: string | null;
+  marketGradeRaw: string | null;
+  sizeWeightKg: number | null;
+};
+
+type NormalizedGroup = {
+  groupKey: string;
+  varietyRaw: string | null;
+  packedDate: string | null;
+  isoYear: number | null;
+  isoWeek: number | null;
+  lotNumber: string | null;
+  sizeKg: Record<string, number>;
+  unresolvedSizeLabels: string[];
+  wasteKg: number;
+  pieceCount: number;
+  averageFruitWeightG: number | null;
+  totalLotWeightKg: number | null;
+  reconciliation: {
+    rawRowWeightKg: number;
+    recognizedSizeKg: number;
+    directMappedKg: number;
+    distributedKg: number;
+    ignoredKg: number;
+    unresolvedKg: number;
+    subtotalKg: number;
+    lotTotalKg: number | null;
+    difference: number | null;
+    unexplainedDifference: boolean;
+  };
+  rows: NormalizedRow[];
+};
+
+type ValidationIssue = { code: string; message: string; groupKey?: string; rowIndex?: number };
+type NormalizedPreview = { groups: NormalizedGroup[]; validationIssues: ValidationIssue[]; canImport: boolean };
+
+type CsvTemplateSummary = { id: string; name: string; version: number; isActive: boolean; isCurrent: boolean };
+
+type CsvTemplateManualUploadItem =
+  | { filename: string; success: true; source: "csv_template"; kind: "exact"; sourceFileId: string; templateId: string; templateName: string; templateVersion: number; preview: NormalizedPreview }
+  | { filename: string; success: true; source: "csv_template"; kind: "ambiguous"; sourceFileId: string; candidates: Array<{ id: string; name: string; version: number }> }
+  | { filename: string; success: true; source: "csv_template"; kind: "close"; sourceFileId: string; closestTemplateId: string; closestTemplateName: string; similarity: number | null; pendingImportId: string }
+  | { filename: string; success: true; source: "csv_template"; kind: "none"; sourceFileId: string; pendingImportId: string }
+  | { filename: string; success: false; source: "csv_template"; error: { message: string } };
 
 type PdfPreviewFileSuccess = {
   id?: string;
@@ -348,6 +406,12 @@ export function KgEntriesTab() {
   const [pdfImportedCardKeys, setPdfImportedCardKeys] = useState<Set<string>>(new Set());
   const [pdfCardImportingKeys, setPdfCardImportingKeys] = useState<Set<string>>(new Set());
   const [pdfCardImportErrors, setPdfCardImportErrors] = useState<Record<string, string>>({});
+  const [csvTemplateFiles, setCsvTemplateFiles] = useState<CsvTemplateManualUploadItem[]>([]);
+  const [csvTemplateOptions, setCsvTemplateOptions] = useState<CsvTemplateSummary[]>([]);
+  const [csvTemplateOverrides, setCsvTemplateOverrides] = useState<Record<string, string>>({});
+  const [csvTemplateRecomputing, setCsvTemplateRecomputing] = useState<Set<string>>(new Set());
+  const [csvTemplateImportingKey, setCsvTemplateImportingKey] = useState<string | null>(null);
+  const [csvTemplateImportStatus, setCsvTemplateImportStatus] = useState<Record<string, string>>({});
   const [pendingWeeks, setPendingWeeks] = useState<PendingAgentWeek[]>([]);
   const [csvIgnoredLabels, setCsvIgnoredLabels] = useState<string[]>([]);
   // Set only when pdfPreviewFiles was populated from GET /agent-pending-imports
@@ -1100,6 +1164,11 @@ export function KgEntriesTab() {
     setSizeSetupDrafts({});
     setSizeSetupErrors({});
     setSizeSetupResolvedLabels(new Set());
+    setCsvTemplateFiles([]);
+    setCsvTemplateOverrides({});
+    setCsvTemplateRecomputing(new Set());
+    setCsvTemplateImportingKey(null);
+    setCsvTemplateImportStatus({});
 
     if (pdfFileInputRef.current) {
       pdfFileInputRef.current.value = "";
@@ -1120,6 +1189,7 @@ export function KgEntriesTab() {
     setPdfCardImportErrors({});
     setViewedPendingWeek(null);
     setPdfPreviewUploading(true);
+    void fetchCsvTemplateOptions();
 
     const formData = new FormData();
     for (const file of Array.from(selectedFiles)) {
@@ -1147,20 +1217,34 @@ export function KgEntriesTab() {
 
       const body = (await response.json()) as {
         success: boolean;
-        files?: PdfPreviewFile[];
+        files?: Array<PdfPreviewFile | CsvTemplateManualUploadItem>;
       };
 
       if (!body.success || !Array.isArray(body.files)) {
         throw new Error("PDF preview response was invalid.");
       }
 
-      setPdfPreviewFiles(body.files);
+      const csvItems = body.files.filter((f): f is CsvTemplateManualUploadItem => "source" in f && f.source === "csv_template");
+      const pdfItems = body.files.filter((f): f is PdfPreviewFile => !("source" in f) || f.source !== "csv_template");
 
-      if (hasUnresolvedSizes(body.files)) {
+      setPdfPreviewFiles(pdfItems);
+      setCsvTemplateFiles(csvItems);
+      setCsvTemplateOverrides({});
+      setCsvTemplateImportStatus({});
+
+      if (hasUnresolvedSizes(pdfItems)) {
         setIsSizeSetupOpen(true);
+      }
+
+      if (csvItems.some((f) => f.success && f.kind === "close")) {
+        setPdfPreviewError((current) => current ?? "One or more CSV files closely resemble a saved template but didn't match exactly — review before importing (see below).");
+      }
+      if (csvItems.some((f) => f.success && f.kind === "none")) {
+        setPdfPreviewError((current) => current ?? "One or more CSV files don't match any saved template yet — they've been sent to the CSV Templates tab to set one up.");
       }
     } catch (uploadError) {
       setPdfPreviewFiles([]);
+      setCsvTemplateFiles([]);
       setPdfPreviewError(
         uploadError instanceof Error
           ? uploadError.message
@@ -1169,6 +1253,82 @@ export function KgEntriesTab() {
     } finally {
       setPdfPreviewUploading(false);
       event.target.value = "";
+    }
+  }
+
+  async function fetchCsvTemplateOptions() {
+    try {
+      const res = await apiFetch(CSV_TEMPLATES_URL);
+      if (!res.ok) return;
+      setCsvTemplateOptions((await res.json()) as CsvTemplateSummary[]);
+    } catch {
+      // Non-fatal — the override dropdown just stays limited to the auto-matched template.
+    }
+  }
+
+  async function handleCsvTemplateOverride(sourceFileId: string, filename: string, newTemplateId: string) {
+    setCsvTemplateRecomputing((current) => new Set(current).add(sourceFileId));
+    setCsvTemplateOverrides((current) => ({ ...current, [sourceFileId]: newTemplateId }));
+    try {
+      const res = await apiFetch(CSV_TEMPLATE_PREVIEW_URL, {
+        method: "POST",
+        body: JSON.stringify({ sourceFileId, templateId: newTemplateId })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to switch template (${res.status})`);
+      }
+      const result = (await res.json()) as { preview: NormalizedPreview; templateVersion: number | null };
+      const selectedTemplate = csvTemplateOptions.find((t) => t.id === newTemplateId);
+      setCsvTemplateFiles((current) =>
+        current.map((f): CsvTemplateManualUploadItem => {
+          if (!f.success || f.sourceFileId !== sourceFileId) return f;
+          return {
+            filename,
+            success: true,
+            source: "csv_template",
+            kind: "exact",
+            sourceFileId,
+            templateId: newTemplateId,
+            templateName: selectedTemplate?.name ?? "Selected template",
+            templateVersion: result.templateVersion ?? selectedTemplate?.version ?? 1,
+            preview: result.preview
+          };
+        })
+      );
+    } catch (err) {
+      setPdfPreviewError(err instanceof Error ? err.message : "Failed to switch template.");
+    } finally {
+      setCsvTemplateRecomputing((current) => {
+        const next = new Set(current);
+        next.delete(sourceFileId);
+        return next;
+      });
+    }
+  }
+
+  async function handleImportCsvTemplateGroup(sourceFileId: string, templateId: string, group: NormalizedGroup) {
+    setCsvTemplateImportingKey(group.groupKey);
+    setCsvTemplateImportStatus((current) => ({ ...current, [group.groupKey]: "" }));
+    try {
+      const res = await apiFetch(CSV_TEMPLATE_IMPORT_URL, {
+        method: "POST",
+        body: JSON.stringify({ sourceFileId, templateId, groupKey: group.groupKey, approvedGroup: group })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Import failed (${res.status})`);
+      }
+      const result = (await res.json()) as { mode: "create" | "append" };
+      setCsvTemplateImportStatus((current) => ({ ...current, [group.groupKey]: `Imported (${result.mode}).` }));
+      await refreshEntriesAfterImport();
+    } catch (err) {
+      setCsvTemplateImportStatus((current) => ({
+        ...current,
+        [group.groupKey]: err instanceof Error ? err.message : "Import failed."
+      }));
+    } finally {
+      setCsvTemplateImportingKey(null);
     }
   }
 
@@ -2044,8 +2204,141 @@ export function KgEntriesTab() {
             {pdfImportStatus && <p className="pdf-preview-subtitle">{pdfImportStatus}</p>}
             {pdfPreviewUploading && <p>Parsing PDFs...</p>}
 
-            {!pdfPreviewUploading && groupedPdfPreviewCards.length === 0 && pdfPreviewFailures.length === 0 && (
-              <p className="pdf-preview-subtitle">Upload one or more PDFs to see grouped preview cards.</p>
+            {csvTemplateFiles.length > 0 && (
+              <div className="csv-template-manual-upload-section">
+                {csvTemplateFiles.map((item) => {
+                  if (!item.success) {
+                    return (
+                      <div key={item.filename} className="csv-template-pending-card">
+                        <strong>{item.filename}</strong>
+                        <p className="form-error">{item.error.message}</p>
+                      </div>
+                    );
+                  }
+                  if (item.kind === "none") {
+                    return (
+                      <div key={item.filename} className="csv-template-pending-card">
+                        <strong>{item.filename}</strong>
+                        <p>No saved template matches this layout yet. Sent to CSV Templates &rarr; Pending CSV Imports to set one up.</p>
+                      </div>
+                    );
+                  }
+                  if (item.kind === "close") {
+                    return (
+                      <div key={item.filename} className="csv-template-pending-card">
+                        <strong>{item.filename}</strong>
+                        <p className="form-error">
+                          Closely resembles &ldquo;{item.closestTemplateName}&rdquo; but doesn&rsquo;t match exactly. Sent to CSV Templates &rarr; Pending
+                          CSV Imports to review before importing.
+                        </p>
+                      </div>
+                    );
+                  }
+                  if (item.kind === "ambiguous") {
+                    return (
+                      <div key={item.filename} className="csv-template-pending-card">
+                        <strong>{item.filename}</strong>
+                        <p className="form-error">Multiple saved templates match this exact layout — pick one:</p>
+                        <select onChange={(e) => e.target.value && void handleCsvTemplateOverride(item.sourceFileId, item.filename, e.target.value)} defaultValue="">
+                          <option value="" disabled>Select a template&hellip;</option>
+                          {item.candidates.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name} (v{c.version})</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  }
+
+                  // kind === "exact"
+                  const isRecomputing = csvTemplateRecomputing.has(item.sourceFileId);
+                  return (
+                    <div key={item.filename} className="csv-template-pending-card">
+                      <div className="csv-template-pending-card-header">
+                        <strong>{item.filename}</strong>
+                        <span className="form-success">Template: {item.templateName} (v{item.templateVersion}) &middot; Exact layout match</span>
+                      </div>
+                      {csvTemplateOptions.length > 1 && (
+                        <label>
+                          Template:{" "}
+                          <select
+                            value={csvTemplateOverrides[item.sourceFileId] ?? item.templateId}
+                            onChange={(e) => void handleCsvTemplateOverride(item.sourceFileId, item.filename, e.target.value)}
+                            disabled={isRecomputing}
+                          >
+                            {csvTemplateOptions.map((t) => (
+                              <option key={t.id} value={t.id}>{t.name} (v{t.version})</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {isRecomputing && <p>Recalculating preview&hellip;</p>}
+                      {!isRecomputing && item.preview.validationIssues.length > 0 && (
+                        <ul className="form-error csv-template-issue-list">
+                          {item.preview.validationIssues.map((issue, i) => (
+                            <li key={i}>{issue.message}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {!isRecomputing && item.preview.groups.map((group) => {
+                        const groupIssues = item.preview.validationIssues.filter((i) => !i.groupKey || i.groupKey === group.groupKey);
+                        const canImportGroup = item.preview.canImport && groupIssues.length === 0;
+                        return (
+                          <div key={group.groupKey} className="csv-template-preview-group">
+                            <h4>
+                              {group.varietyRaw ?? "Unknown variety"} &middot; {group.packedDate ?? "Not recorded"} &middot; Year {group.isoYear ?? "?"} Week{" "}
+                              {group.isoWeek ?? "?"} {group.lotNumber ? `· Lot ${group.lotNumber}` : ""}
+                            </h4>
+                            <table className="varieties-table">
+                              <thead><tr><th>Size</th><th>kg</th></tr></thead>
+                              <tbody>
+                                {Object.entries(group.sizeKg).map(([name, kg]) => (
+                                  <tr key={name}><td>{name}</td><td>{kg.toFixed(2)}</td></tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <table className="varieties-table csv-template-reconciliation">
+                              <tbody>
+                                <tr><td>Final mapped kg</td><td>{group.reconciliation.recognizedSizeKg.toFixed(2)} kg</td></tr>
+                                <tr><td>Included piece count</td><td>{group.pieceCount}</td></tr>
+                                <tr><td>AFW</td><td>{group.averageFruitWeightG !== null ? `${group.averageFruitWeightG.toFixed(1)} g` : "-"}</td></tr>
+                                <tr><td>Ignored kg</td><td>{group.reconciliation.ignoredKg.toFixed(2)} kg</td></tr>
+                                <tr><td>Distributed kg</td><td>{group.reconciliation.distributedKg.toFixed(2)} kg</td></tr>
+                                <tr><td>Unresolved kg</td><td>{group.reconciliation.unresolvedKg.toFixed(2)} kg</td></tr>
+                                {group.reconciliation.difference !== null && (
+                                  <tr>
+                                    <td>Reconciliation difference</td>
+                                    <td className={group.reconciliation.unexplainedDifference ? "form-error" : undefined}>
+                                      {group.reconciliation.difference.toFixed(2)} kg
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                            {groupIssues.length > 0 && (
+                              <ul className="form-error">
+                                {groupIssues.map((issue, i) => <li key={i}>{issue.message}</li>)}
+                              </ul>
+                            )}
+                            <button
+                              type="button"
+                              className="cases-entry-open-button"
+                              disabled={!canImportGroup || csvTemplateImportingKey === group.groupKey}
+                              onClick={() => void handleImportCsvTemplateGroup(item.sourceFileId, item.templateId, group)}
+                            >
+                              {csvTemplateImportingKey === group.groupKey ? "Importing..." : "Import"}
+                            </button>
+                            {csvTemplateImportStatus[group.groupKey] && <span> {csvTemplateImportStatus[group.groupKey]}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!pdfPreviewUploading && groupedPdfPreviewCards.length === 0 && pdfPreviewFailures.length === 0 && csvTemplateFiles.length === 0 && (
+              <p className="pdf-preview-subtitle">Upload one or more PDFs or CSVs to see a preview.</p>
             )}
 
             {allDetectedCsvSizes.length > 0 && (

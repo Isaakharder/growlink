@@ -561,6 +561,45 @@ export function CsvTemplateBuilderTab() {
     }
   }
 
+  // "Reprocess with saved template" — for a legacy/needs-template pending
+  // CSV whose raw text is preserved, lets the user pick any of the org's
+  // saved templates directly (no re-upload) and see it normalized via the
+  // exact same buildCsvPreview the auto-matched path uses.
+  async function handleReprocessPendingWithTemplate(item: PendingCsvItem, templateId: string) {
+    if (!item.sourceFileId) return;
+    setResumingPendingId(item.id);
+    setUploadError(null);
+    try {
+      const res = await apiFetch(sourceFileGridUrl(item.sourceFileId));
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load source file (${res.status})`);
+      }
+      const body = (await res.json()) as SourceFileGridResponse;
+
+      setPreview(null);
+      setDraft(emptyDraft());
+      resetVisualState();
+      setActiveTemplateId(templateId);
+      setCloseMatchChoice("use");
+      setTemplateName(body.filename.replace(/\.csv$/i, ""));
+      setParsed({
+        sourceFileId: body.sourceFileId,
+        grid: body.grid,
+        rowCount: body.rowCount,
+        columnCount: body.columnCount,
+        delimiter: body.delimiter,
+        encoding: "utf-8",
+        match: body.match
+      });
+      await fetchPreviewForTemplate(body.sourceFileId, templateId);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Failed to reprocess this file with the selected template.");
+    } finally {
+      setResumingPendingId(null);
+    }
+  }
+
   async function handleImportPendingGroup(item: PendingCsvItem, group: NormalizedGroup) {
     if (!item.sourceFileId || !item.templateId) return;
     setImportingKey(group.groupKey);
@@ -1453,7 +1492,9 @@ export function CsvTemplateBuilderTab() {
         resumingPendingId={resumingPendingId}
         importingKey={importingKey}
         importStatus={importStatus}
+        templates={templates}
         onSetUpTemplate={handleSetUpTemplateFromPending}
+        onReprocessWithTemplate={handleReprocessPendingWithTemplate}
         onImportGroup={handleImportPendingGroup}
         onRefresh={fetchPendingItems}
       />
@@ -2192,7 +2233,9 @@ function PendingCsvImportsSection({
   resumingPendingId,
   importingKey,
   importStatus,
+  templates,
   onSetUpTemplate,
+  onReprocessWithTemplate,
   onImportGroup,
   onRefresh
 }: {
@@ -2202,7 +2245,9 @@ function PendingCsvImportsSection({
   resumingPendingId: string | null;
   importingKey: string | null;
   importStatus: Record<string, string>;
+  templates: TemplateSummary[];
   onSetUpTemplate: (item: PendingCsvItem) => void;
+  onReprocessWithTemplate: (item: PendingCsvItem, templateId: string) => void;
   onImportGroup: (item: PendingCsvItem, group: NormalizedGroup) => void;
   onRefresh: () => void;
 }) {
@@ -2234,14 +2279,34 @@ function PendingCsvImportsSection({
                   ? "This file's layout closely resembles a saved template, but doesn't match exactly. Review and confirm before importing."
                   : "No saved template matches this file's layout yet."}
               </p>
-              <button
-                type="button"
-                className="cases-entry-open-button"
-                disabled={resumingPendingId === item.id || !item.sourceFileId}
-                onClick={() => onSetUpTemplate(item)}
-              >
-                {resumingPendingId === item.id ? "Loading..." : "Set up CSV Template"}
-              </button>
+              <div className="csv-template-saved-actions">
+                <button
+                  type="button"
+                  className="cases-entry-open-button"
+                  disabled={resumingPendingId === item.id || !item.sourceFileId}
+                  onClick={() => onSetUpTemplate(item)}
+                >
+                  {resumingPendingId === item.id ? "Loading..." : "Set up CSV Template"}
+                </button>
+                {templates.length > 0 && item.sourceFileId && (
+                  <label>
+                    Reprocess with saved template:{" "}
+                    <select
+                      defaultValue=""
+                      disabled={resumingPendingId === item.id}
+                      onChange={(e) => {
+                        if (e.target.value) onReprocessWithTemplate(item, e.target.value);
+                        e.target.value = "";
+                      }}
+                    >
+                      <option value="" disabled>Select a template&hellip;</option>
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name} (v{t.version})</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
             </>
           ) : (
             <>

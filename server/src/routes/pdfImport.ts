@@ -2,7 +2,7 @@ import { Request, Router } from "express";
 import multer from "multer";
 import { supabase } from "../config/supabase";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
-import { parseFlowMasterCsvBuffer, type CsvSizeEntry } from "../utils/flowMasterCsvParser";
+import { type CsvSizeEntry } from "../utils/flowMasterCsvParser";
 import { resolveCsvRowLabels } from "../utils/flowMasterCsvRuleResolver";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
 import { normalizeSizeRuleLabel, type SizeRuleRecord } from "../utils/flowMasterSizeRules";
@@ -13,6 +13,9 @@ import {
   type SizeMappingClassification
 } from "../utils/sizeMapping";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
+import { isPdfBuffer } from "../utils/detectFileType";
+import { previewManualCsvUpload } from "./csvMappingTemplates";
+import type { NormalizedPreview } from "../utils/csvTemplateTypes";
 
 const pdfImportRouter = Router();
 
@@ -89,6 +92,75 @@ type PdfPreviewFailure = {
 };
 
 type PdfPreviewItem = PdfPreviewSuccess | PdfPreviewFailure;
+
+// CSV files uploaded through this same Kg Entries button are tagged
+// source: "csv_template" so the client can render them with the generic
+// Template Builder engine's result (template name/version/match status,
+// normalized preview) instead of the legacy FlowMaster PDF/CSV shape above.
+type CsvManualUploadResponseItem =
+  | {
+      filename: string;
+      success: true;
+      source: "csv_template";
+      kind: "exact";
+      sourceFileId: string;
+      templateId: string;
+      templateName: string;
+      templateVersion: number;
+      preview: NormalizedPreview;
+    }
+  | {
+      filename: string;
+      success: true;
+      source: "csv_template";
+      kind: "ambiguous";
+      sourceFileId: string;
+      candidates: Array<{ id: string; name: string; version: number }>;
+    }
+  | {
+      filename: string;
+      success: true;
+      source: "csv_template";
+      kind: "close";
+      sourceFileId: string;
+      closestTemplateId: string;
+      closestTemplateName: string;
+      similarity: number | null;
+      pendingImportId: string;
+    }
+  | {
+      filename: string;
+      success: true;
+      source: "csv_template";
+      kind: "none";
+      sourceFileId: string;
+      pendingImportId: string;
+    }
+  | {
+      filename: string;
+      success: false;
+      source: "csv_template";
+      error: { message: string };
+    };
+
+async function previewCsvFileForKgEntries(
+  organizationId: string,
+  userId: string | null,
+  file: Express.Multer.File
+): Promise<CsvManualUploadResponseItem> {
+  try {
+    const result = await previewManualCsvUpload(organizationId, userId, { buffer: file.buffer, originalname: file.originalname });
+    return { filename: file.originalname, success: true, source: "csv_template", ...result };
+  } catch (error) {
+    console.error("Kg Entries CSV template preview error:", { file: file.originalname, error });
+    return {
+      filename: file.originalname,
+      success: false,
+      source: "csv_template",
+      error: { message: error instanceof Error ? error.message : "Failed to process this CSV file." }
+    };
+  }
+}
 
 type PdfImportMode = "create" | "append";
 
@@ -408,6 +480,18 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
 
     const organizationId = req.organizationId;
 
+    // CSV files never go through the legacy FlowMaster CSV parser from this
+    // route — they're routed through previewManualCsvUpload, the same
+    // matching/normalization service used by the CSV Templates tab and the
+    // Agent's automated uploads, so a manual Kg Entries upload can never
+    // disagree with either. Only content-verified PDFs (a %PDF- magic-byte
+    // probe, never filename/mimetype) continue through the code below.
+    const pdfFiles = uploadedFiles.filter((f) => isPdfBuffer(f.buffer));
+    const csvFiles = uploadedFiles.filter((f) => !isPdfBuffer(f.buffer));
+    const csvResultsPromise: Promise<CsvManualUploadResponseItem[]> = Promise.all(
+      csvFiles.map((file) => previewCsvFileForKgEntries(organizationId, req.userId ?? null, file))
+    );
+
     const [varietiesResult, yieldEntriesResult, csvSettings, sizeContextResult] = await Promise.all([
       supabase
         .from("varieties")
@@ -455,24 +539,8 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
 
     type ParsedEntry = { filename: string; parsed: FlowMasterParseResult | null; parseError: string | null };
     const fileParseArrays = await Promise.all(
-      uploadedFiles.map(async (file): Promise<ParsedEntry[]> => {
-        const isCsv =
-          /\.csv$/i.test(file.originalname) ||
-          file.mimetype === "text/csv" ||
-          file.mimetype === "application/csv";
+      pdfFiles.map(async (file): Promise<ParsedEntry[]> => {
         try {
-          if (isCsv) {
-            const csvResults = parseFlowMasterCsvBuffer(
-              file.buffer,
-              file.originalname,
-              csvSettings.ignoredSizeLabels,
-              csvSettings.sizeAliases
-            );
-            if (csvResults.length === 0) {
-              return [{ filename: file.originalname, parsed: null, parseError: "CSV contained no importable runs." }];
-            }
-            return csvResults.map((parsed) => ({ filename: file.originalname, parsed, parseError: null as null }));
-          }
           const parsed = await parseFlowMasterPdfBuffer(file.buffer, file.originalname);
           return [{ filename: file.originalname, parsed, parseError: null as null }];
         } catch (error) {
@@ -653,9 +721,11 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
       })
     );
 
+    const csvResults = await csvResultsPromise;
+
     return res.json({
       success: true,
-      files
+      files: [...files, ...csvResults]
     });
   });
 });

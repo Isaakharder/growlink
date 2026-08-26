@@ -3,6 +3,7 @@ import multer from "multer";
 import { Request, Response, Router } from "express";
 import { supabase } from "../config/supabase";
 import { requireUploadKey } from "../middleware/requireUploadKey";
+import { isPdfBuffer } from "../utils/detectFileType";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
 import { parseFlowMasterCsvBuffer } from "../utils/flowMasterCsvParser";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
@@ -101,13 +102,6 @@ type FileResult =
       importRunId: string | null;
     };
 
-// True content check, not a filename/extension guess — a %PDF- signature
-// within the first 1KB (real-world PDF writers occasionally emit a few
-// bytes of leading whitespace/BOM before it).
-function isPdfBuffer(buffer: Buffer): boolean {
-  const probeLength = Math.min(buffer.length, 1024);
-  return buffer.subarray(0, probeLength).toString("latin1").includes("%PDF-");
-}
 
 // A NUL byte in the first 512 bytes is a strong, cheap signal that a file
 // is not text at all (a mislabeled binary, not a CSV) — this is the "do
