@@ -7400,6 +7400,43 @@ textarea.cleaning-checklist-response-input {
   font-size: 0.88rem;
 }
 
+.csv-resolve-label-row {
+  margin-top: 1rem;
+}
+
+.csv-resolve-label-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.csv-resolve-label-field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.csv-resolve-label-field select,
+.csv-resolve-label-field input {
+  min-width: 220px;
+}
+
+.csv-resolve-label-highlight {
+  border: 1px solid var(--brand);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  background: var(--brand-soft);
+}
+
+.csv-resolve-label-hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 @media (max-width: 900px) {
   .csv-weekly-size-strip {
     grid-template-columns: repeat(3, 1fr);

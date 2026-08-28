@@ -2864,7 +2864,7 @@ function ResolveLabelsModal({
         {card.unresolvedLabelGroups.map((g) => {
           const choice = choices[g.rawValue];
           return (
-            <div key={g.rawValue} className="csv-template-pending-card">
+            <div key={g.rawValue} className="csv-template-pending-card csv-resolve-label-row">
               <p>
                 <strong>{g.rawValue}</strong> — {g.rowCount} affected row{g.rowCount === 1 ? "" : "s"}, {g.kg.toFixed(2)} kg,{" "}
                 {g.pieceCount} pieces
@@ -2873,9 +2873,10 @@ function ResolveLabelsModal({
                 Lots: {g.lotNumbers.join(", ") || "none"} &middot; Files: {g.sourceFilenames.join(", ")}
               </p>
 
-              <label>
-                Action:{" "}
+              <div className="csv-resolve-label-field">
+                <label htmlFor={`action-${g.rawValue}`}>Action</label>
                 <select
+                  id={`action-${g.rawValue}`}
                   value={choice.action}
                   onChange={(e) => updateChoice(g.rawValue, { action: e.target.value as Choice["action"] })}
                 >
@@ -2885,12 +2886,21 @@ function ResolveLabelsModal({
                   <option value="distribute">Distribute</option>
                   <option value="create">Create new size</option>
                 </select>
-              </label>
+              </div>
+
+              {choice.action === "unresolved" && (
+                <p className="csv-resolve-label-hint">Choose an action above to resolve "{g.rawValue}" — a size selector will appear here.</p>
+              )}
 
               {choice.action === "map" && (
-                <label style={{ marginLeft: "0.75rem" }}>
-                  Size:{" "}
-                  <select value={choice.targetSizeId} onChange={(e) => updateChoice(g.rawValue, { targetSizeId: e.target.value })}>
+                <div className="csv-resolve-label-field">
+                  <label htmlFor={`size-${g.rawValue}`}>Map "{g.rawValue}" to size</label>
+                  <select
+                    id={`size-${g.rawValue}`}
+                    className="csv-resolve-label-highlight"
+                    value={choice.targetSizeId}
+                    onChange={(e) => updateChoice(g.rawValue, { targetSizeId: e.target.value })}
+                  >
                     <option value="">Select a size&hellip;</option>
                     {yieldSizes.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -2898,24 +2908,30 @@ function ResolveLabelsModal({
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
               )}
 
               {choice.action === "create" && (
-                <label style={{ marginLeft: "0.75rem" }}>
-                  New size name:{" "}
+                <div className="csv-resolve-label-field">
+                  <label htmlFor={`newsize-${g.rawValue}`}>New size name</label>
                   <input
+                    id={`newsize-${g.rawValue}`}
+                    className="csv-resolve-label-highlight"
                     type="text"
                     value={choice.newSizeName}
                     onChange={(e) => updateChoice(g.rawValue, { newSizeName: e.target.value })}
                   />
-                </label>
+                </div>
               )}
 
               {choice.action === "distribute" && (
-                <label style={{ marginLeft: "0.75rem" }}>
-                  Destination sizes:{" "}
+                <div className="csv-resolve-label-field">
+                  <label htmlFor={`distribute-${g.rawValue}`}>
+                    Distribute "{g.rawValue}" across (ctrl/cmd-click to select more than one)
+                  </label>
                   <select
+                    id={`distribute-${g.rawValue}`}
+                    className="csv-resolve-label-highlight"
                     multiple
                     value={choice.distributeSizeIds}
                     onChange={(e) =>
@@ -2928,7 +2944,7 @@ function ResolveLabelsModal({
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
               )}
             </div>
           );
