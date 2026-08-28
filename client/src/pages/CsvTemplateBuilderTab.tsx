@@ -180,6 +180,73 @@ type PendingCsvItem = {
   error: string | null;
 };
 
+type WeeklyCardLot = { lotNumber: string | null; packedDate: string | null };
+
+type UnresolvedLabelGroup = {
+  rawValue: string;
+  rowCount: number;
+  kg: number;
+  pieceCount: number;
+  lotNumbers: string[];
+  sourceFilenames: string[];
+  sourceFileIds: string[];
+  pendingImportIds: string[];
+};
+
+type WeeklyCardSourceDetail = {
+  pendingImportId: string;
+  sourceFileId: string;
+  sourceFilename: string;
+  uploadedAt: string;
+  templateId: string;
+  templateName: string | null;
+  templateVersion: number | null;
+  matchStatus: "exact" | "layout_mismatch";
+  lotNumber: string | null;
+  packedDate: string | null;
+  mappedKg: number;
+  sizeKg: Record<string, number>;
+  averageFruitWeightG: number | null;
+  reconciliationOk: boolean;
+  unresolvedLabels: string[];
+  blockingIssues: ValidationIssue[];
+};
+
+type WeeklyCard = {
+  cardKey: string;
+  organizationId: string;
+  varietyId: string | null;
+  varietyName: string;
+  isoYear: number | null;
+  isoWeek: number | null;
+  mappedKg: number;
+  lotCount: number;
+  sourceFileCount: number;
+  templateNames: string[];
+  matchStatus: "exact" | "mixed" | "layout_mismatch";
+  combinedAverageFruitWeightG: number | null;
+  ignoredKg: number;
+  distributedKg: number;
+  unresolvedKg: number;
+  reconciliationDifference: number;
+  reconciliationOk: boolean;
+  lots: WeeklyCardLot[];
+  sizeKg: Record<string, number>;
+  unresolvedLabelGroups: UnresolvedLabelGroup[];
+  canImport: boolean;
+  blockingIssues: ValidationIssue[];
+  sources: WeeklyCardSourceDetail[];
+};
+
+type UnmatchedPendingItem = {
+  id: string;
+  sourceFilename: string;
+  sourceFileId: string | null;
+  uploadedAt: string;
+  matchKind: "close" | "none" | null;
+  error: string | null;
+};
+
 type TemplateSummary = {
   id: string;
   templateGroupId: string;
@@ -248,6 +315,9 @@ const TEMPLATES_URL = "/api/csv-templates";
 const IMPORT_URL = "/api/csv-templates/import";
 const YIELD_SIZES_URL = "/api/yield-sizes";
 const PENDING_URL = "/api/csv-templates/pending";
+const WEEKLY_CARDS_URL = "/api/csv-templates/pending/weekly-cards";
+const RESOLVE_LABELS_URL = "/api/csv-templates/pending/resolve-labels";
+const IMPORT_WEEK_URL = "/api/csv-templates/pending/import-week";
 const pendingImportUrl = (id: string) => `/api/agent-pending-imports/${id}`;
 const sourceFileGridUrl = (id: string) => `/api/csv-templates/source-files/${id}/grid`;
 
@@ -355,6 +425,12 @@ export function CsvTemplateBuilderTab() {
   const [resumingPendingId, setResumingPendingId] = useState<string | null>(null);
   const [removingPendingId, setRemovingPendingId] = useState<string | null>(null);
   const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
+
+  // ── Weekly variety cards ────────────────────────────────────────────────
+  const [weeklyCards, setWeeklyCards] = useState<WeeklyCard[]>([]);
+  const [importingCardKey, setImportingCardKey] = useState<string | null>(null);
+  const [cardImportStatus, setCardImportStatus] = useState<Record<string, string>>({});
+  const [resolveModalCard, setResolveModalCard] = useState<WeeklyCard | null>(null);
 
   // Single shared 429 notice for BOTH preview and save — whichever action
   // hits its rate limit, this is the only place the message renders, so it
@@ -478,13 +554,31 @@ export function CsvTemplateBuilderTab() {
     setPendingLoading(true);
     setPendingError(null);
     try {
-      const res = await apiFetch(PENDING_URL);
+      const res = await apiFetch(WEEKLY_CARDS_URL);
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Failed to load pending CSV imports (${res.status})`);
       }
-      const body = (await res.json()) as { files: PendingCsvItem[] };
-      setPendingItems(body.files);
+      const body = (await res.json()) as { cards: WeeklyCard[]; unmatched: UnmatchedPendingItem[] };
+      setWeeklyCards(body.cards);
+      // The needs-template review flow (Set up CSV Template / Reprocess with
+      // saved template) is unchanged — only files that DID match a template
+      // are now grouped into weekly cards instead of one-card-per-file.
+      setPendingItems(
+        body.unmatched.map((u) => ({
+          id: u.id,
+          sourceFilename: u.sourceFilename,
+          sourceFileId: u.sourceFileId,
+          uploadedAt: u.uploadedAt,
+          needsTemplate: true,
+          templateId: null,
+          templateName: null,
+          templateVersion: null,
+          matchKind: u.matchKind,
+          preview: null,
+          error: u.error
+        }))
+      );
     } catch (err) {
       setPendingError(err instanceof Error ? err.message : "Failed to load pending CSV imports.");
     } finally {
@@ -668,6 +762,112 @@ export function CsvTemplateBuilderTab() {
       }));
     } finally {
       setRemovingPendingId(null);
+    }
+  }
+
+  // Removing one source from a weekly card only removes that source's
+  // pending contribution — the card is recalculated from the remaining
+  // sources on the next fetch, never wiped out as a side effect.
+  async function handleRemoveWeeklyCardSource(source: WeeklyCardSourceDetail) {
+    const confirmed = window.confirm(
+      `Remove "${source.sourceFilename}"${source.lotNumber ? ` (lot ${source.lotNumber})` : ""} from this weekly card? This does not delete anything already imported — it only discards this queued source. Re-sending it later will create a fresh pending import.`
+    );
+    if (!confirmed) return;
+
+    setRemovingPendingId(source.pendingImportId);
+    try {
+      const res = await apiFetch(pendingImportUrl(source.pendingImportId), { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Remove failed (${res.status})`);
+      }
+      await fetchPendingItems();
+    } catch (err) {
+      setRemoveErrors((current) => ({
+        ...current,
+        [source.pendingImportId]: err instanceof Error ? err.message : "Remove failed."
+      }));
+    } finally {
+      setRemovingPendingId(null);
+    }
+  }
+
+  async function handleImportWeeklyCard(card: WeeklyCard) {
+    const lotList = card.lots.map((l) => l.lotNumber ?? "(no lot number)").join(", ");
+    const confirmed = window.confirm(
+      `Import ${card.varietyName} — Year ${card.isoYear ?? "?"} Week ${card.isoWeek ?? "?"}?\n\n` +
+        `This will import ${card.lotCount} lot${card.lotCount === 1 ? "" : "s"} from ${card.sourceFileCount} source file${card.sourceFileCount === 1 ? "" : "s"}: ${lotList}.\n\n` +
+        `Total: ${card.mappedKg.toFixed(2)} kg.`
+    );
+    if (!confirmed) return;
+
+    setImportingCardKey(card.cardKey);
+    setCardImportStatus((current) => ({ ...current, [card.cardKey]: "" }));
+    try {
+      const res = await apiFetch(IMPORT_WEEK_URL, { method: "POST", body: JSON.stringify({ cardKey: card.cardKey }) });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Import failed (${res.status})`);
+      }
+      const body = (await res.json()) as {
+        varietyName: string;
+        isoYear: number | null;
+        isoWeek: number | null;
+        totalKgImported: number;
+        results: Array<{ sourceFilename: string; lotNumber: string | null; status: "imported" | "failed"; mode?: string; error?: string }>;
+      };
+      const failed = body.results.filter((r) => r.status === "failed");
+      const summary =
+        failed.length === 0
+          ? `Imported ${body.totalKgImported.toFixed(2)} kg for ${body.varietyName} — Year ${body.isoYear ?? "?"} Week ${body.isoWeek ?? "?"}.`
+          : `Imported ${body.totalKgImported.toFixed(2)} kg, but ${failed.length} source(s) failed: ${failed
+              .map((f) => `${f.sourceFilename} (${f.error ?? "unknown error"})`)
+              .join("; ")}`;
+      setCardImportStatus((current) => ({ ...current, [card.cardKey]: summary }));
+      void fetchPendingItems();
+    } catch (err) {
+      setCardImportStatus((current) => ({
+        ...current,
+        [card.cardKey]: err instanceof Error ? err.message : "Import failed."
+      }));
+    } finally {
+      setImportingCardKey(null);
+    }
+  }
+
+  async function handleSubmitResolveLabels(
+    card: WeeklyCard,
+    scope: "pending" | "template",
+    resolutions: Array<{
+      sourceField: "size_label" | "market_grade";
+      rawValue: string;
+      action: "map" | "ignore" | "distribute" | "create" | "unresolved";
+      targetSizeId?: string;
+      newSizeName?: string;
+      distributeSizeIds?: string[];
+    }>
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    // Every currently unresolved label in this card is matched to the same
+    // saved template (a card only has more than one distinct template name
+    // when versions are mixed, which is a blocking layout concern shown
+    // separately) — take the first source's templateId as the target.
+    const templateId = card.sources[0]?.templateId;
+    if (!templateId) return { ok: false, message: "No matched template found for this card." };
+    const sourceFileIds = Array.from(new Set(card.unresolvedLabelGroups.flatMap((g) => g.sourceFileIds)));
+
+    try {
+      const res = await apiFetch(RESOLVE_LABELS_URL, {
+        method: "POST",
+        body: JSON.stringify({ scope, templateId, sourceFileIds, resolutions })
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to resolve label(s) (${res.status})`);
+      }
+      await fetchPendingItems();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Failed to resolve label(s)." };
     }
   }
 
@@ -1525,6 +1725,30 @@ export function CsvTemplateBuilderTab() {
         </div>
       )}
 
+      <WeeklyPendingCardsSection
+        cards={weeklyCards}
+        loading={pendingLoading}
+        error={pendingError}
+        yieldSizes={yieldSizes}
+        importingCardKey={importingCardKey}
+        cardImportStatus={cardImportStatus}
+        removingPendingId={removingPendingId}
+        removeErrors={removeErrors}
+        onRefresh={fetchPendingItems}
+        onImportCard={handleImportWeeklyCard}
+        onRemoveSource={handleRemoveWeeklyCardSource}
+        onOpenResolveLabels={setResolveModalCard}
+      />
+
+      {resolveModalCard && (
+        <ResolveLabelsModal
+          card={resolveModalCard}
+          yieldSizes={yieldSizes}
+          onClose={() => setResolveModalCard(null)}
+          onSubmit={handleSubmitResolveLabels}
+        />
+      )}
+
       <PendingCsvImportsSection
         items={pendingItems}
         loading={pendingLoading}
@@ -2267,6 +2491,379 @@ function RuleEditor({
 function formatUploadedAt(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function orderedSizeEntries(sizeKg: Record<string, number>, yieldSizes: YieldSizeOption[]): Array<[string, number]> {
+  const orderIndex = new Map(yieldSizes.map((s, i) => [s.name, i]));
+  return Object.entries(sizeKg).sort(([a], [b]) => {
+    const ia = orderIndex.has(a) ? orderIndex.get(a)! : Number.MAX_SAFE_INTEGER;
+    const ib = orderIndex.has(b) ? orderIndex.get(b)! : Number.MAX_SAFE_INTEGER;
+    if (ia !== ib) return ia - ib;
+    return a.localeCompare(b);
+  });
+}
+
+function WeeklyPendingCardsSection({
+  cards,
+  loading,
+  error,
+  yieldSizes,
+  importingCardKey,
+  cardImportStatus,
+  removingPendingId,
+  removeErrors,
+  onRefresh,
+  onImportCard,
+  onRemoveSource,
+  onOpenResolveLabels
+}: {
+  cards: WeeklyCard[];
+  loading: boolean;
+  error: string | null;
+  yieldSizes: YieldSizeOption[];
+  importingCardKey: string | null;
+  cardImportStatus: Record<string, string>;
+  removingPendingId: string | null;
+  removeErrors: Record<string, string>;
+  onRefresh: () => void;
+  onImportCard: (card: WeeklyCard) => void;
+  onRemoveSource: (source: WeeklyCardSourceDetail) => void;
+  onOpenResolveLabels: (card: WeeklyCard) => void;
+}) {
+  return (
+    <div className="csv-template-pending-section">
+      <div className="csv-template-pending-header">
+        <h3>Pending CSV Imports</h3>
+        <button type="button" onClick={onRefresh} disabled={loading}>
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {error && <p className="form-error">{error}</p>}
+      {!loading && cards.length === 0 && !error && <p>No pending CSV imports right now.</p>}
+
+      {cards.map((card) => (
+        <div key={card.cardKey} className="csv-template-pending-card">
+          <div className="csv-template-pending-card-header">
+            <span>
+              <strong>
+                {card.varietyName} — Year {card.isoYear ?? "?"} &middot; Week {card.isoWeek ?? "?"}
+              </strong>
+            </span>
+          </div>
+
+          <p>
+            <strong>{card.mappedKg.toFixed(2)} kg</strong> &middot; {card.lotCount} lot{card.lotCount === 1 ? "" : "s"} &middot;{" "}
+            {card.sourceFileCount} source file{card.sourceFileCount === 1 ? "" : "s"}
+            {card.combinedAverageFruitWeightG !== null ? ` · AFW ${card.combinedAverageFruitWeightG.toFixed(1)} g` : ""}
+          </p>
+          <p>
+            Template: {card.templateNames.join(", ") || "Unknown"} &middot;{" "}
+            {card.matchStatus === "exact" && <span className="form-success">Exact match</span>}
+            {card.matchStatus === "mixed" && <span className="form-error">Mixed template versions — review before importing</span>}
+            {card.matchStatus === "layout_mismatch" && <span className="form-error">Layout mismatch</span>}
+            {" · "}
+            {card.reconciliationOk ? (
+              <span className="form-success">Reconciliation OK</span>
+            ) : (
+              <span className="form-error">Reconciliation difference: {card.reconciliationDifference.toFixed(2)} kg</span>
+            )}
+          </p>
+
+          <p>
+            Lots:{" "}
+            {card.lots
+              .map((l) => `${l.lotNumber ?? "(no lot number)"}${l.packedDate ? ` (${l.packedDate})` : ""}`)
+              .join(", ")}
+          </p>
+
+          <table className="varieties-table">
+            <thead>
+              <tr>
+                <th>Size</th>
+                <th>kg</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orderedSizeEntries(card.sizeKg, yieldSizes).map(([name, kg]) => (
+                <tr key={name}>
+                  <td>{name}</td>
+                  <td>{kg.toFixed(2)}</td>
+                </tr>
+              ))}
+              <tr>
+                <td>
+                  <strong>Weekly variety total</strong>
+                </td>
+                <td>
+                  <strong>{card.mappedKg.toFixed(2)}</strong>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <p>
+            Ignored: {card.ignoredKg.toFixed(2)} kg &middot; Distributed: {card.distributedKg.toFixed(2)} kg &middot; Unresolved:{" "}
+            {card.unresolvedKg.toFixed(2)} kg
+          </p>
+
+          {card.blockingIssues.length > 0 && (
+            <ul className="form-error csv-template-issue-list">
+              {card.blockingIssues.map((issue, i) => (
+                <li key={i}>{issue.message}</li>
+              ))}
+            </ul>
+          )}
+
+          {card.unresolvedLabelGroups.length > 0 && (
+            <div className="csv-template-saved-actions">
+              <button type="button" className="cases-entry-open-button" onClick={() => onOpenResolveLabels(card)}>
+                Resolve labels ({card.unresolvedLabelGroups.length})
+              </button>
+              <ul>
+                {card.unresolvedLabelGroups.map((g) => (
+                  <li key={g.rawValue}>
+                    <code>{g.rawValue}</code> — {g.rowCount} affected row{g.rowCount === 1 ? "" : "s"}, {g.kg.toFixed(2)} kg
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <details className="csv-template-source-details">
+            <summary>Source details ({card.sources.length})</summary>
+            {card.sources.map((source) => (
+              <div key={source.pendingImportId} className="csv-template-pending-card" style={{ marginTop: "0.5rem" }}>
+                <div className="csv-template-pending-card-header">
+                  <span>
+                    <strong>{source.sourceFilename}</strong>{" "}
+                    <span className="recent-entries-footer">{formatUploadedAt(source.uploadedAt)}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="pdf-source-reading-remove-button"
+                    disabled={removingPendingId === source.pendingImportId}
+                    onClick={() => onRemoveSource(source)}
+                  >
+                    {removingPendingId === source.pendingImportId ? "Removing..." : "Remove"}
+                  </button>
+                </div>
+                {removeErrors[source.pendingImportId] && <p className="form-error">{removeErrors[source.pendingImportId]}</p>}
+                <p>
+                  Lot {source.lotNumber ?? "(none)"} &middot; Packed {source.packedDate ?? "Not recorded"} &middot; Mapped{" "}
+                  {source.mappedKg.toFixed(2)} kg &middot; AFW{" "}
+                  {source.averageFruitWeightG !== null ? `${source.averageFruitWeightG.toFixed(1)} g` : "-"} &middot;{" "}
+                  {source.reconciliationOk ? (
+                    <span className="form-success">Reconciliation OK</span>
+                  ) : (
+                    <span className="form-error">Reconciliation difference</span>
+                  )}
+                </p>
+                <p>
+                  Sizes:{" "}
+                  {orderedSizeEntries(source.sizeKg, yieldSizes)
+                    .map(([name, kg]) => `${name}: ${kg.toFixed(2)} kg`)
+                    .join(", ") || "none"}
+                </p>
+                {source.unresolvedLabels.length > 0 && <p className="form-error">Unresolved labels: {source.unresolvedLabels.join(", ")}</p>}
+              </div>
+            ))}
+          </details>
+
+          <button
+            type="button"
+            className="cases-entry-open-button"
+            disabled={!card.canImport || importingCardKey === card.cardKey}
+            onClick={() => onImportCard(card)}
+          >
+            {importingCardKey === card.cardKey ? "Importing..." : "Import"}
+          </button>
+          {cardImportStatus[card.cardKey] && <span> {cardImportStatus[card.cardKey]}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ResolveLabelsModal({
+  card,
+  yieldSizes,
+  onClose,
+  onSubmit
+}: {
+  card: WeeklyCard;
+  yieldSizes: YieldSizeOption[];
+  onClose: () => void;
+  onSubmit: (
+    card: WeeklyCard,
+    scope: "pending" | "template",
+    resolutions: Array<{
+      sourceField: "size_label" | "market_grade";
+      rawValue: string;
+      action: "map" | "ignore" | "distribute" | "create" | "unresolved";
+      targetSizeId?: string;
+      newSizeName?: string;
+      distributeSizeIds?: string[];
+    }>
+  ) => Promise<{ ok: true } | { ok: false; message: string }>;
+}) {
+  type Choice = { action: "map" | "ignore" | "distribute" | "create" | "unresolved"; targetSizeId: string; newSizeName: string; distributeSizeIds: string[] };
+  const [scope, setScope] = useState<"pending" | "template">("template");
+  const [choices, setChoices] = useState<Record<string, Choice>>(() =>
+    Object.fromEntries(card.unresolvedLabelGroups.map((g) => [g.rawValue, { action: "unresolved", targetSizeId: "", newSizeName: "", distributeSizeIds: [] }]))
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function updateChoice(rawValue: string, patch: Partial<Choice>) {
+    setChoices((current) => ({ ...current, [rawValue]: { ...current[rawValue], ...patch } }));
+  }
+
+  async function handleSubmit() {
+    setError(null);
+    const resolutions = Object.entries(choices)
+      .filter(([, c]) => c.action !== "unresolved")
+      .map(([rawValue, c]) => ({
+        sourceField: "size_label" as const,
+        rawValue,
+        action: c.action,
+        targetSizeId: c.action === "map" ? c.targetSizeId : undefined,
+        newSizeName: c.action === "create" ? c.newSizeName : undefined,
+        distributeSizeIds: c.action === "distribute" ? c.distributeSizeIds : undefined
+      }));
+    if (resolutions.length === 0) {
+      setError("Choose an action for at least one label, or close this dialog to leave them unresolved.");
+      return;
+    }
+    for (const r of resolutions) {
+      if (r.action === "map" && !r.targetSizeId) {
+        setError(`Select a destination size for "${r.rawValue}".`);
+        return;
+      }
+      if (r.action === "create" && !r.newSizeName?.trim()) {
+        setError(`Enter a name for the new size for "${r.rawValue}".`);
+        return;
+      }
+      if (r.action === "distribute" && (!r.distributeSizeIds || r.distributeSizeIds.length === 0)) {
+        setError(`Select at least one destination size to distribute "${r.rawValue}" across.`);
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    const result = await onSubmit(card, scope, resolutions);
+    setSubmitting(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    onClose();
+  }
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true">
+      <div className="variety-modal csv-template-modal">
+        <h3>
+          Resolve labels — {card.varietyName} · Year {card.isoYear ?? "?"} Week {card.isoWeek ?? "?"}
+        </h3>
+
+        {card.unresolvedLabelGroups.map((g) => {
+          const choice = choices[g.rawValue];
+          return (
+            <div key={g.rawValue} className="csv-template-pending-card">
+              <p>
+                <strong>{g.rawValue}</strong> — {g.rowCount} affected row{g.rowCount === 1 ? "" : "s"}, {g.kg.toFixed(2)} kg,{" "}
+                {g.pieceCount} pieces
+              </p>
+              <p>
+                Lots: {g.lotNumbers.join(", ") || "none"} &middot; Files: {g.sourceFilenames.join(", ")}
+              </p>
+
+              <label>
+                Action:{" "}
+                <select
+                  value={choice.action}
+                  onChange={(e) => updateChoice(g.rawValue, { action: e.target.value as Choice["action"] })}
+                >
+                  <option value="unresolved">Leave unresolved</option>
+                  <option value="map">Map to existing size</option>
+                  <option value="ignore">Ignore</option>
+                  <option value="distribute">Distribute</option>
+                  <option value="create">Create new size</option>
+                </select>
+              </label>
+
+              {choice.action === "map" && (
+                <label style={{ marginLeft: "0.75rem" }}>
+                  Size:{" "}
+                  <select value={choice.targetSizeId} onChange={(e) => updateChoice(g.rawValue, { targetSizeId: e.target.value })}>
+                    <option value="">Select a size&hellip;</option>
+                    {yieldSizes.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {choice.action === "create" && (
+                <label style={{ marginLeft: "0.75rem" }}>
+                  New size name:{" "}
+                  <input
+                    type="text"
+                    value={choice.newSizeName}
+                    onChange={(e) => updateChoice(g.rawValue, { newSizeName: e.target.value })}
+                  />
+                </label>
+              )}
+
+              {choice.action === "distribute" && (
+                <label style={{ marginLeft: "0.75rem" }}>
+                  Destination sizes:{" "}
+                  <select
+                    multiple
+                    value={choice.distributeSizeIds}
+                    onChange={(e) =>
+                      updateChoice(g.rawValue, { distributeSizeIds: Array.from(e.target.selectedOptions).map((o) => o.value) })
+                    }
+                  >
+                    {yieldSizes.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          );
+        })}
+
+        <fieldset>
+          <legend>Apply to</legend>
+          <label>
+            <input type="radio" checked={scope === "template"} onChange={() => setScope("template")} /> Save to template for future
+            imports (recommended)
+          </label>
+          <label>
+            <input type="radio" checked={scope === "pending"} onChange={() => setScope("pending")} /> This pending data only
+          </label>
+        </fieldset>
+
+        {error && <p className="form-error">{error}</p>}
+
+        <div className="csv-template-modal-actions">
+          <button type="button" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button type="button" className="cases-entry-open-button" disabled={submitting} onClick={() => void handleSubmit()}>
+            {submitting ? "Saving..." : "Save resolutions"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function PendingCsvImportsSection({

@@ -7,6 +7,7 @@ import { requirePermission, requireAnyPermission } from "../middleware/requirePe
 import { parseCsvGridFromBuffer, parseCsvGrid } from "../utils/csvGridParser";
 import { computeFingerprint, computeFingerprintHash, matchFingerprint, type FingerprintCandidate } from "../utils/csvTemplateFingerprint";
 import { normalizeCsvWithTemplate, type EngineContext } from "../utils/csvTemplateEngine";
+import { buildWeeklyCards, type PendingSourceEntry, type WeeklyCard } from "../utils/csvWeeklyCards";
 import type {
   BlankRowBehavior,
   ColumnMapping,
@@ -582,6 +583,28 @@ async function computeFingerprintForSourceFile(
   return { fingerprint, fingerprintHash: computeFingerprintHash(fingerprint), grid };
 }
 
+const templateWriteLocks = new Map<string, Promise<void>>();
+
+async function withTemplateWriteLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = templateWriteLocks.get(key) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  templateWriteLocks.set(key, previous.then(() => current).catch(() => current));
+
+  await previous;
+
+  try {
+    return await task();
+  } finally {
+    release?.();
+    if (templateWriteLocks.get(key) === current) {
+      templateWriteLocks.delete(key);
+    }
+  }
+}
+
 export async function createTemplate(organizationId: string, userId: string, body: TemplateWriteInput): Promise<TemplateRow> {
   const { fingerprint, fingerprintHash } = await computeFingerprintForSourceFile(
     organizationId,
@@ -590,42 +613,67 @@ export async function createTemplate(organizationId: string, userId: string, bod
     body.headerRowIndex
   );
 
-  const { data, error } = await supabase
-    .from("csv_mapping_templates")
-    .insert({
-      template_group_id: randomUUID(),
-      organization_id: organizationId,
-      name: body.name,
-      version: 1,
-      is_current: true,
-      is_active: true,
-      delimiter: body.delimiter,
-      encoding: "utf-8",
-      header_row_index: body.headerRowIndex,
-      data_start_row_index: body.dataStartRowIndex,
-      data_end_row_index: body.dataEndRowIndex,
-      skip_row_indexes: body.skipRowIndexes,
-      blank_row_behavior: body.blankRowBehavior,
-      fingerprint,
-      fingerprint_hash: fingerprintHash,
-      column_mappings: body.columnMappings,
-      fixed_cell_mappings: body.fixedCellMappings,
-      value_mappings: body.valueMappings,
-      rules: body.rules,
-      created_by: userId,
-      updated_by: userId
-    })
-    .select("*")
-    .single();
+  return withTemplateWriteLock(`${organizationId}:${fingerprintHash}`, async () => {
+    const { data: existingCurrent, error: existingCurrentError } = await supabase
+      .from("csv_mapping_templates")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("fingerprint_hash", fingerprintHash)
+      .eq("is_current", true)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
 
-  if (error) {
-    if (error.code === "23505") {
+    if (existingCurrentError) throw existingCurrentError;
+    if (existingCurrent) {
       throw new TemplateConflictError("An active template already exists for this exact CSV layout.");
     }
-    throw error;
-  }
 
-  return data as TemplateRow;
+    // Deliberately does NOT clear other is_current rows sharing this
+    // fingerprint_hash: a disabled (is_active=false) template can
+    // legitimately stay is_current=true forever (setTemplateActive never
+    // touches is_current) as the pointer to its own version history. It
+    // never conflicts with the partial unique index (which only covers
+    // is_current AND is_active rows) and creating a brand-new, unrelated
+    // template_group here must never silently flip that unrelated group's
+    // current-version pointer as a side effect.
+    const { data, error } = await supabase
+      .from("csv_mapping_templates")
+      .insert({
+        template_group_id: randomUUID(),
+        organization_id: organizationId,
+        name: body.name,
+        version: 1,
+        is_current: true,
+        is_active: true,
+        delimiter: body.delimiter,
+        encoding: "utf-8",
+        header_row_index: body.headerRowIndex,
+        data_start_row_index: body.dataStartRowIndex,
+        data_end_row_index: body.dataEndRowIndex,
+        skip_row_indexes: body.skipRowIndexes,
+        blank_row_behavior: body.blankRowBehavior,
+        fingerprint,
+        fingerprint_hash: fingerprintHash,
+        column_mappings: body.columnMappings,
+        fixed_cell_mappings: body.fixedCellMappings,
+        value_mappings: body.valueMappings,
+        rules: body.rules,
+        created_by: userId,
+        updated_by: userId
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        throw new TemplateConflictError("An active template already exists for this exact CSV layout.");
+      }
+      throw error;
+    }
+
+    return data as TemplateRow;
+  });
 }
 
 // Non-atomic by necessity (no multi-table transaction available through
@@ -653,46 +701,78 @@ export async function createTemplateVersion(
     body.headerRowIndex
   );
 
-  const { error: demoteErr } = await supabase.from("csv_mapping_templates").update({ is_current: false }).eq("id", templateId);
-  if (demoteErr) throw demoteErr;
+  return withTemplateWriteLock(`${organizationId}:${existing.template_group_id}`, async () => {
+    const live = await getTemplateById(organizationId, templateId);
+    if (!live || !live.is_current) {
+      throw new TemplateNotCurrentError("Only the current version of a template can be edited.");
+    }
 
-  const { data: inserted, error: insertErr } = await supabase
-    .from("csv_mapping_templates")
-    .insert({
-      template_group_id: existing.template_group_id,
-      organization_id: organizationId,
-      name: body.name,
-      version: existing.version + 1,
-      is_current: true,
-      is_active: true,
-      delimiter: body.delimiter,
-      encoding: "utf-8",
-      header_row_index: body.headerRowIndex,
-      data_start_row_index: body.dataStartRowIndex,
-      data_end_row_index: body.dataEndRowIndex,
-      skip_row_indexes: body.skipRowIndexes,
-      blank_row_behavior: body.blankRowBehavior,
-      fingerprint,
-      fingerprint_hash: fingerprintHash,
-      column_mappings: body.columnMappings,
-      fixed_cell_mappings: body.fixedCellMappings,
-      value_mappings: body.valueMappings,
-      rules: body.rules,
-      created_by: existing.created_by,
-      updated_by: userId
-    })
-    .select("*")
-    .single();
+    const { data: currentTwin, error: currentTwinError } = await supabase
+      .from("csv_mapping_templates")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("template_group_id", existing.template_group_id)
+      .eq("is_current", true)
+      .neq("id", templateId)
+      .limit(1)
+      .maybeSingle();
 
-  if (insertErr) {
-    await supabase.from("csv_mapping_templates").update({ is_current: true }).eq("id", templateId);
-    if (insertErr.code === "23505") {
+    if (currentTwinError) throw currentTwinError;
+    if (currentTwin) {
       throw new TemplateConflictError("An active template already exists for this exact CSV layout.");
     }
-    throw insertErr;
-  }
 
-  return inserted as TemplateRow;
+    const { error: demoteErr } = await supabase
+      .from("csv_mapping_templates")
+      .update({ is_current: false, updated_at: new Date().toISOString() })
+      .eq("organization_id", organizationId)
+      .eq("template_group_id", existing.template_group_id)
+      .eq("is_current", true);
+
+    if (demoteErr) throw demoteErr;
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from("csv_mapping_templates")
+      .insert({
+        template_group_id: existing.template_group_id,
+        organization_id: organizationId,
+        name: body.name,
+        version: existing.version + 1,
+        is_current: true,
+        is_active: true,
+        delimiter: body.delimiter,
+        encoding: "utf-8",
+        header_row_index: body.headerRowIndex,
+        data_start_row_index: body.dataStartRowIndex,
+        data_end_row_index: body.dataEndRowIndex,
+        skip_row_indexes: body.skipRowIndexes,
+        blank_row_behavior: body.blankRowBehavior,
+        fingerprint,
+        fingerprint_hash: fingerprintHash,
+        column_mappings: body.columnMappings,
+        fixed_cell_mappings: body.fixedCellMappings,
+        value_mappings: body.valueMappings,
+        rules: body.rules,
+        created_by: existing.created_by,
+        updated_by: userId
+      })
+      .select("*")
+      .single();
+
+    if (insertErr) {
+      await supabase
+        .from("csv_mapping_templates")
+        .update({ is_current: true, updated_at: new Date().toISOString() })
+        .eq("organization_id", organizationId)
+        .eq("id", templateId);
+      if (insertErr.code === "23505") {
+        throw new TemplateConflictError("An active template already exists for this exact CSV layout.");
+      }
+      throw insertErr;
+    }
+
+    return inserted as TemplateRow;
+  });
 }
 
 export async function renameTemplate(organizationId: string, userId: string, templateId: string, name: string): Promise<TemplateRow> {
@@ -885,6 +965,55 @@ export type PreviewResult = {
   layoutMismatch: boolean;
 };
 
+export type SourceValueOverrideRow = {
+  id: string;
+  source_field: "size_label" | "market_grade";
+  raw_value: string;
+  action: "map" | "ignore" | "distribute";
+  target_size_id: string | null;
+  distribute_size_ids: string[] | null;
+};
+
+/**
+ * "Pending data only" label resolutions for one source file — additive on
+ * top of a matched template's own value_mappings, never written into the
+ * template. An override always wins over the template's own mapping for the
+ * same (source_field, raw_value) pair, so re-resolving a label for this
+ * source alone is possible even if the template already has (a different)
+ * mapping for it.
+ */
+export async function loadSourceValueOverrides(
+  organizationId: string,
+  sourceFileId: string
+): Promise<SourceValueOverrideRow[]> {
+  const { data, error } = await supabase
+    .from("csv_source_value_overrides")
+    .select("id, source_field, raw_value, action, target_size_id, distribute_size_ids")
+    .eq("organization_id", organizationId)
+    .eq("source_file_id", sourceFileId);
+  if (error) throw error;
+  return (data ?? []) as SourceValueOverrideRow[];
+}
+
+export function applyValueOverrides(config: TemplateConfig, overrides: SourceValueOverrideRow[]): TemplateConfig {
+  if (overrides.length === 0) return config;
+
+  const overrideMappings: ValueMapping[] = overrides.map((o) => ({
+    sourceField: o.source_field,
+    rawValue: o.raw_value,
+    action: o.action,
+    targetSizeId: o.target_size_id ?? undefined,
+    distributeSizeIds: o.distribute_size_ids ?? undefined
+  }));
+
+  const overrideKeys = new Set(overrideMappings.map((m) => `${m.sourceField}:${m.rawValue.trim().toLowerCase()}`));
+  const baseMappings = config.valueMappings.filter(
+    (m) => !overrideKeys.has(`${m.sourceField}:${m.rawValue.trim().toLowerCase()}`)
+  );
+
+  return { ...config, valueMappings: [...baseMappings, ...overrideMappings] };
+}
+
 export async function buildCsvPreview(organizationId: string, body: PreviewInput): Promise<PreviewResult> {
   let config: TemplateConfig;
   let layoutMismatch = false;
@@ -894,7 +1023,8 @@ export async function buildCsvPreview(organizationId: string, body: PreviewInput
     templateRow = await getTemplateById(organizationId, body.templateId);
     if (!templateRow) throw new TemplateNotFoundError("Template not found.");
 
-    config = templateRowToConfig(templateRow);
+    const overrides = await loadSourceValueOverrides(organizationId, body.sourceFileId);
+    config = applyValueOverrides(templateRowToConfig(templateRow), overrides);
 
     const grid = await loadSourceFileGrid(organizationId, body.sourceFileId, templateRow.delimiter);
     const candidateFingerprint = computeFingerprint(grid.rows, templateRow.delimiter, templateRow.header_row_index);
@@ -972,14 +1102,6 @@ export async function buildCsvPreview(organizationId: string, body: PreviewInput
 // preserved raw CSV text so a pending file can always be reopened and
 // reprocessed against current template/rule state without re-upload.
 //
-// NOTE (intentionally deferred, see final report): this only covers the
-// pending-queue *surface* — listing and reprocessing rows already in
-// agent_pending_imports with data_source_type = 'csv_template'. The
-// unattended GrowLink Agent's own upload endpoint does not yet route CSV
-// uploads through CSV-template fingerprint matching to populate these rows
-// automatically; today they can be created via createPendingCsvTemplateImport
-// below (e.g. from an interactive "stage for review" action) but the
-// headless agent still only recognizes FlowMaster/generic_csv layouts.
 // ---------------------------------------------------------------------------
 
 export type PendingCsvTemplateRow = {
@@ -1116,6 +1238,104 @@ export async function listPendingCsvTemplateImports(organizationId: string): Pro
 }
 
 // ---------------------------------------------------------------------------
+// Weekly variety cards — presentation/approval grouping over the SAME
+// per-source previews above (buildCsvPreview), bucketed by (organization,
+// resolved variety, iso year, iso week). No aggregation math happens
+// client-side: every kg/AFW/reconciliation figure a card shows is either a
+// direct sum of, or (for AFW) recomputed straight from, the row-level data
+// the server's own engine already produced for the final import. Rows that
+// still need a template (needs_template=true) are listed separately since
+// they have no variety/week to bucket by yet.
+// ---------------------------------------------------------------------------
+
+export type UnmatchedPendingItem = {
+  id: string;
+  sourceFilename: string;
+  sourceFileId: string | null;
+  uploadedAt: string;
+  matchKind: "close" | "none" | null;
+  error: string | null;
+};
+
+export type WeeklyCardsResult = {
+  cards: WeeklyCard[];
+  unmatched: UnmatchedPendingItem[];
+};
+
+export async function listPendingCsvTemplateWeeklyCards(organizationId: string): Promise<WeeklyCardsResult> {
+  const { data, error } = await supabase
+    .from("agent_pending_imports")
+    .select("id, source_filename, source_file_id, csv_mapping_template_id, needs_template, uploaded_at")
+    .eq("organization_id", organizationId)
+    .eq("data_source_type", "csv_template")
+    .order("uploaded_at", { ascending: false });
+  if (error) throw error;
+
+  const rows = (data ?? []) as PendingCsvTemplateRow[];
+  const entries: PendingSourceEntry[] = [];
+  const unmatched: UnmatchedPendingItem[] = [];
+
+  for (const row of rows) {
+    if (!row.source_file_id || !row.csv_mapping_template_id || row.needs_template) {
+      let matchKind: "close" | "none" | null = null;
+      if (row.source_file_id) {
+        try {
+          const sourceGrid = await loadSourceFileGrid(organizationId, row.source_file_id);
+          const candidateFingerprint = computeFingerprint(sourceGrid.rows, sourceGrid.delimiter, 0);
+          const candidateHash = computeFingerprintHash(candidateFingerprint);
+          const savedTemplates = await loadCurrentActiveTemplates(organizationId);
+          const match = matchFingerprint(candidateFingerprint, candidateHash, toFingerprintCandidates(savedTemplates));
+          matchKind = match.kind === "exact" ? null : match.kind;
+        } catch {
+          // Non-fatal — the UI just won't show a close/none distinction for this row.
+        }
+      }
+      unmatched.push({
+        id: row.id,
+        sourceFilename: row.source_filename,
+        sourceFileId: row.source_file_id,
+        uploadedAt: row.uploaded_at,
+        matchKind,
+        error: null
+      });
+      continue;
+    }
+
+    try {
+      const result = await buildCsvPreview(organizationId, {
+        sourceFileId: row.source_file_id,
+        templateId: row.csv_mapping_template_id
+      });
+      entries.push({
+        pendingImportId: row.id,
+        sourceFileId: row.source_file_id,
+        sourceFilename: row.source_filename,
+        uploadedAt: row.uploaded_at,
+        templateId: row.csv_mapping_template_id,
+        templateName: result.templateName,
+        templateVersion: result.templateVersion,
+        layoutMismatch: result.layoutMismatch,
+        preview: result.preview
+      });
+    } catch (err) {
+      unmatched.push({
+        id: row.id,
+        sourceFilename: row.source_filename,
+        sourceFileId: row.source_file_id,
+        uploadedAt: row.uploaded_at,
+        matchKind: null,
+        error: err instanceof Error ? err.message : "Failed to rebuild preview."
+      });
+    }
+  }
+
+  const activeVarietyByName = await loadActiveVarietyByName(organizationId);
+  const cards = buildWeeklyCards(organizationId, entries, activeVarietyByName);
+
+  return { cards, unmatched };
+}
+
+// ---------------------------------------------------------------------------
 // Final import — writes yield_entries / yield_entry_daily_breakdown /
 // yield_import_runs. Mirrors pdfImport.ts's create/append semantics
 // (merge-on-append, kg-weighted... actually simple-replace here since a CSV
@@ -1216,7 +1436,8 @@ export async function importCsvTemplateGroup(
   const templateRow = await getTemplateById(organizationId, input.templateId);
   if (!templateRow) throw new TemplateNotFoundError("Template not found.");
 
-  const config = templateRowToConfig(templateRow);
+  const overrides = await loadSourceValueOverrides(organizationId, input.sourceFileId);
+  const config = applyValueOverrides(templateRowToConfig(templateRow), overrides);
   const grid = await loadSourceFileGrid(organizationId, input.sourceFileId, templateRow.delimiter);
 
   const [sizeNameById, alreadyImportedLotNumbers, activeVarietyByName] = await Promise.all([
@@ -1393,6 +1614,396 @@ export function parseImportBody(input: unknown): CsvTemplateImportInput {
 }
 
 // ---------------------------------------------------------------------------
+// Resolve unresolved labels — either "pending data only" (an additive
+// csv_source_value_overrides row per affected source, never touching the
+// template) or "save for future imports" (one new template version
+// containing every submitted resolution, per the requirement that a batch
+// of resolutions must never produce one version per label).
+// ---------------------------------------------------------------------------
+
+export type ResolveLabelInput = {
+  sourceField: "size_label" | "market_grade";
+  rawValue: string;
+  action: "map" | "ignore" | "distribute" | "create" | "unresolved";
+  targetSizeId?: string;
+  newSizeName?: string;
+  distributeSizeIds?: string[];
+};
+
+function normalizeSizeName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/** Case-insensitive find-or-create, matching the same duplicate-prevention convention as ensureYieldSizeId (the final-import path) — a name that only differs by case/whitespace reuses the existing size rather than creating a near-duplicate. */
+async function findOrCreateYieldSizeByName(organizationId: string, userId: string, rawName: string): Promise<string> {
+  const name = rawName.trim();
+  if (!name) throw new TemplateValidationError("A size name is required to create a new size.");
+
+  const { data: existingRows, error: existingErr } = await supabase
+    .from("yield_sizes")
+    .select("id, name")
+    .eq("organization_id", organizationId);
+  if (existingErr) throw existingErr;
+
+  const match = (existingRows ?? []).find((s) => normalizeSizeName(s.name as string) === normalizeSizeName(name));
+  if (match) return match.id as string;
+
+  const { data: created, error: createErr } = await supabase
+    .from("yield_sizes")
+    .insert({ organization_id: organizationId, name, sort_order: 0, status: "active", created_by: userId })
+    .select("id")
+    .single();
+  if (createErr) throw createErr;
+  return created.id as string;
+}
+
+async function resolveTargetSizeId(
+  organizationId: string,
+  userId: string,
+  resolution: ResolveLabelInput
+): Promise<{ action: "map" | "ignore" | "distribute"; targetSizeId: string | null; distributeSizeIds: string[] | null }> {
+  if (resolution.action === "ignore") return { action: "ignore", targetSizeId: null, distributeSizeIds: null };
+  if (resolution.action === "distribute") {
+    if (!resolution.distributeSizeIds || resolution.distributeSizeIds.length === 0) {
+      throw new TemplateValidationError("distributeSizeIds is required for a distribute resolution.");
+    }
+    await assertYieldSizesBelongToOrg(organizationId, resolution.distributeSizeIds);
+    return { action: "distribute", targetSizeId: null, distributeSizeIds: resolution.distributeSizeIds };
+  }
+  if (resolution.action === "create") {
+    const id = await findOrCreateYieldSizeByName(organizationId, userId, resolution.newSizeName ?? resolution.rawValue);
+    return { action: "map", targetSizeId: id, distributeSizeIds: null };
+  }
+  // action === "map"
+  if (!resolution.targetSizeId) throw new TemplateValidationError("targetSizeId is required for a map resolution.");
+  await assertYieldSizesBelongToOrg(organizationId, [resolution.targetSizeId]);
+  return { action: "map", targetSizeId: resolution.targetSizeId, distributeSizeIds: null };
+}
+
+/** Never trust a client-supplied yield_sizes id without confirming it belongs to this organization first. */
+async function assertYieldSizesBelongToOrg(organizationId: string, sizeIds: string[]): Promise<void> {
+  const uniqueIds = Array.from(new Set(sizeIds));
+  const { data, error } = await supabase.from("yield_sizes").select("id").eq("organization_id", organizationId).in("id", uniqueIds);
+  if (error) throw error;
+  if ((data ?? []).length !== uniqueIds.length) {
+    throw new TemplateValidationError("One or more selected sizes were not found in this organization.");
+  }
+}
+
+/** Never trust client-supplied source file ids without confirming each one belongs to this organization first. */
+async function assertSourceFilesBelongToOrg(organizationId: string, sourceFileIds: string[]): Promise<void> {
+  const uniqueIds = Array.from(new Set(sourceFileIds));
+  const { data, error } = await supabase.from("csv_import_source_files").select("id").eq("organization_id", organizationId).in("id", uniqueIds);
+  if (error) throw error;
+  if ((data ?? []).length !== uniqueIds.length) {
+    throw new TemplateValidationError("One or more selected source files were not found in this organization.");
+  }
+}
+
+export type ResolvePendingLabelsResult = { scope: "pending"; appliedCount: number };
+
+/** "This pending data only" — never versions the matched template. */
+export async function resolvePendingLabelsForSources(
+  organizationId: string,
+  userId: string,
+  sourceFileIds: string[],
+  resolutions: ResolveLabelInput[]
+): Promise<ResolvePendingLabelsResult> {
+  if (sourceFileIds.length === 0) throw new TemplateValidationError("At least one affected source file is required.");
+  if (resolutions.length === 0) throw new TemplateValidationError("At least one resolution is required.");
+  await assertSourceFilesBelongToOrg(organizationId, sourceFileIds);
+
+  let appliedCount = 0;
+  for (const resolution of resolutions) {
+    if (resolution.action === "unresolved") {
+      // "Leave unresolved" is a no-op / removes any prior pending-only override.
+      const { error } = await supabase
+        .from("csv_source_value_overrides")
+        .delete()
+        .eq("organization_id", organizationId)
+        .in("source_file_id", sourceFileIds)
+        .eq("source_field", resolution.sourceField)
+        .eq("raw_value", resolution.rawValue);
+      if (error) throw error;
+      continue;
+    }
+
+    const resolved = await resolveTargetSizeId(organizationId, userId, resolution);
+
+    for (const sourceFileId of sourceFileIds) {
+      const { error } = await supabase.from("csv_source_value_overrides").upsert(
+        {
+          organization_id: organizationId,
+          source_file_id: sourceFileId,
+          source_field: resolution.sourceField,
+          raw_value: resolution.rawValue,
+          action: resolved.action,
+          target_size_id: resolved.targetSizeId,
+          distribute_size_ids: resolved.distributeSizeIds,
+          created_by: userId,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: "organization_id,source_file_id,source_field,raw_value" }
+      );
+      if (error) throw error;
+      appliedCount += 1;
+    }
+  }
+
+  return { scope: "pending", appliedCount };
+}
+
+export type ResolveTemplateLabelsResult = {
+  scope: "template";
+  newTemplateId: string;
+  newTemplateVersion: number;
+  reprocessedSourceCount: number;
+};
+
+/** "Save to template for future imports" — one new version containing every submitted resolution, never a mutation of the current version. */
+export async function resolveLabelsForTemplate(
+  organizationId: string,
+  userId: string,
+  templateId: string,
+  resolutions: ResolveLabelInput[]
+): Promise<ResolveTemplateLabelsResult> {
+  if (resolutions.length === 0) throw new TemplateValidationError("At least one resolution is required.");
+
+  const templateRow = await getTemplateById(organizationId, templateId);
+  if (!templateRow) throw new TemplateNotFoundError("Template not found.");
+
+  // A source currently matched to this template — required to recompute the
+  // fingerprint for the new version (see createTemplateVersion). Any pending
+  // source on this exact template has, by definition, this exact layout.
+  const { data: representativeRow, error: representativeErr } = await supabase
+    .from("agent_pending_imports")
+    .select("source_file_id")
+    .eq("organization_id", organizationId)
+    .eq("csv_mapping_template_id", templateId)
+    .eq("data_source_type", "csv_template")
+    .not("source_file_id", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (representativeErr) throw representativeErr;
+  if (!representativeRow?.source_file_id) {
+    throw new TemplateValidationError("No pending source file is currently matched to this template to base the new version on.");
+  }
+
+  const newValueMappings: ValueMapping[] = [...(templateRow.value_mappings ?? [])];
+  for (const resolution of resolutions) {
+    const key = (m: ValueMapping) => `${m.sourceField}:${normalizeSizeName(m.rawValue)}`;
+    const resolutionKey = `${resolution.sourceField}:${normalizeSizeName(resolution.rawValue)}`;
+    const existingIndex = newValueMappings.findIndex((m) => key(m) === resolutionKey);
+
+    if (resolution.action === "unresolved") {
+      if (existingIndex >= 0) newValueMappings.splice(existingIndex, 1);
+      continue;
+    }
+
+    const resolved = await resolveTargetSizeId(organizationId, userId, resolution);
+    const mapping: ValueMapping = {
+      sourceField: resolution.sourceField,
+      rawValue: resolution.rawValue,
+      action: resolved.action,
+      targetSizeId: resolved.targetSizeId ?? undefined,
+      distributeSizeIds: resolved.distributeSizeIds ?? undefined
+    };
+    if (existingIndex >= 0) newValueMappings[existingIndex] = mapping;
+    else newValueMappings.push(mapping);
+  }
+
+  const versionBody: TemplateWriteInput = {
+    name: templateRow.name,
+    sourceFileId: representativeRow.source_file_id as string,
+    delimiter: templateRow.delimiter,
+    headerRowIndex: templateRow.header_row_index,
+    dataStartRowIndex: templateRow.data_start_row_index,
+    dataEndRowIndex: templateRow.data_end_row_index,
+    skipRowIndexes: templateRow.skip_row_indexes ?? [],
+    blankRowBehavior: templateRow.blank_row_behavior,
+    columnMappings: templateRow.column_mappings ?? [],
+    fixedCellMappings: templateRow.fixed_cell_mappings ?? [],
+    valueMappings: newValueMappings,
+    rules: templateRow.rules ?? []
+  };
+
+  const newTemplate = await createTemplateVersion(organizationId, userId, templateId, versionBody);
+
+  // Reprocess every pending source still pointed at the OLD version so it
+  // picks up the new resolutions immediately, without re-upload. Safe for
+  // every pending row on this template (not just the ones containing the
+  // resolved labels) since the new version is a strict superset of mappings.
+  const { data: reprocessedRows, error: reprocessError } = await supabase
+    .from("agent_pending_imports")
+    .update({ csv_mapping_template_id: newTemplate.id })
+    .eq("organization_id", organizationId)
+    .eq("csv_mapping_template_id", templateId)
+    .eq("data_source_type", "csv_template")
+    .select("id");
+  if (reprocessError) throw reprocessError;
+
+  return {
+    scope: "template",
+    newTemplateId: newTemplate.id,
+    newTemplateVersion: newTemplate.version,
+    reprocessedSourceCount: (reprocessedRows ?? []).length
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Grouped ("weekly card") import — server-owned. The client identifies a
+// card only by its cardKey (an opaque token from the last GET); every
+// figure actually written comes from a FRESH re-parse of each contributing
+// source right before writing it, via the exact same importCsvTemplateGroup
+// used by the single-file import path (yield_import_runs claim + create/
+// append merge + its own duplicate/idempotency guarantees), never from a
+// client-supplied total.
+// ---------------------------------------------------------------------------
+
+export type ImportWeeklyCardSourceResult = {
+  sourceFilename: string;
+  lotNumber: string | null;
+  status: "imported" | "failed";
+  mode?: "create" | "append";
+  error?: string;
+};
+
+export type ImportWeeklyCardResult = {
+  varietyName: string;
+  isoYear: number | null;
+  isoWeek: number | null;
+  totalKgImported: number;
+  results: ImportWeeklyCardSourceResult[];
+};
+
+export async function importWeeklyCard(organizationId: string, userId: string, cardKey: string): Promise<ImportWeeklyCardResult> {
+  const { cards } = await listPendingCsvTemplateWeeklyCards(organizationId);
+  const card = cards.find((c) => c.cardKey === cardKey);
+  if (!card) {
+    throw new TemplateNotFoundError(
+      "This weekly card no longer exists — its pending sources may have already been imported or removed. Refresh and try again."
+    );
+  }
+  if (!card.canImport) {
+    throw new TemplateValidationError("This card still has unresolved labels or other validation issues and cannot be imported yet.");
+  }
+  if (card.varietyId === null) {
+    throw new TemplateValidationError(`No active variety matches "${card.varietyName}" — resolve the variety before importing.`);
+  }
+
+  const results: ImportWeeklyCardSourceResult[] = [];
+  let totalKgImported = 0;
+
+  // Sequential, not parallel: each import can append into the SAME
+  // yield_entries row for this variety/week, and importCsvTemplateGroup's
+  // create-vs-append decision is a read-then-write against that row —
+  // running sources in parallel would race two "create" attempts.
+  for (const source of card.sources) {
+    let freshGroups: NormalizedGroup[];
+    try {
+      const freshPreview = await buildCsvPreview(organizationId, { sourceFileId: source.sourceFileId, templateId: source.templateId });
+      freshGroups = freshPreview.preview.groups.filter(
+        (g) =>
+          g.isoYear === card.isoYear &&
+          g.isoWeek === card.isoWeek &&
+          (g.varietyRaw ?? "").trim().toLowerCase() === card.varietyName.trim().toLowerCase()
+      );
+    } catch (err) {
+      results.push({
+        sourceFilename: source.sourceFilename,
+        lotNumber: source.lotNumber,
+        status: "failed",
+        error: err instanceof Error ? err.message : "Failed to re-parse this source before import."
+      });
+      continue;
+    }
+
+    if (freshGroups.length === 0) {
+      results.push({
+        sourceFilename: source.sourceFilename,
+        lotNumber: source.lotNumber,
+        status: "failed",
+        error: "This source no longer contains a matching group for this variety/week (it may have changed since the preview was loaded)."
+      });
+      continue;
+    }
+
+    for (const group of freshGroups) {
+      try {
+        const importResult = await importCsvTemplateGroup(organizationId, userId, {
+          sourceFileId: source.sourceFileId,
+          templateId: source.templateId,
+          groupKey: group.groupKey,
+          approvedGroup: group
+        });
+        results.push({ sourceFilename: source.sourceFilename, lotNumber: group.lotNumber, status: "imported", mode: importResult.mode });
+        totalKgImported += group.reconciliation.recognizedSizeKg;
+      } catch (err) {
+        results.push({
+          sourceFilename: source.sourceFilename,
+          lotNumber: group.lotNumber,
+          status: "failed",
+          error: err instanceof Error ? err.message : "Import failed."
+        });
+      }
+    }
+  }
+
+  return {
+    varietyName: card.varietyName,
+    isoYear: card.isoYear,
+    isoWeek: card.isoWeek,
+    totalKgImported: Math.round(totalKgImported * 100) / 100,
+    results
+  };
+}
+
+export function parseResolveLabelsBody(input: unknown): {
+  scope: "pending" | "template";
+  templateId: string;
+  sourceFileIds: string[];
+  resolutions: ResolveLabelInput[];
+} {
+  if (!input || typeof input !== "object") throw new TemplateValidationError("Invalid request body");
+  const body = input as Record<string, unknown>;
+
+  const scope = body.scope === "template" ? "template" : body.scope === "pending" ? "pending" : null;
+  if (!scope) throw new TemplateValidationError('scope must be "pending" or "template"');
+
+  const templateId = typeof body.templateId === "string" ? body.templateId : "";
+  if (!templateId) throw new TemplateValidationError("templateId is required");
+
+  const sourceFileIds = Array.isArray(body.sourceFileIds) ? body.sourceFileIds.filter((s): s is string => typeof s === "string") : [];
+  if (scope === "pending" && sourceFileIds.length === 0) {
+    throw new TemplateValidationError("sourceFileIds is required for a pending-data-only resolution");
+  }
+
+  const rawResolutions = Array.isArray(body.resolutions) ? body.resolutions : [];
+  const resolutions: ResolveLabelInput[] = rawResolutions.map((raw) => {
+    const r = raw as Record<string, unknown>;
+    const sourceField = r.sourceField === "market_grade" ? "market_grade" : "size_label";
+    const rawValue = typeof r.rawValue === "string" ? r.rawValue : "";
+    const action =
+      r.action === "map" || r.action === "ignore" || r.action === "distribute" || r.action === "create" || r.action === "unresolved"
+        ? r.action
+        : null;
+    if (!rawValue) throw new TemplateValidationError("Each resolution requires rawValue");
+    if (!action) throw new TemplateValidationError("Each resolution requires a valid action");
+    return {
+      sourceField,
+      rawValue,
+      action,
+      targetSizeId: typeof r.targetSizeId === "string" ? r.targetSizeId : undefined,
+      newSizeName: typeof r.newSizeName === "string" ? r.newSizeName : undefined,
+      distributeSizeIds: Array.isArray(r.distributeSizeIds) ? r.distributeSizeIds.filter((s): s is string => typeof s === "string") : undefined
+    };
+  });
+  if (resolutions.length === 0) throw new TemplateValidationError("At least one resolution is required");
+
+  return { scope, templateId, sourceFileIds, resolutions };
+}
+
+// ---------------------------------------------------------------------------
 // Routes — thin wrappers translating the functions above to HTTP.
 // ---------------------------------------------------------------------------
 
@@ -1453,6 +2064,44 @@ csvMappingTemplatesRouter.get("/csv-templates/pending", canView, async (req, res
     return res.json({ files: items });
   } catch (error) {
     return handleKnownError(res, error, "Failed to load pending CSV imports.", "csv-templates pending list error:");
+  }
+});
+
+csvMappingTemplatesRouter.get("/csv-templates/pending/weekly-cards", canView, async (req, res) => {
+  try {
+    const result = await listPendingCsvTemplateWeeklyCards(req.organizationId);
+    return res.json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load pending CSV imports.", "csv-templates weekly-cards list error:");
+  }
+});
+
+csvMappingTemplatesRouter.post("/csv-templates/pending/resolve-labels", canEdit, async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  try {
+    const body = parseResolveLabelsBody(req.body);
+    if (body.scope === "pending") {
+      const result = await resolvePendingLabelsForSources(req.organizationId, userId, body.sourceFileIds, body.resolutions);
+      return res.status(201).json(result);
+    }
+    const result = await resolveLabelsForTemplate(req.organizationId, userId, body.templateId, body.resolutions);
+    return res.status(201).json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to resolve label(s).", "csv-templates resolve-labels error:");
+  }
+});
+
+csvMappingTemplatesRouter.post("/csv-templates/pending/import-week", canEdit, async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  try {
+    const cardKey = typeof req.body?.cardKey === "string" ? req.body.cardKey : "";
+    if (!cardKey) return res.status(400).json({ message: "cardKey is required." });
+    const result = await importWeeklyCard(req.organizationId, userId, cardKey);
+    return res.status(201).json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to import this weekly card.", "csv-templates import-week error:");
   }
 });
 
