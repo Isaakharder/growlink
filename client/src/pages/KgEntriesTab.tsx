@@ -426,6 +426,7 @@ export function KgEntriesTab() {
   const [reassignErrors, setReassignErrors] = useState<Record<string, string>>({});
   const [removingReadingId, setRemovingReadingId] = useState<string | null>(null);
   const [removeErrors, setRemoveErrors] = useState<Record<string, string>>({});
+  const [removeReadingConfirm, setRemoveReadingConfirm] = useState<{ readingId: string; filename: string } | null>(null);
   const [sizeRules, setSizeRules] = useState<FlowMasterSizeRule[]>([]);
   const [isSizeSetupOpen, setIsSizeSetupOpen] = useState(false);
   const [sizeSetupDrafts, setSizeSetupDrafts] = useState<Record<string, SizeSetupDraft>>({});
@@ -1870,14 +1871,10 @@ export function KgEntriesTab() {
     }
   }
 
-  async function handleRemoveReading(readingId: string, filename: string) {
-    const confirmed = window.confirm(
-      `Remove "${filename}" from pending review? This does not delete anything already imported — it only discards this queued file. Re-upload it later if needed.`
-    );
-    if (!confirmed) {
-      return;
-    }
-
+  // The actual delete, callable from inside the GrowLink confirm modal
+  // (see removeReadingConfirm below) once the user confirms — no
+  // browser-native confirm() gate here.
+  async function removePendingReading(readingId: string): Promise<{ ok: true } | { ok: false; message: string }> {
     setRemoveErrors((current) => {
       const next = { ...current };
       delete next[readingId];
@@ -1903,11 +1900,11 @@ export function KgEntriesTab() {
 
       setPdfPreviewFiles((current) => current.filter((file) => !(file.success && file.id === readingId)));
       void fetchPendingWeeks();
+      return { ok: true };
     } catch (error) {
-      setRemoveErrors((current) => ({
-        ...current,
-        [readingId]: error instanceof Error ? error.message : "Remove failed."
-      }));
+      const message = error instanceof Error ? error.message : "Remove failed.";
+      setRemoveErrors((current) => ({ ...current, [readingId]: message }));
+      return { ok: false, message };
     } finally {
       setRemovingReadingId(null);
     }
@@ -2484,7 +2481,7 @@ export function KgEntriesTab() {
                                       type="button"
                                       className="pdf-source-reading-remove-button"
                                       disabled={removingReadingId === reading.id}
-                                      onClick={() => void handleRemoveReading(reading.id as string, reading.filename)}
+                                      onClick={() => setRemoveReadingConfirm({ readingId: reading.id as string, filename: reading.filename })}
                                     >
                                       {removingReadingId === reading.id ? "Removing..." : "Remove"}
                                     </button>
@@ -2896,6 +2893,46 @@ export function KgEntriesTab() {
                 disabled={saving}
               >
                 Cancel
+              </button>
+            </div>
+        </ModalOverlay>
+      ) : null}
+
+      {removeReadingConfirm ? (
+        <ModalOverlay
+          onClose={() => {
+            if (removingReadingId !== removeReadingConfirm.readingId) setRemoveReadingConfirm(null);
+          }}
+          contentClassName="variety-modal csv-template-modal"
+          titleId="remove-reading-confirm-title"
+          closeOnEscape={removingReadingId !== removeReadingConfirm.readingId}
+          trapFocus
+        >
+            <h2 id="remove-reading-confirm-title">Remove this file from pending review?</h2>
+            <p>
+              Remove &ldquo;{removeReadingConfirm.filename}&rdquo; from pending review? This does not delete anything already
+              imported — it only discards this queued file. Re-upload it later if needed.
+            </p>
+            {removeErrors[removeReadingConfirm.readingId] && <p className="form-error">{removeErrors[removeReadingConfirm.readingId]}</p>}
+            <div className="csv-template-modal-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={removingReadingId === removeReadingConfirm.readingId}
+                onClick={() => setRemoveReadingConfirm(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-action-button"
+                disabled={removingReadingId === removeReadingConfirm.readingId}
+                onClick={async () => {
+                  const result = await removePendingReading(removeReadingConfirm.readingId);
+                  if (result.ok) setRemoveReadingConfirm(null);
+                }}
+              >
+                {removingReadingId === removeReadingConfirm.readingId ? "Removing…" : "Remove"}
               </button>
             </div>
         </ModalOverlay>

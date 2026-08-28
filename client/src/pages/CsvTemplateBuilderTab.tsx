@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
+import { ModalOverlay } from "../components/ModalOverlay";
 import { apiFetch } from "../lib/api";
 import {
   MAPPING_TYPES,
@@ -433,6 +434,10 @@ export function CsvTemplateBuilderTab() {
   const [importingCardKey, setImportingCardKey] = useState<string | null>(null);
   const [cardImportStatus, setCardImportStatus] = useState<Record<string, string>>({});
   const [resolveModalCard, setResolveModalCard] = useState<WeeklyCard | null>(null);
+  const [importConfirmCard, setImportConfirmCard] = useState<WeeklyCard | null>(null);
+  const [removeConfirmTarget, setRemoveConfirmTarget] = useState<
+    { kind: "pending"; item: PendingCsvItem } | { kind: "source"; source: WeeklyCardSourceDetail } | null
+  >(null);
 
   // Single shared 429 notice for BOTH preview and save — whichever action
   // hits its rate limit, this is the only place the message renders, so it
@@ -738,12 +743,10 @@ export function CsvTemplateBuilderTab() {
   // and create a fresh pending row, unless that lot was already imported
   // (a real yield_import_runs row for the same source file), matching the
   // existing "Remove" behavior for FlowMaster pending imports.
-  async function handleRemovePendingImport(item: PendingCsvItem) {
-    const confirmed = window.confirm(
-      `Remove "${item.sourceFilename}" from pending review? This does not delete anything already imported — it only discards this queued file. Re-sending it later will create a fresh pending import.`
-    );
-    if (!confirmed) return;
-
+  // The actual delete, callable from inside the GrowLink confirm modal
+  // (RemoveConfirmModal) once the user confirms — never called directly by
+  // a click handler, so there's no browser-native confirm() gate here.
+  async function removePendingImport(item: PendingCsvItem): Promise<{ ok: true } | { ok: false; message: string }> {
     setRemoveErrors((current) => {
       const next = { ...current };
       delete next[item.id];
@@ -757,11 +760,11 @@ export function CsvTemplateBuilderTab() {
         throw new Error(body?.message ?? `Remove failed (${res.status})`);
       }
       setPendingItems((current) => current.filter((i) => i.id !== item.id));
+      return { ok: true };
     } catch (err) {
-      setRemoveErrors((current) => ({
-        ...current,
-        [item.id]: err instanceof Error ? err.message : "Remove failed."
-      }));
+      const message = err instanceof Error ? err.message : "Remove failed.";
+      setRemoveErrors((current) => ({ ...current, [item.id]: message }));
+      return { ok: false, message };
     } finally {
       setRemovingPendingId(null);
     }
@@ -770,12 +773,7 @@ export function CsvTemplateBuilderTab() {
   // Removing one source from a weekly card only removes that source's
   // pending contribution — the card is recalculated from the remaining
   // sources on the next fetch, never wiped out as a side effect.
-  async function handleRemoveWeeklyCardSource(source: WeeklyCardSourceDetail) {
-    const confirmed = window.confirm(
-      `Remove "${source.sourceFilename}"${source.lotNumber ? ` (lot ${source.lotNumber})` : ""} from this weekly card? This does not delete anything already imported — it only discards this queued source. Re-sending it later will create a fresh pending import.`
-    );
-    if (!confirmed) return;
-
+  async function removeWeeklyCardSource(source: WeeklyCardSourceDetail): Promise<{ ok: true } | { ok: false; message: string }> {
     setRemovingPendingId(source.pendingImportId);
     try {
       const res = await apiFetch(pendingImportUrl(source.pendingImportId), { method: "DELETE" });
@@ -784,25 +782,17 @@ export function CsvTemplateBuilderTab() {
         throw new Error(body?.message ?? `Remove failed (${res.status})`);
       }
       await fetchPendingItems();
+      return { ok: true };
     } catch (err) {
-      setRemoveErrors((current) => ({
-        ...current,
-        [source.pendingImportId]: err instanceof Error ? err.message : "Remove failed."
-      }));
+      const message = err instanceof Error ? err.message : "Remove failed.";
+      setRemoveErrors((current) => ({ ...current, [source.pendingImportId]: message }));
+      return { ok: false, message };
     } finally {
       setRemovingPendingId(null);
     }
   }
 
-  async function handleImportWeeklyCard(card: WeeklyCard) {
-    const lotList = card.lots.map((l) => l.lotNumber ?? "(no lot number)").join(", ");
-    const confirmed = window.confirm(
-      `Import ${card.varietyName} — Year ${card.isoYear ?? "?"} Week ${card.isoWeek ?? "?"}?\n\n` +
-        `This will import ${card.lotCount} lot${card.lotCount === 1 ? "" : "s"} from ${card.sourceFileCount} source file${card.sourceFileCount === 1 ? "" : "s"}: ${lotList}.\n\n` +
-        `Total: ${card.mappedKg.toFixed(2)} kg.`
-    );
-    if (!confirmed) return;
-
+  async function importWeeklyCard(card: WeeklyCard): Promise<{ ok: true } | { ok: false; message: string }> {
     setImportingCardKey(card.cardKey);
     setCardImportStatus((current) => ({ ...current, [card.cardKey]: "" }));
     try {
@@ -819,19 +809,26 @@ export function CsvTemplateBuilderTab() {
         results: Array<{ sourceFilename: string; lotNumber: string | null; status: "imported" | "failed"; mode?: string; error?: string }>;
       };
       const failed = body.results.filter((r) => r.status === "failed");
-      const summary =
-        failed.length === 0
-          ? `Imported ${body.totalKgImported.toFixed(2)} kg for ${body.varietyName} — Year ${body.isoYear ?? "?"} Week ${body.isoWeek ?? "?"}.`
-          : `Imported ${body.totalKgImported.toFixed(2)} kg, but ${failed.length} source(s) failed: ${failed
-              .map((f) => `${f.sourceFilename} (${f.error ?? "unknown error"})`)
-              .join("; ")}`;
+      if (failed.length > 0) {
+        // Partial failure: keep the modal open (return ok:false) so the
+        // useful server detail isn't lost behind a closed dialog, but the
+        // successful sources are already committed — reflect that on the
+        // card underneath immediately.
+        void fetchPendingItems();
+        const message = `Imported ${formatKg(body.totalKgImported)} kg, but ${failed.length} source(s) failed: ${failed
+          .map((f) => `${f.sourceFilename} (${f.error ?? "unknown error"})`)
+          .join("; ")}`;
+        setCardImportStatus((current) => ({ ...current, [card.cardKey]: message }));
+        return { ok: false, message };
+      }
+      const summary = `Imported ${formatKg(body.totalKgImported)} kg for ${body.varietyName} — Year ${body.isoYear ?? "?"} Week ${body.isoWeek ?? "?"}.`;
       setCardImportStatus((current) => ({ ...current, [card.cardKey]: summary }));
       void fetchPendingItems();
+      return { ok: true };
     } catch (err) {
-      setCardImportStatus((current) => ({
-        ...current,
-        [card.cardKey]: err instanceof Error ? err.message : "Import failed."
-      }));
+      const message = err instanceof Error ? err.message : "Import failed.";
+      setCardImportStatus((current) => ({ ...current, [card.cardKey]: message }));
+      return { ok: false, message };
     } finally {
       setImportingCardKey(null);
     }
@@ -1737,8 +1734,8 @@ export function CsvTemplateBuilderTab() {
         removingPendingId={removingPendingId}
         removeErrors={removeErrors}
         onRefresh={fetchPendingItems}
-        onImportCard={handleImportWeeklyCard}
-        onRemoveSource={handleRemoveWeeklyCardSource}
+        onImportCard={setImportConfirmCard}
+        onRemoveSource={(source) => setRemoveConfirmTarget({ kind: "source", source })}
         onOpenResolveLabels={setResolveModalCard}
       />
 
@@ -1748,6 +1745,19 @@ export function CsvTemplateBuilderTab() {
           yieldSizes={yieldSizes}
           onClose={() => setResolveModalCard(null)}
           onSubmit={handleSubmitResolveLabels}
+        />
+      )}
+
+      {importConfirmCard && (
+        <ImportConfirmModal card={importConfirmCard} onClose={() => setImportConfirmCard(null)} onConfirm={importWeeklyCard} />
+      )}
+
+      {removeConfirmTarget && (
+        <RemoveConfirmModal
+          target={removeConfirmTarget}
+          onClose={() => setRemoveConfirmTarget(null)}
+          onConfirmRemovePending={removePendingImport}
+          onConfirmRemoveSource={removeWeeklyCardSource}
         />
       )}
 
@@ -1765,7 +1775,7 @@ export function CsvTemplateBuilderTab() {
         onRefresh={fetchPendingItems}
         removingPendingId={removingPendingId}
         removeErrors={removeErrors}
-        onRemove={handleRemovePendingImport}
+        onRemove={(item) => setRemoveConfirmTarget({ kind: "pending", item })}
       />
 
       <h3>{editingTemplateId ? `Editing "${editingTemplateName}"` : "Upload a new file"}</h3>
@@ -2793,6 +2803,184 @@ function WeeklyCardView({
   );
 }
 
+function ImportConfirmModal({
+  card,
+  onClose,
+  onConfirm
+}: {
+  card: WeeklyCard;
+  onClose: () => void;
+  onConfirm: (card: WeeklyCard) => Promise<{ ok: true } | { ok: false; message: string }>;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function guardedClose() {
+    if (!submitting) onClose();
+  }
+
+  async function handleConfirm() {
+    setError(null);
+    setSubmitting(true);
+    const result = await onConfirm(card);
+    setSubmitting(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    onClose();
+  }
+
+  const templateLabel = card.templateNames.map(formatTemplateBadge).join(", ") || "Unknown";
+
+  return (
+    <ModalOverlay
+      onClose={guardedClose}
+      contentClassName="variety-modal csv-template-modal csv-import-confirm-modal"
+      titleId="import-confirm-title"
+      closeOnEscape={!submitting}
+      trapFocus
+    >
+      <h2 id="import-confirm-title">Import weekly yield?</h2>
+      <p className="csv-import-confirm-subtitle">
+        {card.varietyName} — Year {card.isoYear ?? "?"} &middot; Week {card.isoWeek ?? "?"}
+      </p>
+
+      <dl className="csv-import-confirm-summary">
+        <div>
+          <dt>Lots</dt>
+          <dd>
+            <ul className="csv-import-confirm-lots">
+              {card.lots.map((lot, i) => (
+                <li key={i}>
+                  <code>{lot.lotNumber ?? "(no lot number)"}</code>
+                </li>
+              ))}
+            </ul>
+          </dd>
+        </div>
+        <div>
+          <dt>Source files</dt>
+          <dd>{card.sourceFileCount}</dd>
+        </div>
+        <div>
+          <dt>Total mapped kg</dt>
+          <dd>{formatKg(card.mappedKg)} kg</dd>
+        </div>
+        <div>
+          <dt>This import kg/m&sup2;</dt>
+          <dd>
+            {card.kgPerM2 !== null ? (
+              `${card.kgPerM2.toFixed(3)} kg/m²`
+            ) : (
+              <Link to="/setup/varieties" className="csv-weekly-area-not-set-link">
+                Area not set
+              </Link>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Template</dt>
+          <dd>{templateLabel}</dd>
+        </div>
+        <div>
+          <dt>Reconciliation</dt>
+          <dd>
+            {card.reconciliationOk ? (
+              <span className="csv-weekly-badge csv-weekly-badge-success">OK</span>
+            ) : (
+              <span className="csv-weekly-badge csv-weekly-badge-error">Difference {formatKg(card.reconciliationDifference)} kg</span>
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="csv-import-confirm-explanation">
+        This will add the listed lot{card.lotCount === 1 ? "" : "s"} to {card.varietyName}&rsquo;s Week {card.isoWeek ?? "?"} yield
+        data. Previously imported sources will not be counted again.
+      </p>
+
+      {error && <p className="form-error">{error}</p>}
+
+      <div className="csv-template-modal-actions">
+        <button type="button" className="secondary" disabled={submitting} onClick={guardedClose}>
+          Cancel
+        </button>
+        <button type="button" className="primary-action-button" disabled={submitting} onClick={() => void handleConfirm()}>
+          {submitting ? (
+            <>
+              <span className="csv-import-confirm-spinner" aria-hidden="true" /> Importing&hellip;
+            </>
+          ) : (
+            `Import ${card.lotCount} lot${card.lotCount === 1 ? "" : "s"}`
+          )}
+        </button>
+      </div>
+    </ModalOverlay>
+  );
+}
+
+function RemoveConfirmModal({
+  target,
+  onClose,
+  onConfirmRemovePending,
+  onConfirmRemoveSource
+}: {
+  target: { kind: "pending"; item: PendingCsvItem } | { kind: "source"; source: WeeklyCardSourceDetail };
+  onClose: () => void;
+  onConfirmRemovePending: (item: PendingCsvItem) => Promise<{ ok: true } | { ok: false; message: string }>;
+  onConfirmRemoveSource: (source: WeeklyCardSourceDetail) => Promise<{ ok: true } | { ok: false; message: string }>;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function guardedClose() {
+    if (!submitting) onClose();
+  }
+
+  async function handleConfirm() {
+    setError(null);
+    setSubmitting(true);
+    const result = target.kind === "pending" ? await onConfirmRemovePending(target.item) : await onConfirmRemoveSource(target.source);
+    setSubmitting(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    onClose();
+  }
+
+  const filename = target.kind === "pending" ? target.item.sourceFilename : target.source.sourceFilename;
+  const lotSuffix = target.kind === "source" && target.source.lotNumber ? ` (lot ${target.source.lotNumber})` : "";
+
+  return (
+    <ModalOverlay
+      onClose={guardedClose}
+      contentClassName="variety-modal csv-template-modal"
+      titleId="remove-confirm-title"
+      closeOnEscape={!submitting}
+      trapFocus
+    >
+      <h2 id="remove-confirm-title">Remove this file from pending review?</h2>
+      <p>
+        Remove &ldquo;{filename}&rdquo;{lotSuffix} from pending review? This does not delete anything already imported — it only
+        discards this queued file. Re-sending it later will create a fresh pending import.
+      </p>
+
+      {error && <p className="form-error">{error}</p>}
+
+      <div className="csv-template-modal-actions">
+        <button type="button" className="secondary" disabled={submitting} onClick={guardedClose}>
+          Cancel
+        </button>
+        <button type="button" className="primary-action-button" disabled={submitting} onClick={() => void handleConfirm()}>
+          {submitting ? "Removing…" : "Remove"}
+        </button>
+      </div>
+    </ModalOverlay>
+  );
+}
+
 function ResolveLabelsModal({
   card,
   yieldSizes,
@@ -2825,6 +3013,10 @@ function ResolveLabelsModal({
 
   function updateChoice(rawValue: string, patch: Partial<Choice>) {
     setChoices((current) => ({ ...current, [rawValue]: { ...current[rawValue], ...patch } }));
+  }
+
+  function guardedClose() {
+    if (!submitting) onClose();
   }
 
   async function handleSubmit() {
@@ -2869,9 +3061,14 @@ function ResolveLabelsModal({
   }
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true">
-      <div className="variety-modal csv-template-modal">
-        <h3>
+    <ModalOverlay
+      onClose={guardedClose}
+      contentClassName="variety-modal csv-template-modal"
+      titleId="resolve-labels-title"
+      closeOnEscape={!submitting}
+      trapFocus
+    >
+        <h3 id="resolve-labels-title">
           Resolve labels — {card.varietyName} · Year {card.isoYear ?? "?"} Week {card.isoWeek ?? "?"}
         </h3>
 
@@ -2978,15 +3175,14 @@ function ResolveLabelsModal({
         {error && <p className="form-error">{error}</p>}
 
         <div className="csv-template-modal-actions">
-          <button type="button" onClick={onClose} disabled={submitting}>
+          <button type="button" className="secondary" onClick={guardedClose} disabled={submitting}>
             Cancel
           </button>
-          <button type="button" className="cases-entry-open-button" disabled={submitting} onClick={() => void handleSubmit()}>
+          <button type="button" className="primary-action-button" disabled={submitting} onClick={() => void handleSubmit()}>
             {submitting ? "Saving..." : "Save resolutions"}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalOverlay>
   );
 }
 

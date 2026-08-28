@@ -14,7 +14,18 @@ type ModalOverlayProps = {
   closeOnEscape?: boolean;
   /** Default true. Set false if a modal deliberately needs the page to keep scrolling. */
   lockBodyScroll?: boolean;
+  /**
+   * Default false (existing callers are unaffected). When true: focuses the
+   * first focusable element inside the content box (or the box itself) on
+   * open, traps Tab/Shift+Tab within it while mounted, and restores focus to
+   * whatever was focused before the modal opened (typically the button that
+   * triggered it) once it unmounts.
+   */
+  trapFocus?: boolean;
 };
+
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Shared modal backdrop. Closes only when a pointer press AND its matching
@@ -37,9 +48,51 @@ export function ModalOverlay({
   contentStyle,
   titleId,
   closeOnEscape = true,
-  lockBodyScroll = true
+  lockBodyScroll = true,
+  trapFocus = false
 }: ModalOverlayProps) {
   const startedOnBackdrop = useRef(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!trapFocus) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const content = contentRef.current;
+    const focusable = content?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    (focusable && focusable.length > 0 ? focusable[0] : content)?.focus();
+
+    return () => {
+      previouslyFocused?.focus?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trapFocus]);
+
+  useEffect(() => {
+    if (!trapFocus) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const content = contentRef.current;
+      if (!content) return;
+      const focusable = Array.from(content.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => el.offsetParent !== null
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [trapFocus]);
 
   useEffect(() => {
     if (!closeOnEscape) return;
@@ -86,11 +139,13 @@ export function ModalOverlay({
       onPointerCancel={handlePointerCancel}
     >
       <div
+        ref={contentRef}
         className={contentClassName}
         style={contentStyle}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
       >
         {children}
       </div>

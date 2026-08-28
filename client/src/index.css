@@ -7450,6 +7450,79 @@ textarea.cleaning-checklist-response-input {
   font-style: italic;
 }
 
+.csv-import-confirm-modal {
+  width: min(560px, 100%);
+}
+
+.csv-import-confirm-subtitle {
+  margin: 0.15rem 0 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.csv-import-confirm-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.csv-import-confirm-summary dt {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.csv-import-confirm-summary dd {
+  margin: 0.15rem 0 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.csv-import-confirm-lots {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.csv-import-confirm-explanation {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.csv-import-confirm-spinner {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-right: 0.4rem;
+  vertical-align: -0.15rem;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: csv-import-confirm-spin 0.7s linear infinite;
+}
+
+@keyframes csv-import-confirm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 600px) {
+  .csv-import-confirm-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .csv-weekly-size-strip {
     grid-template-columns: repeat(3, 1fr);
@@ -7632,6 +7705,27 @@ textarea.cleaning-checklist-response-input {
   justify-content: flex-end;
   gap: 0.6rem;
   margin-top: 1rem;
+}
+
+.csv-template-modal-actions .secondary {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+}
+
+.csv-template-modal-actions .secondary:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.csv-template-modal-actions .secondary:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
 }
 
 .csv-template-saved-section {
