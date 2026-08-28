@@ -25,6 +25,7 @@ import {
   type TemplateWriteInput
 } from "../csvMappingTemplates";
 import { updateUploadKeyDataSourceType, UploadKeyNoActiveTemplateError } from "../adminUploadKeys";
+import { ensureRealMembership, type MembershipFixture } from "./testHelpers/ensureRealMembership";
 
 const DENVA_ORG_ID = "7f933d9b-a093-4eed-b6d7-85ff0c68a319";
 const TEST_USER_ID = "00000000-0000-0000-0000-0000000000cc";
@@ -33,14 +34,14 @@ const TEST_ADMIN_ID = "00000000-0000-0000-0000-0000000000dd";
 let server: Server;
 let baseUrl: string;
 let realOwnerUserId: string;
+let membershipFixture: MembershipFixture;
 
 before(async () => {
   // requireAnyPermission/requirePermission check a REAL memberships row —
   // a fabricated user id like TEST_USER_ID gets a genuine 403, not just a
-  // stand-in. Use a real member of Denva for the HTTP-level requests.
-  const { data } = await supabase.from("memberships").select("user_id").eq("organization_id", DENVA_ORG_ID).limit(1).maybeSingle();
-  if (!data?.user_id) throw new Error("No real Denva membership found to run these tests as.");
-  realOwnerUserId = data.user_id as string;
+  // stand-in. See ensureRealMembership for why.
+  membershipFixture = await ensureRealMembership(DENVA_ORG_ID);
+  realOwnerUserId = membershipFixture.userId;
 
   await new Promise<void>((resolve) => {
     const app = express();
@@ -58,6 +59,7 @@ before(async () => {
 });
 
 after(async () => {
+  await membershipFixture.cleanup();
   await new Promise<void>((resolve, reject) => {
     server.close((err) => (err ? reject(err) : resolve()));
   });

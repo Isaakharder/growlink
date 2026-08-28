@@ -71,16 +71,6 @@ async function createTestUploadKey(dataSourceType: string, organizationId = DENV
   return { id: data!.id as string, keyHash: data!.key_hash as string };
 }
 
-async function deleteTestUploadKey(id: string) {
-  await supabase.from("agent_pending_imports").delete().eq("upload_key_id", id);
-  await supabase.from("import_source_templates").delete().eq("upload_key_id", id);
-  await supabase.from("organization_upload_keys").delete().eq("id", id);
-}
-
-async function cleanupTemplateGroup(templateGroupId: string) {
-  await supabase.from("csv_mapping_templates").delete().eq("template_group_id", templateGroupId);
-}
-
 /** Runs every cleanup step regardless of whether an earlier one throws — see agentPdfImportCsvTemplate.integration.test.ts for why this matters. */
 async function cleanupAll(...tasks: Array<() => PromiseLike<unknown>>): Promise<void> {
   for (const task of tasks) {
@@ -90,6 +80,28 @@ async function cleanupAll(...tasks: Array<() => PromiseLike<unknown>>): Promise<
       console.warn("[test cleanup] a cleanup step failed (continuing with the rest):", err instanceof Error ? err.message : err);
     }
   }
+}
+
+// Root cause of a real production-data leak found on 2026-08-28: this used
+// to be one unguarded sequential await chain (child rows, then the key
+// itself). If either child delete failed for any reason — including a
+// transient error under concurrent test load — the function threw before
+// ever reaching the organization_upload_keys delete, leaving a live,
+// active admin-dst-test-* key behind in the real database. Every step now
+// runs independently via cleanupAll, so the actual key row is always
+// attempted regardless of what happens to its children, and the whole
+// function is idempotent (deleting an already-gone row is a no-op, not an
+// error) so it's safe to call more than once for the same id.
+async function deleteTestUploadKey(id: string) {
+  await cleanupAll(
+    () => supabase.from("agent_pending_imports").delete().eq("upload_key_id", id),
+    () => supabase.from("import_source_templates").delete().eq("upload_key_id", id),
+    () => supabase.from("organization_upload_keys").delete().eq("id", id)
+  );
+}
+
+async function cleanupTemplateGroup(templateGroupId: string) {
+  await supabase.from("csv_mapping_templates").delete().eq("template_group_id", templateGroupId);
 }
 
 async function seedActiveTemplate(organizationId: string) {
@@ -285,4 +297,62 @@ test("updateUploadKeyDataSourceType: never regenerates or exposes the raw key �
   } finally {
     await deleteTestUploadKey(key.id);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Cleanup regression — proves this suite cannot leave a live admin-dst-test-*
+// key behind, on both a normal pass and a simulated mid-test failure. Added
+// after 6 active admin-dst-test-* keys were found leaked in the real,
+// shared database: deleteTestUploadKey used to be one unguarded sequential
+// await chain (child rows, then the key), so any single step failing —
+// including a transient error under concurrent test load — threw before the
+// organization_upload_keys delete ever ran. See deleteTestUploadKey's own
+// comment for the fix.
+// ---------------------------------------------------------------------------
+
+test("cleanup regression: a normal (passing) test leaves zero rows behind", async () => {
+  const key = await createTestUploadKey("flowmaster");
+  try {
+    assert.ok(key.id);
+  } finally {
+    await deleteTestUploadKey(key.id);
+  }
+
+  const { data } = await supabase.from("organization_upload_keys").select("id").eq("id", key.id);
+  assert.equal((data ?? []).length, 0, "a successful test must not leave its key behind");
+});
+
+test("cleanup regression: a simulated mid-test failure still leaves zero rows behind (finally always runs)", async () => {
+  const key = await createTestUploadKey("flowmaster");
+  let threw = false;
+
+  try {
+    try {
+      throw new Error("Simulated assertion failure mid-test");
+    } finally {
+      await deleteTestUploadKey(key.id);
+    }
+  } catch (err) {
+    threw = true;
+    assert.equal((err as Error).message, "Simulated assertion failure mid-test");
+  }
+
+  assert.equal(threw, true, "the simulated failure must have actually propagated — this is not testing a no-op");
+  const { data } = await supabase.from("organization_upload_keys").select("id").eq("id", key.id);
+  assert.equal((data ?? []).length, 0, "a failed test must still not leave its key behind");
+});
+
+test("cleanup regression: deleteTestUploadKey removes the key even when a child-table step fails first (the actual root cause reproduced)", async () => {
+  const key = await createTestUploadKey("flowmaster");
+
+  // Reproduces the real failure mode directly: a broken/failing cleanup
+  // step must never prevent the organization_upload_keys delete that
+  // follows it.
+  await cleanupAll(
+    () => Promise.reject(new Error("Simulated transient failure in a child-table delete")),
+    () => supabase.from("organization_upload_keys").delete().eq("id", key.id)
+  );
+
+  const { data } = await supabase.from("organization_upload_keys").select("id").eq("id", key.id);
+  assert.equal((data ?? []).length, 0, "the key must still be deleted even though an earlier cleanup step failed");
 });

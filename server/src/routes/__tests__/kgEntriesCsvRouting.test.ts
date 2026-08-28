@@ -21,6 +21,7 @@ import {
   classifyExactMatches,
   type TemplateWriteInput
 } from "../csvMappingTemplates";
+import { ensureRealMembership, type MembershipFixture } from "./testHelpers/ensureRealMembership";
 
 const DENVA_ORG_ID = "7f933d9b-a093-4eed-b6d7-85ff0c68a319";
 const FIRST_LIGHT_ORG_ID = "e1b8a6cf-032c-48f0-852a-982dd58b9f9c";
@@ -28,11 +29,16 @@ const FIRST_LIGHT_ORG_ID = "e1b8a6cf-032c-48f0-852a-982dd58b9f9c";
 let server: Server;
 let baseUrl: string;
 let realOwnerUserId: string;
+let membershipFixture: MembershipFixture;
 
 before(async () => {
-  const { data } = await supabase.from("memberships").select("user_id").eq("organization_id", DENVA_ORG_ID).limit(1).maybeSingle();
-  if (!data?.user_id) throw new Error("No real Denva membership found to run these tests as.");
-  realOwnerUserId = data.user_id as string;
+  // req.userId/req.organizationId are stubbed directly below (this never
+  // goes through requireOrganizationContext's real Bearer-token check),
+  // but pdfImportRouter's own canEdit/canView route middleware still does
+  // a REAL memberships lookup for permissions — a fabricated id gets a
+  // genuine 403, not just a stand-in. See ensureRealMembership for why.
+  membershipFixture = await ensureRealMembership(DENVA_ORG_ID);
+  realOwnerUserId = membershipFixture.userId;
 
   await new Promise<void>((resolve) => {
     const app = express();
@@ -49,6 +55,7 @@ before(async () => {
 });
 
 after(async () => {
+  await membershipFixture.cleanup();
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 });
 

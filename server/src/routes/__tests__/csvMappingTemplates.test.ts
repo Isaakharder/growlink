@@ -12,6 +12,7 @@ import express from "express";
 import type { AddressInfo } from "node:net";
 import { supabase } from "../../config/supabase";
 import { csvMappingTemplatesRouter } from "../csvMappingTemplates";
+import { ensureRealMembership } from "./testHelpers/ensureRealMembership";
 import {
   parseAndMatchCsvFile,
   listTemplatesForOrg,
@@ -606,13 +607,18 @@ test("importCsvTemplateGroup: a variety with no matching active organization var
 // request, not by reading the source.
 // ---------------------------------------------------------------------------
 
-const REAL_DENVA_OWNER_ID = "55317379-f5a0-4163-b668-f2adc6e08ac4";
-
 test("GET /csv-templates/pending is not shadowed by GET /csv-templates/:id (route registration order)", async () => {
+  // A hardcoded real Denva user id used to live here — it broke the moment
+  // that specific person's account was removed. ensureRealMembership finds
+  // (or, if needed, creates and later cleans up) a real member instead, so
+  // this test never depends on which specific human happens to be a Denva
+  // member at any given moment.
+  const membershipFixture = await ensureRealMembership(DENVA_ORG_ID);
+
   const testApp = express();
   testApp.use(express.json());
   testApp.use((req, _res, next) => {
-    req.userId = REAL_DENVA_OWNER_ID;
+    req.userId = membershipFixture.userId;
     req.organizationId = DENVA_ORG_ID;
     next();
   });
@@ -630,5 +636,6 @@ test("GET /csv-templates/pending is not shadowed by GET /csv-templates/:id (rout
     assert.ok(Array.isArray(body?.files), "response should have a files array, not a template-detail/error shape");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    await membershipFixture.cleanup();
   }
 });
