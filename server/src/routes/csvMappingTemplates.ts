@@ -917,20 +917,24 @@ async function loadSourceFileGrid(organizationId: string, sourceFileId: string, 
   return parseCsvGrid(data.raw_text as string, delimiter);
 }
 
-export type VarietyMatch = { id: string; name: string };
+export type VarietyMatch = { id: string; name: string; areaM2: number | null };
 
 /** Active varieties keyed by trimmed, lowercased name — the engine only ever produces raw variety text, never an id, so this is how every group's varietyRaw gets resolved to a real record. */
 export async function loadActiveVarietyByName(organizationId: string): Promise<Map<string, VarietyMatch>> {
   const { data, error } = await supabase
     .from("varieties")
-    .select("id, name")
+    .select("id, name, area_m2")
     .eq("organization_id", organizationId)
     .eq("status", "active");
   if (error) throw error;
 
   const map = new Map<string, VarietyMatch>();
   for (const v of data ?? []) {
-    map.set((v.name as string).trim().toLowerCase(), { id: v.id as string, name: v.name as string });
+    map.set((v.name as string).trim().toLowerCase(), {
+      id: v.id as string,
+      name: v.name as string,
+      areaM2: typeof v.area_m2 === "number" ? v.area_m2 : null
+    });
   }
   return map;
 }

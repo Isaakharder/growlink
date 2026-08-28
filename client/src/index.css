@@ -7379,6 +7379,19 @@ textarea.cleaning-checklist-response-input {
   color: var(--text);
 }
 
+.csv-weekly-area-not-set-link {
+  display: inline-block;
+  margin-top: 0.15rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #a24b12;
+  text-decoration: none;
+}
+
+.csv-weekly-area-not-set-link:hover {
+  text-decoration: underline;
+}
+
 .csv-weekly-recon-details {
   display: flex;
   flex-direction: column;

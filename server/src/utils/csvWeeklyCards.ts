@@ -22,7 +22,7 @@ export type PendingSourceEntry = {
   preview: NormalizedPreview;
 };
 
-export type VarietyMatch = { id: string; name: string };
+export type VarietyMatch = { id: string; name: string; areaM2: number | null };
 
 export type UnresolvedLabelGroup = {
   rawValue: string;
@@ -77,6 +77,8 @@ export type WeeklyCard = {
   unresolvedKg: number;
   reconciliationDifference: number;
   reconciliationOk: boolean;
+  /** mappedKg / the resolved variety's area_m2 — same "valid area" rule as Yield Analytics (area_m2 > 0). Null when the variety is unresolved or has no valid positive area; the client shows "Area not set" rather than 0 or a divide-by-zero. */
+  kgPerM2: number | null;
   lots: WeeklyCardLot[];
   sizeKg: Record<string, number>;
   unresolvedLabelGroups: UnresolvedLabelGroup[];
@@ -88,11 +90,11 @@ export type WeeklyCard = {
 function resolveVariety(
   varietyRaw: string | null,
   activeVarietyByName: Map<string, VarietyMatch>
-): { key: string; id: string | null; name: string } {
+): { key: string; id: string | null; name: string; areaM2: number | null } {
   const trimmed = (varietyRaw ?? "").trim();
   const match = trimmed ? activeVarietyByName.get(trimmed.toLowerCase()) : undefined;
-  if (match) return { key: match.id, id: match.id, name: match.name };
-  return { key: `raw:${trimmed.toLowerCase() || "unknown"}`, id: null, name: trimmed || "Unknown variety" };
+  if (match) return { key: match.id, id: match.id, name: match.name, areaM2: match.areaM2 };
+  return { key: `raw:${trimmed.toLowerCase() || "unknown"}`, id: null, name: trimmed || "Unknown variety", areaM2: null };
 }
 
 function groupBlockingIssues(preview: NormalizedPreview, group: NormalizedGroup): ValidationIssue[] {
@@ -134,6 +136,7 @@ export function buildWeeklyCards(
   type Bucket = {
     varietyId: string | null;
     varietyName: string;
+    areaM2: number | null;
     isoYear: number | null;
     isoWeek: number | null;
     mappedKg: number;
@@ -165,6 +168,7 @@ export function buildWeeklyCards(
         bucket = {
           varietyId: variety.id,
           varietyName: variety.name,
+          areaM2: variety.areaM2,
           isoYear: group.isoYear,
           isoWeek: group.isoWeek,
           mappedKg: 0,
@@ -306,6 +310,8 @@ export function buildWeeklyCards(
       unresolvedKg: Math.round(bucket.unresolvedKg * 100) / 100,
       reconciliationDifference: Math.round(bucket.reconciliationDifference * 100) / 100,
       reconciliationOk: bucket.reconciliationOk,
+      kgPerM2:
+        bucket.areaM2 !== null && bucket.areaM2 > 0 ? Math.round((bucket.mappedKg / bucket.areaM2) * 1000) / 1000 : null,
       lots: Array.from(bucket.lots.values()),
       sizeKg: bucket.sizeKg,
       unresolvedLabelGroups: Array.from(bucket.unresolvedLabelGroups.values()),

@@ -73,7 +73,9 @@ function entry(overrides: Partial<PendingSourceEntry> & { preview: NormalizedPre
   };
 }
 
-const activeVarieties: Map<string, VarietyMatch> = new Map([["cadalora", { id: "variety-cadalora", name: "Cadalora" }]]);
+const activeVarieties: Map<string, VarietyMatch> = new Map([
+  ["cadalora", { id: "variety-cadalora", name: "Cadalora", areaM2: 1000 }]
+]);
 
 test("two files with the same variety/year/week but different lots and dates form one card", () => {
   const e1 = entry({
@@ -271,4 +273,52 @@ test("an unresolved (unmatched) variety still forms a card but with a null varie
   assert.equal(cards.length, 1);
   assert.equal(cards[0].varietyId, null);
   assert.equal(cards[0].varietyName, "Unknownberry");
+});
+
+test("kg/m2: mapped kg (including distributed, excluding ignored/unresolved) divided by the resolved variety's area, to three decimals", () => {
+  const e1 = entry({
+    preview: preview([
+      group({
+        groupKey: "g1",
+        sizeKg: { SM: 493 },
+        reconciliation: { ...group().reconciliation, recognizedSizeKg: 493, ignoredKg: 50, unresolvedKg: 25 }
+      })
+    ])
+  });
+  const cards = buildWeeklyCards(ORG_ID, [e1], activeVarieties); // Cadalora, areaM2: 1000
+  assert.equal(cards[0].mappedKg, 493);
+  assert.equal(cards[0].kgPerM2, 0.493);
+});
+
+test("kg/m2 is null (not zero, not a divide-by-zero) when the variety has no configured area", () => {
+  const noArea: Map<string, VarietyMatch> = new Map([["zeroarea", { id: "variety-zero", name: "ZeroArea", areaM2: 0 }]]);
+  const e1 = entry({ preview: preview([group({ groupKey: "g1", varietyRaw: "ZeroArea", sizeKg: { SM: 100 } })]) });
+  const cards = buildWeeklyCards(ORG_ID, [e1], noArea);
+  assert.equal(cards[0].kgPerM2, null);
+});
+
+test("kg/m2 is null when the variety's area is null", () => {
+  const nullArea: Map<string, VarietyMatch> = new Map([["nullarea", { id: "variety-null", name: "NullArea", areaM2: null }]]);
+  const e1 = entry({ preview: preview([group({ groupKey: "g1", varietyRaw: "NullArea", sizeKg: { SM: 100 } })]) });
+  const cards = buildWeeklyCards(ORG_ID, [e1], nullArea);
+  assert.equal(cards[0].kgPerM2, null);
+});
+
+test("kg/m2 is null when the variety itself is unresolved (no active variety match)", () => {
+  const e1 = entry({ preview: preview([group({ groupKey: "g1", varietyRaw: "Unmatched" })]) });
+  const cards = buildWeeklyCards(ORG_ID, [e1], activeVarieties);
+  assert.equal(cards[0].varietyId, null);
+  assert.equal(cards[0].kgPerM2, null);
+});
+
+test("kg/m2 recalculates from the sum across multiple sources for the same variety/week", () => {
+  const e1 = entry({ preview: preview([group({ groupKey: "g1", sizeKg: { SM: 300 }, reconciliation: { ...group().reconciliation, recognizedSizeKg: 300 } })]) });
+  const e2 = entry({
+    pendingImportId: "p2",
+    sourceFileId: "s2",
+    preview: preview([group({ groupKey: "g2", sizeKg: { SM: 193 }, reconciliation: { ...group().reconciliation, recognizedSizeKg: 193 } })])
+  });
+  const cards = buildWeeklyCards(ORG_ID, [e1, e2], activeVarieties); // areaM2: 1000
+  assert.equal(cards[0].mappedKg, 493);
+  assert.equal(cards[0].kgPerM2, 0.493);
 });

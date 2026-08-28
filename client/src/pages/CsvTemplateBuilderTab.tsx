@@ -1,4 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import {
   MAPPING_TYPES,
@@ -230,6 +231,7 @@ type WeeklyCard = {
   unresolvedKg: number;
   reconciliationDifference: number;
   reconciliationOk: boolean;
+  kgPerM2: number | null;
   lots: WeeklyCardLot[];
   sizeKg: Record<string, number>;
   unresolvedLabelGroups: UnresolvedLabelGroup[];
@@ -2713,6 +2715,18 @@ function WeeklyCardView({
             <div className="csv-weekly-box-label">Average fruit weight</div>
             <div className="csv-weekly-box-value">
               {card.combinedAverageFruitWeightG !== null ? `${card.combinedAverageFruitWeightG.toFixed(1)} g` : "—"}
+            </div>
+          </div>
+          <div className="csv-weekly-afw-box">
+            <div className="csv-weekly-box-label">This import kg/m&sup2;</div>
+            <div className="csv-weekly-box-value">
+              {card.kgPerM2 !== null ? (
+                `${card.kgPerM2.toFixed(3)} kg/m²`
+              ) : (
+                <Link to="/setup/varieties" className="csv-weekly-area-not-set-link">
+                  Area not set
+                </Link>
+              )}
             </div>
           </div>
         </div>
