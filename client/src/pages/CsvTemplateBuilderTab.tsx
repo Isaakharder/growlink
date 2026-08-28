@@ -2503,6 +2503,38 @@ function orderedSizeEntries(sizeKg: Record<string, number>, yieldSizes: YieldSiz
   });
 }
 
+function formatKg(value: number): string {
+  return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatLotDate(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// Purely cosmetic — the underlying data still reads "Name (vN)"; the badge
+// just drops the parentheses for a cleaner pill label.
+function formatTemplateBadge(name: string): string {
+  return name.replace(/\s\(v(\d+)\)$/, " v$1");
+}
+
+const WEEKLY_CARD_LOTS_PREVIEW_COUNT = 5;
+
+// Presentation-only: several sources can independently surface the exact
+// same issue text (e.g. "row 7" happens to be the unresolved row in every
+// source file) — collapse identical messages into one line with a source
+// count rather than repeating the same sentence N times. The underlying
+// issues array (used for canImport / blocking behavior) is never altered.
+function dedupeIssueMessages(issues: ValidationIssue[]): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const issue of issues) {
+    counts.set(issue.message, (counts.get(issue.message) ?? 0) + 1);
+  }
+  return Array.from(counts.entries());
+}
+
 function WeeklyPendingCardsSection({
   cards,
   loading,
@@ -2543,144 +2575,206 @@ function WeeklyPendingCardsSection({
       {!loading && cards.length === 0 && !error && <p>No pending CSV imports right now.</p>}
 
       {cards.map((card) => (
-        <div key={card.cardKey} className="csv-template-pending-card">
-          <div className="csv-template-pending-card-header">
-            <span>
-              <strong>
-                {card.varietyName} — Year {card.isoYear ?? "?"} &middot; Week {card.isoWeek ?? "?"}
-              </strong>
-            </span>
-          </div>
+        <WeeklyCardView
+          key={card.cardKey}
+          card={card}
+          yieldSizes={yieldSizes}
+          importing={importingCardKey === card.cardKey}
+          importStatus={cardImportStatus[card.cardKey]}
+          removingPendingId={removingPendingId}
+          removeErrors={removeErrors}
+          onImportCard={onImportCard}
+          onRemoveSource={onRemoveSource}
+          onOpenResolveLabels={onOpenResolveLabels}
+        />
+      ))}
+    </div>
+  );
+}
 
-          <p>
-            <strong>{card.mappedKg.toFixed(2)} kg</strong> &middot; {card.lotCount} lot{card.lotCount === 1 ? "" : "s"} &middot;{" "}
-            {card.sourceFileCount} source file{card.sourceFileCount === 1 ? "" : "s"}
-            {card.combinedAverageFruitWeightG !== null ? ` · AFW ${card.combinedAverageFruitWeightG.toFixed(1)} g` : ""}
-          </p>
-          <p>
-            Template: {card.templateNames.join(", ") || "Unknown"} &middot;{" "}
-            {card.matchStatus === "exact" && <span className="form-success">Exact match</span>}
-            {card.matchStatus === "mixed" && <span className="form-error">Mixed template versions — review before importing</span>}
-            {card.matchStatus === "layout_mismatch" && <span className="form-error">Layout mismatch</span>}
-            {" · "}
-            {card.reconciliationOk ? (
-              <span className="form-success">Reconciliation OK</span>
-            ) : (
-              <span className="form-error">Reconciliation difference: {card.reconciliationDifference.toFixed(2)} kg</span>
-            )}
-          </p>
+function WeeklyCardView({
+  card,
+  yieldSizes,
+  importing,
+  importStatus,
+  removingPendingId,
+  removeErrors,
+  onImportCard,
+  onRemoveSource,
+  onOpenResolveLabels
+}: {
+  card: WeeklyCard;
+  yieldSizes: YieldSizeOption[];
+  importing: boolean;
+  importStatus: string | undefined;
+  removingPendingId: string | null;
+  removeErrors: Record<string, string>;
+  onImportCard: (card: WeeklyCard) => void;
+  onRemoveSource: (source: WeeklyCardSourceDetail) => void;
+  onOpenResolveLabels: (card: WeeklyCard) => void;
+}) {
+  const [showAllLots, setShowAllLots] = useState(false);
 
-          <p>
-            Lots:{" "}
-            {card.lots
-              .map((l) => `${l.lotNumber ?? "(no lot number)"}${l.packedDate ? ` (${l.packedDate})` : ""}`)
-              .join(", ")}
-          </p>
+  const visibleLots = showAllLots ? card.lots : card.lots.slice(0, WEEKLY_CARD_LOTS_PREVIEW_COUNT);
+  const hiddenLotCount = card.lots.length - visibleLots.length;
+  const sizeEntries = orderedSizeEntries(card.sizeKg, yieldSizes);
 
-          <table className="varieties-table">
-            <thead>
-              <tr>
-                <th>Size</th>
-                <th>kg</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orderedSizeEntries(card.sizeKg, yieldSizes).map(([name, kg]) => (
-                <tr key={name}>
-                  <td>{name}</td>
-                  <td>{kg.toFixed(2)}</td>
-                </tr>
-              ))}
-              <tr>
-                <td>
-                  <strong>Weekly variety total</strong>
-                </td>
-                <td>
-                  <strong>{card.mappedKg.toFixed(2)}</strong>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+  return (
+    <div className="csv-weekly-card">
+      <div className="csv-weekly-card-top">
+        <div className="csv-weekly-card-identity">
+          <h4 className="csv-weekly-card-title">
+            {card.varietyName} — Year {card.isoYear ?? "?"} &middot; Week {card.isoWeek ?? "?"}
+          </h4>
 
-          <p>
-            Ignored: {card.ignoredKg.toFixed(2)} kg &middot; Distributed: {card.distributedKg.toFixed(2)} kg &middot; Unresolved:{" "}
-            {card.unresolvedKg.toFixed(2)} kg
-          </p>
-
-          {card.blockingIssues.length > 0 && (
-            <ul className="form-error csv-template-issue-list">
-              {card.blockingIssues.map((issue, i) => (
-                <li key={i}>{issue.message}</li>
+          <div className="csv-weekly-card-lots">
+            <span className="csv-weekly-card-lots-label">Lots</span>
+            <ul>
+              {visibleLots.map((lot, i) => (
+                <li key={i}>
+                  <code>{lot.lotNumber ?? "(no lot number)"}</code>
+                  {formatLotDate(lot.packedDate) && <span className="csv-weekly-lot-date"> — {formatLotDate(lot.packedDate)}</span>}
+                </li>
               ))}
             </ul>
-          )}
-
-          {card.unresolvedLabelGroups.length > 0 && (
-            <div className="csv-template-saved-actions">
-              <button type="button" className="cases-entry-open-button" onClick={() => onOpenResolveLabels(card)}>
-                Resolve labels ({card.unresolvedLabelGroups.length})
+            {hiddenLotCount > 0 && (
+              <button type="button" className="csv-weekly-show-all-lots" onClick={() => setShowAllLots(true)}>
+                Show all lots ({card.lots.length})
               </button>
-              <ul>
-                {card.unresolvedLabelGroups.map((g) => (
-                  <li key={g.rawValue}>
-                    <code>{g.rawValue}</code> — {g.rowCount} affected row{g.rowCount === 1 ? "" : "s"}, {g.kg.toFixed(2)} kg
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <details className="csv-template-source-details">
-            <summary>Source details ({card.sources.length})</summary>
-            {card.sources.map((source) => (
-              <div key={source.pendingImportId} className="csv-template-pending-card" style={{ marginTop: "0.5rem" }}>
-                <div className="csv-template-pending-card-header">
-                  <span>
-                    <strong>{source.sourceFilename}</strong>{" "}
-                    <span className="recent-entries-footer">{formatUploadedAt(source.uploadedAt)}</span>
-                  </span>
-                  <button
-                    type="button"
-                    className="pdf-source-reading-remove-button"
-                    disabled={removingPendingId === source.pendingImportId}
-                    onClick={() => onRemoveSource(source)}
-                  >
-                    {removingPendingId === source.pendingImportId ? "Removing..." : "Remove"}
-                  </button>
-                </div>
-                {removeErrors[source.pendingImportId] && <p className="form-error">{removeErrors[source.pendingImportId]}</p>}
-                <p>
-                  Lot {source.lotNumber ?? "(none)"} &middot; Packed {source.packedDate ?? "Not recorded"} &middot; Mapped{" "}
-                  {source.mappedKg.toFixed(2)} kg &middot; AFW{" "}
-                  {source.averageFruitWeightG !== null ? `${source.averageFruitWeightG.toFixed(1)} g` : "-"} &middot;{" "}
-                  {source.reconciliationOk ? (
-                    <span className="form-success">Reconciliation OK</span>
-                  ) : (
-                    <span className="form-error">Reconciliation difference</span>
-                  )}
-                </p>
-                <p>
-                  Sizes:{" "}
-                  {orderedSizeEntries(source.sizeKg, yieldSizes)
-                    .map(([name, kg]) => `${name}: ${kg.toFixed(2)} kg`)
-                    .join(", ") || "none"}
-                </p>
-                {source.unresolvedLabels.length > 0 && <p className="form-error">Unresolved labels: {source.unresolvedLabels.join(", ")}</p>}
-              </div>
-            ))}
-          </details>
-
-          <button
-            type="button"
-            className="cases-entry-open-button"
-            disabled={!card.canImport || importingCardKey === card.cardKey}
-            onClick={() => onImportCard(card)}
-          >
-            {importingCardKey === card.cardKey ? "Importing..." : "Import"}
-          </button>
-          {cardImportStatus[card.cardKey] && <span> {cardImportStatus[card.cardKey]}</span>}
+            )}
+            {showAllLots && card.lots.length > WEEKLY_CARD_LOTS_PREVIEW_COUNT && (
+              <button type="button" className="csv-weekly-show-all-lots" onClick={() => setShowAllLots(false)}>
+                Show fewer lots
+              </button>
+            )}
+          </div>
         </div>
-      ))}
+
+        <div className="csv-weekly-card-badges">
+          {card.templateNames.map((name, i) => (
+            <span key={i} className="csv-weekly-badge csv-weekly-badge-neutral">
+              {formatTemplateBadge(name)}
+            </span>
+          ))}
+          {card.matchStatus === "exact" && <span className="csv-weekly-badge csv-weekly-badge-success">Exact match</span>}
+          {card.matchStatus === "mixed" && <span className="csv-weekly-badge csv-weekly-badge-warning">Mixed versions</span>}
+          {card.matchStatus === "layout_mismatch" && <span className="csv-weekly-badge csv-weekly-badge-error">Layout mismatch</span>}
+          {card.reconciliationOk ? (
+            <span className="csv-weekly-badge csv-weekly-badge-success">Reconciliation OK</span>
+          ) : (
+            <span className="csv-weekly-badge csv-weekly-badge-error">Reconciliation diff {formatKg(card.reconciliationDifference)} kg</span>
+          )}
+          <span className="csv-weekly-badge csv-weekly-badge-neutral">
+            {card.sourceFileCount} source file{card.sourceFileCount === 1 ? "" : "s"}
+          </span>
+        </div>
+      </div>
+
+      <div className="csv-weekly-size-strip">
+        {sizeEntries.map(([name, kg]) => (
+          <div key={name} className="csv-weekly-size-box">
+            <div className="csv-weekly-size-name">{name}</div>
+            <div className="csv-weekly-size-kg">
+              {formatKg(kg)}
+              <span className="csv-weekly-size-unit"> kg</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {card.blockingIssues.length > 0 && (
+        <ul className="form-error csv-template-issue-list">
+          {dedupeIssueMessages(card.blockingIssues).map(([message, count], i) => (
+            <li key={i}>
+              {message}
+              {count > 1 ? ` (${count} sources)` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {card.unresolvedLabelGroups.length > 0 && (
+        <ul className="csv-weekly-unresolved-list">
+          {card.unresolvedLabelGroups.map((g) => (
+            <li key={g.rawValue}>
+              <code>{g.rawValue}</code> — {g.rowCount} affected row{g.rowCount === 1 ? "" : "s"}, {formatKg(g.kg)} kg
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="csv-weekly-summary-row">
+        <div className="csv-weekly-summary-totals">
+          <div className="csv-weekly-total-box">
+            <div className="csv-weekly-box-label">Weekly variety total</div>
+            <div className="csv-weekly-box-value">{formatKg(card.mappedKg)} kg</div>
+          </div>
+          <div className="csv-weekly-afw-box">
+            <div className="csv-weekly-box-label">Average fruit weight</div>
+            <div className="csv-weekly-box-value">
+              {card.combinedAverageFruitWeightG !== null ? `${card.combinedAverageFruitWeightG.toFixed(1)} g` : "—"}
+            </div>
+          </div>
+        </div>
+
+        <div className="csv-weekly-recon-details">
+          <span>Ignored: {formatKg(card.ignoredKg)} kg</span>
+          <span>Distributed: {formatKg(card.distributedKg)} kg</span>
+          <span>Unresolved: {formatKg(card.unresolvedKg)} kg</span>
+        </div>
+
+        <div className="csv-weekly-actions">
+          {card.unresolvedLabelGroups.length > 0 && (
+            <button type="button" className="cases-entry-open-button" onClick={() => onOpenResolveLabels(card)}>
+              Resolve labels ({card.unresolvedLabelGroups.length})
+            </button>
+          )}
+          <button type="button" className="cases-entry-open-button" disabled={!card.canImport || importing} onClick={() => onImportCard(card)}>
+            {importing ? "Importing..." : "Import"}
+          </button>
+        </div>
+      </div>
+      {importStatus && <p className="csv-weekly-import-status">{importStatus}</p>}
+
+      <details className="csv-template-source-details">
+        <summary>Source details ({card.sources.length})</summary>
+        {card.sources.map((source) => (
+          <div key={source.pendingImportId} className="csv-template-pending-card" style={{ marginTop: "0.5rem" }}>
+            <div className="csv-template-pending-card-header">
+              <span>
+                <strong>{source.sourceFilename}</strong>{" "}
+                <span className="recent-entries-footer">{formatUploadedAt(source.uploadedAt)}</span>
+              </span>
+              <button
+                type="button"
+                className="pdf-source-reading-remove-button"
+                disabled={removingPendingId === source.pendingImportId}
+                onClick={() => onRemoveSource(source)}
+              >
+                {removingPendingId === source.pendingImportId ? "Removing..." : "Remove"}
+              </button>
+            </div>
+            {removeErrors[source.pendingImportId] && <p className="form-error">{removeErrors[source.pendingImportId]}</p>}
+            <p>
+              Lot {source.lotNumber ?? "(none)"} &middot; Packed {source.packedDate ?? "Not recorded"} &middot; Mapped{" "}
+              {source.mappedKg.toFixed(2)} kg &middot; AFW{" "}
+              {source.averageFruitWeightG !== null ? `${source.averageFruitWeightG.toFixed(1)} g` : "-"} &middot;{" "}
+              {source.reconciliationOk ? (
+                <span className="form-success">Reconciliation OK</span>
+              ) : (
+                <span className="form-error">Reconciliation difference</span>
+              )}
+            </p>
+            <p>
+              Sizes:{" "}
+              {orderedSizeEntries(source.sizeKg, yieldSizes)
+                .map(([name, kg]) => `${name}: ${kg.toFixed(2)} kg`)
+                .join(", ") || "none"}
+            </p>
+            {source.unresolvedLabels.length > 0 && <p className="form-error">Unresolved labels: {source.unresolvedLabels.join(", ")}</p>}
+          </div>
+        ))}
+      </details>
     </div>
   );
 }
