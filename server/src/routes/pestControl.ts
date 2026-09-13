@@ -104,13 +104,28 @@ function validateSprayerPayload(input: unknown): SprayerPayload {
 
 const CHEMICAL_SNAP_KEYS = ["id", "name", "chemical_type", "phi", "chemical_group", "rate_value", "rate_unit"] as const;
 const TARGET_SNAP_KEYS = ["target_mode", "valve_ids", "valve_names", "group_ids", "group_names", "total_m2", "total_row_length_meters"] as const;
-const SPRAYER_SNAP_KEYS = ["id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open", "selected_psi", "flow_per_nozzle_l_per_min"] as const;
-const TANK_SNAP_KEYS = ["name", "volume_liters", "is_builtin"] as const;
+// "method" distinguishes Wanjet vs Bogaerts equipment; the rest of the Wanjet
+// keys (nozzle_count..flow_per_nozzle_l_per_min) are unchanged, and the
+// Bogaerts keys (nozzle_type_id..robot_names) are additive — a Wanjet
+// snapshot simply never sets them.
+const SPRAYER_SNAP_KEYS = [
+  "method",
+  "id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open", "selected_psi", "flow_per_nozzle_l_per_min",
+  "nozzle_type_id", "nozzle_type_name", "active_nozzles", "pressure_bar", "pressure_psi", "target_volume_l_per_ha", "robot_ids", "robot_names"
+] as const;
+// Wanjet keys (name/volume_liters/is_builtin) describe a single physical
+// tank; Bogaerts keys describe the job-level mixing choice instead (there is
+// no single "tank" concept — see mixing_method/batch_size_l).
+const TANK_SNAP_KEYS = [
+  "name", "volume_liters", "is_builtin",
+  "mixing_method", "batch_size_l", "robots_in_use", "total_onboard_capacity_l"
+] as const;
 const CALC_SNAP_KEYS = [
-  "type", "total_chemical_ml", "total_chemical_l", "rate_value", "rate_unit",
+  "type", "method", "total_chemical_ml", "total_chemical_l", "rate_value", "rate_unit",
   "area_label", "total_volume_l", "spray_time_minutes", "spray_time_hours",
   "total_flow_l_per_min", "tank_volume_l", "tank_count", "chem_per_liter_ml",
-  "chem_per_full_tank_ml", "final_tank_volume_l", "chem_for_final_tank_ml", "is_last_full"
+  "chem_per_full_tank_ml", "final_tank_volume_l", "chem_for_final_tank_ml", "is_last_full",
+  "target_volume_l_per_ha"
 ] as const;
 
 function pickSnapshotKeys<K extends string>(raw: unknown, keys: readonly K[]): Record<string, unknown> {
@@ -989,6 +1004,202 @@ pestControlRouter.delete("/pest/tanks/:id", canEdit, async (req, res) => {
     .eq("organization_id", organizationId);
   if (error) {
     return sendSafeError(res, 500, "Failed to delete tank.", "Tank delete error:", error);
+  }
+  return res.status(204).send();
+});
+
+// ── Bogaerts robots ───────────────────────────────────────────────────────────
+// V1: no flow-curve/calibration data. These records exist only to name a
+// robot and record its nominal onboard tank capacity for planner display.
+
+type BogaertsRobotPayload = {
+  name: string;
+  tank_volume_liters: number;
+  active: boolean;
+};
+
+function validateBogaertsRobotPayload(input: unknown): BogaertsRobotPayload {
+  if (!input || typeof input !== "object") throw new Error("Invalid request body");
+  const body = input as Record<string, unknown>;
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) throw new Error("name is required");
+
+  const tank_volume_liters =
+    typeof body.tank_volume_liters === "number" ? body.tank_volume_liters : Number(body.tank_volume_liters);
+  if (!Number.isFinite(tank_volume_liters) || tank_volume_liters <= 0) {
+    throw new Error("tank_volume_liters must be greater than 0");
+  }
+
+  const active = body.active === undefined ? true : parseBoolean(body.active, "active");
+
+  return { name, tank_volume_liters, active };
+}
+
+pestControlRouter.get("/pest/bogaerts/robots", canMobileView, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { data, error } = await supabase
+    .from("pest_bogaerts_robots")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load robots.", "Bogaerts robots fetch error:", error);
+  }
+  return res.json(data ?? []);
+});
+
+pestControlRouter.post("/pest/bogaerts/robots", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  let payload: BogaertsRobotPayload;
+  try {
+    payload = validateBogaertsRobotPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+  const { data, error } = await supabase
+    .from("pest_bogaerts_robots")
+    .insert({ ...payload, organization_id: organizationId })
+    .select("*")
+    .single();
+  if (error) {
+    return sendSafeError(res, 500, "Failed to create robot.", "Bogaerts robot insert error:", error);
+  }
+  return res.status(201).json(data);
+});
+
+pestControlRouter.put("/pest/bogaerts/robots/:id", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  let payload: BogaertsRobotPayload;
+  try {
+    payload = validateBogaertsRobotPayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+  const { data, error } = await supabase
+    .from("pest_bogaerts_robots")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) {
+    return sendSafeError(res, 500, "Failed to update robot.", "Bogaerts robot update error:", error);
+  }
+  return res.json(data);
+});
+
+pestControlRouter.delete("/pest/bogaerts/robots/:id", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  const { error } = await supabase
+    .from("pest_bogaerts_robots")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+  if (error) {
+    return sendSafeError(res, 500, "Failed to delete robot.", "Bogaerts robot delete error:", error);
+  }
+  return res.status(204).send();
+});
+
+// ── Bogaerts nozzle types ─────────────────────────────────────────────────────
+// V1: no flow-curve data (see 0126_pest_bogaerts_schema.sql). These records
+// exist only to name a nozzle type for planner selection and job records.
+
+type BogaertsNozzleTypePayload = {
+  name: string;
+  color: string | null;
+  spray_tip_code: string | null;
+  active: boolean;
+};
+
+function validateBogaertsNozzleTypePayload(input: unknown): BogaertsNozzleTypePayload {
+  if (!input || typeof input !== "object") throw new Error("Invalid request body");
+  const body = input as Record<string, unknown>;
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) throw new Error("name is required");
+
+  const active = body.active === undefined ? true : parseBoolean(body.active, "active");
+
+  return {
+    name,
+    color: parseOptionalText(body.color),
+    spray_tip_code: parseOptionalText(body.spray_tip_code),
+    active
+  };
+}
+
+pestControlRouter.get("/pest/bogaerts/nozzle-types", canMobileView, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { data, error } = await supabase
+    .from("pest_bogaerts_nozzle_types")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    return sendSafeError(res, 500, "Failed to load nozzle types.", "Bogaerts nozzle types fetch error:", error);
+  }
+  return res.json(data ?? []);
+});
+
+pestControlRouter.post("/pest/bogaerts/nozzle-types", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  let payload: BogaertsNozzleTypePayload;
+  try {
+    payload = validateBogaertsNozzleTypePayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+  const { data, error } = await supabase
+    .from("pest_bogaerts_nozzle_types")
+    .insert({ ...payload, organization_id: organizationId })
+    .select("*")
+    .single();
+  if (error) {
+    return sendSafeError(res, 500, "Failed to create nozzle type.", "Bogaerts nozzle type insert error:", error);
+  }
+  return res.status(201).json(data);
+});
+
+pestControlRouter.put("/pest/bogaerts/nozzle-types/:id", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  let payload: BogaertsNozzleTypePayload;
+  try {
+    payload = validateBogaertsNozzleTypePayload(req.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request body";
+    return res.status(400).json({ message });
+  }
+  const { data, error } = await supabase
+    .from("pest_bogaerts_nozzle_types")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error) {
+    return sendSafeError(res, 500, "Failed to update nozzle type.", "Bogaerts nozzle type update error:", error);
+  }
+  return res.json(data);
+});
+
+pestControlRouter.delete("/pest/bogaerts/nozzle-types/:id", canEdit, async (req, res) => {
+  const organizationId = req.organizationId;
+  const { id } = req.params;
+  const { error } = await supabase
+    .from("pest_bogaerts_nozzle_types")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organizationId);
+  if (error) {
+    return sendSafeError(res, 500, "Failed to delete nozzle type.", "Bogaerts nozzle type delete error:", error);
   }
   return res.status(204).send();
 });

@@ -81,9 +81,43 @@ type TankFormState = {
   active: boolean;
 };
 
+type BogaertsRobot = {
+  id: string;
+  name: string;
+  tank_volume_liters: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type BogaertsRobotFormState = {
+  name: string;
+  tank_volume_liters: string;
+  active: boolean;
+};
+
+type BogaertsNozzleType = {
+  id: string;
+  name: string;
+  color: string | null;
+  spray_tip_code: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type BogaertsNozzleTypeFormState = {
+  name: string;
+  color: string;
+  spray_tip_code: string;
+  active: boolean;
+};
+
 const SPRAYERS_URL = "/api/pest/sprayers";
 const TANKS_URL = "/api/pest/tanks";
 const CALIBRATIONS_URL = "/api/pest/calibrations";
+const BOGAERTS_ROBOTS_URL = "/api/pest/bogaerts/robots";
+const BOGAERTS_NOZZLE_TYPES_URL = "/api/pest/bogaerts/nozzle-types";
 
 const INITIAL_SPRAYER_FORM: SprayerFormState = {
   name: "",
@@ -103,6 +137,36 @@ const INITIAL_TANK_FORM: TankFormState = {
   volume_liters: "",
   active: true
 };
+
+const INITIAL_BOGAERTS_ROBOT_FORM: BogaertsRobotFormState = {
+  name: "",
+  tank_volume_liters: "300",
+  active: true
+};
+
+const INITIAL_BOGAERTS_NOZZLE_TYPE_FORM: BogaertsNozzleTypeFormState = {
+  name: "",
+  color: "",
+  spray_tip_code: "",
+  active: true
+};
+
+function toBogaertsRobotFormState(robot: BogaertsRobot): BogaertsRobotFormState {
+  return {
+    name: robot.name,
+    tank_volume_liters: String(robot.tank_volume_liters),
+    active: robot.active
+  };
+}
+
+function toBogaertsNozzleTypeFormState(nozzleType: BogaertsNozzleType): BogaertsNozzleTypeFormState {
+  return {
+    name: nozzleType.name,
+    color: nozzleType.color ?? "",
+    spray_tip_code: nozzleType.spray_tip_code ?? "",
+    active: nozzleType.active
+  };
+}
 
 function toSprayerFormState(sprayer: Sprayer): SprayerFormState {
   return {
@@ -141,6 +205,8 @@ function toTankFormState(tank: Tank): TankFormState {
 export function PestControlSetupPage() {
   const [sprayers, setSprayers] = useState<Sprayer[]>([]);
   const [tanks, setTanks] = useState<Tank[]>([]);
+  const [bogaertsRobots, setBogaertsRobots] = useState<BogaertsRobot[]>([]);
+  const [bogaertsNozzleTypes, setBogaertsNozzleTypes] = useState<BogaertsNozzleType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,6 +224,20 @@ export function PestControlSetupPage() {
   const [tankSaving, setTankSaving] = useState(false);
   const [tankError, setTankError] = useState<string | null>(null);
 
+  // Bogaerts robot modal state
+  const [robotForm, setRobotForm] = useState<BogaertsRobotFormState>(INITIAL_BOGAERTS_ROBOT_FORM);
+  const [editingRobotId, setEditingRobotId] = useState<string | null>(null);
+  const [isRobotModalOpen, setIsRobotModalOpen] = useState(false);
+  const [robotSaving, setRobotSaving] = useState(false);
+  const [robotError, setRobotError] = useState<string | null>(null);
+
+  // Bogaerts nozzle type modal state
+  const [nozzleTypeForm, setNozzleTypeForm] = useState<BogaertsNozzleTypeFormState>(INITIAL_BOGAERTS_NOZZLE_TYPE_FORM);
+  const [editingNozzleTypeId, setEditingNozzleTypeId] = useState<string | null>(null);
+  const [isNozzleTypeModalOpen, setIsNozzleTypeModalOpen] = useState(false);
+  const [nozzleTypeSaving, setNozzleTypeSaving] = useState(false);
+  const [nozzleTypeError, setNozzleTypeError] = useState<string | null>(null);
+
   // Calibration modal state
   const [calibrations, setCalibrations] = useState<CalibrationRecord[]>([]);
   const [calSprayerId, setCalSprayerId] = useState<string | null>(null);
@@ -170,10 +250,12 @@ export function PestControlSetupPage() {
     setLoading(true);
     setError(null);
     try {
-      const [sprayersRes, tanksRes, calsRes] = await Promise.all([
+      const [sprayersRes, tanksRes, calsRes, robotsRes, nozzleTypesRes] = await Promise.all([
         apiFetch(SPRAYERS_URL),
         apiFetch(TANKS_URL),
-        apiFetch(CALIBRATIONS_URL)
+        apiFetch(CALIBRATIONS_URL),
+        apiFetch(BOGAERTS_ROBOTS_URL),
+        apiFetch(BOGAERTS_NOZZLE_TYPES_URL)
       ]);
       if (!sprayersRes.ok || !tanksRes.ok) {
         throw new Error("Failed to load setup data");
@@ -182,6 +264,12 @@ export function PestControlSetupPage() {
       setTanks((await tanksRes.json()) as Tank[]);
       if (calsRes.ok) {
         setCalibrations((await calsRes.json()) as CalibrationRecord[]);
+      }
+      if (robotsRes.ok) {
+        setBogaertsRobots((await robotsRes.json()) as BogaertsRobot[]);
+      }
+      if (nozzleTypesRes.ok) {
+        setBogaertsNozzleTypes((await nozzleTypesRes.json()) as BogaertsNozzleType[]);
       }
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "Failed to load setup data");
@@ -386,6 +474,150 @@ export function PestControlSetupPage() {
       await fetchData();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete tank");
+    }
+  }
+
+  // ── Bogaerts robot modal helpers ───────────────────────────────────────────
+
+  function openAddRobotModal() {
+    setEditingRobotId(null);
+    setRobotForm(INITIAL_BOGAERTS_ROBOT_FORM);
+    setRobotError(null);
+    setIsRobotModalOpen(true);
+  }
+
+  function beginEditRobot(robot: BogaertsRobot) {
+    setEditingRobotId(robot.id);
+    setRobotForm(toBogaertsRobotFormState(robot));
+    setRobotError(null);
+    setIsRobotModalOpen(true);
+  }
+
+  function closeRobotModal() {
+    setIsRobotModalOpen(false);
+    setEditingRobotId(null);
+    setRobotForm(INITIAL_BOGAERTS_ROBOT_FORM);
+    setRobotError(null);
+  }
+
+  async function handleRobotSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRobotError(null);
+
+    const name = robotForm.name.trim();
+    if (!name) { setRobotError("Name is required."); return; }
+
+    const tank_volume_liters = Number(robotForm.tank_volume_liters);
+    if (!Number.isFinite(tank_volume_liters) || tank_volume_liters <= 0) {
+      setRobotError("Tank volume must be greater than 0."); return;
+    }
+
+    setRobotSaving(true);
+    try {
+      const method = editingRobotId ? "PUT" : "POST";
+      const url = editingRobotId ? `${BOGAERTS_ROBOTS_URL}/${editingRobotId}` : BOGAERTS_ROBOTS_URL;
+      const response = await apiFetch(url, {
+        method,
+        body: JSON.stringify({ name, tank_volume_liters, active: robotForm.active })
+      });
+      if (!response.ok) {
+        let message = editingRobotId ? "Update failed" : "Create failed";
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch { /* use fallback */ }
+        throw new Error(message);
+      }
+      closeRobotModal();
+      await fetchData();
+    } catch (submitError) {
+      setRobotError(submitError instanceof Error ? submitError.message : "Failed to save robot");
+    } finally {
+      setRobotSaving(false);
+    }
+  }
+
+  async function deleteRobot(id: string) {
+    if (!window.confirm("Delete this robot?")) return;
+    setError(null);
+    try {
+      const response = await apiFetch(`${BOGAERTS_ROBOTS_URL}/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      await fetchData();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete robot");
+    }
+  }
+
+  // ── Bogaerts nozzle type modal helpers ─────────────────────────────────────
+
+  function openAddNozzleTypeModal() {
+    setEditingNozzleTypeId(null);
+    setNozzleTypeForm(INITIAL_BOGAERTS_NOZZLE_TYPE_FORM);
+    setNozzleTypeError(null);
+    setIsNozzleTypeModalOpen(true);
+  }
+
+  function beginEditNozzleType(nozzleType: BogaertsNozzleType) {
+    setEditingNozzleTypeId(nozzleType.id);
+    setNozzleTypeForm(toBogaertsNozzleTypeFormState(nozzleType));
+    setNozzleTypeError(null);
+    setIsNozzleTypeModalOpen(true);
+  }
+
+  function closeNozzleTypeModal() {
+    setIsNozzleTypeModalOpen(false);
+    setEditingNozzleTypeId(null);
+    setNozzleTypeForm(INITIAL_BOGAERTS_NOZZLE_TYPE_FORM);
+    setNozzleTypeError(null);
+  }
+
+  async function handleNozzleTypeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setNozzleTypeError(null);
+
+    const name = nozzleTypeForm.name.trim();
+    if (!name) { setNozzleTypeError("Name is required."); return; }
+
+    setNozzleTypeSaving(true);
+    try {
+      const method = editingNozzleTypeId ? "PUT" : "POST";
+      const url = editingNozzleTypeId ? `${BOGAERTS_NOZZLE_TYPES_URL}/${editingNozzleTypeId}` : BOGAERTS_NOZZLE_TYPES_URL;
+      const response = await apiFetch(url, {
+        method,
+        body: JSON.stringify({
+          name,
+          color: nozzleTypeForm.color.trim() || null,
+          spray_tip_code: nozzleTypeForm.spray_tip_code.trim() || null,
+          active: nozzleTypeForm.active
+        })
+      });
+      if (!response.ok) {
+        let message = editingNozzleTypeId ? "Update failed" : "Create failed";
+        try {
+          const body = (await response.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch { /* use fallback */ }
+        throw new Error(message);
+      }
+      closeNozzleTypeModal();
+      await fetchData();
+    } catch (submitError) {
+      setNozzleTypeError(submitError instanceof Error ? submitError.message : "Failed to save nozzle type");
+    } finally {
+      setNozzleTypeSaving(false);
+    }
+  }
+
+  async function deleteNozzleType(id: string) {
+    if (!window.confirm("Delete this nozzle type?")) return;
+    setError(null);
+    try {
+      const response = await apiFetch(`${BOGAERTS_NOZZLE_TYPES_URL}/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      await fetchData();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete nozzle type");
     }
   }
 
@@ -615,6 +847,117 @@ export function PestControlSetupPage() {
                           type="button"
                           className="danger"
                           onClick={() => void deleteTank(tank.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── Bogaerts Robots ───────────────────────────────────────────────── */}
+      <div className="coming-soon-card" style={{ marginTop: "1rem" }}>
+        <h2>Bogaerts Robots</h2>
+        <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+          Registered Qii-Jet robots and their nominal onboard tank capacity (~300 L).
+        </p>
+
+        <div className="varieties-toolbar">
+          <button type="button" onClick={openAddRobotModal}>
+            + Add Robot
+          </button>
+        </div>
+
+        {!loading && bogaertsRobots.length === 0 ? <p>No Bogaerts robots added yet.</p> : null}
+
+        {bogaertsRobots.length > 0 ? (
+          <div className="varieties-table-wrapper">
+            <table className="varieties-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Tank volume (L)</th>
+                  <th>Active</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bogaertsRobots.map((robot) => (
+                  <tr key={robot.id}>
+                    <td>{robot.name}</td>
+                    <td>{robot.tank_volume_liters}</td>
+                    <td>{robot.active ? "Yes" : "No"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button type="button" onClick={() => beginEditRobot(robot)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void deleteRobot(robot.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── Bogaerts Nozzle Types ─────────────────────────────────────────── */}
+      <div className="coming-soon-card" style={{ marginTop: "1rem" }}>
+        <h2>Bogaerts Nozzle Types</h2>
+        <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+          Nozzle types available for the Qii-Jet planner (e.g. Yellow 020 / 110020, Green 015 /
+          110015, Orange 010 / 110010). Flow calibration is not tracked yet.
+        </p>
+
+        <div className="varieties-toolbar">
+          <button type="button" onClick={openAddNozzleTypeModal}>
+            + Add Nozzle Type
+          </button>
+        </div>
+
+        {!loading && bogaertsNozzleTypes.length === 0 ? <p>No nozzle types added yet.</p> : null}
+
+        {bogaertsNozzleTypes.length > 0 ? (
+          <div className="varieties-table-wrapper">
+            <table className="varieties-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Color</th>
+                  <th>Spray tip code</th>
+                  <th>Active</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bogaertsNozzleTypes.map((nozzleType) => (
+                  <tr key={nozzleType.id}>
+                    <td>{nozzleType.name}</td>
+                    <td>{nozzleType.color ?? "—"}</td>
+                    <td>{nozzleType.spray_tip_code ?? "—"}</td>
+                    <td>{nozzleType.active ? "Yes" : "No"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button type="button" onClick={() => beginEditNozzleType(nozzleType)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void deleteNozzleType(nozzleType.id)}
                         >
                           Delete
                         </button>
@@ -905,6 +1248,137 @@ export function PestControlSetupPage() {
                   {tankSaving ? "Saving..." : "Save"}
                 </button>
                 <button type="button" className="secondary" onClick={closeTankModal}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+        </ModalOverlay>
+      ) : null}
+
+      {/* ── Bogaerts robot modal ───────────────────────────────────────────── */}
+      {isRobotModalOpen ? (
+        <ModalOverlay onClose={closeRobotModal} contentClassName="variety-modal" titleId="pest-robot-modal-title">
+            <h2 id="pest-robot-modal-title">{editingRobotId ? "Edit Robot" : "Add Robot"}</h2>
+
+            <form className="varieties-form" onSubmit={(e) => void handleRobotSubmit(e)}>
+              <label>
+                Name
+                <input
+                  type="text"
+                  placeholder="e.g. Robot A"
+                  value={robotForm.name}
+                  onChange={(e) => setRobotForm((f) => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <label>
+                Tank volume (L)
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  placeholder="e.g. 300"
+                  value={robotForm.tank_volume_liters}
+                  onChange={(e) => setRobotForm((f) => ({ ...f, tank_volume_liters: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <label
+                style={{
+                  gridColumn: "1 / -1",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  display: "flex",
+                  fontWeight: 500
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={robotForm.active}
+                  onChange={(e) => setRobotForm((f) => ({ ...f, active: e.target.checked }))}
+                />
+                Active
+              </label>
+
+              {robotError ? <p className="form-error" style={{ gridColumn: "1 / -1" }}>{robotError}</p> : null}
+
+              <div className="form-actions" style={{ gridColumn: "1 / -1" }}>
+                <button type="submit" disabled={robotSaving}>
+                  {robotSaving ? "Saving..." : "Save"}
+                </button>
+                <button type="button" className="secondary" onClick={closeRobotModal}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+        </ModalOverlay>
+      ) : null}
+
+      {/* ── Bogaerts nozzle type modal ─────────────────────────────────────── */}
+      {isNozzleTypeModalOpen ? (
+        <ModalOverlay onClose={closeNozzleTypeModal} contentClassName="variety-modal" titleId="pest-nozzle-type-modal-title">
+            <h2 id="pest-nozzle-type-modal-title">{editingNozzleTypeId ? "Edit Nozzle Type" : "Add Nozzle Type"}</h2>
+
+            <form className="varieties-form" onSubmit={(e) => void handleNozzleTypeSubmit(e)}>
+              <label>
+                Name
+                <input
+                  type="text"
+                  placeholder="e.g. Yellow 020"
+                  value={nozzleTypeForm.name}
+                  onChange={(e) => setNozzleTypeForm((f) => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <label>
+                Color (optional)
+                <input
+                  type="text"
+                  placeholder="e.g. Yellow"
+                  value={nozzleTypeForm.color}
+                  onChange={(e) => setNozzleTypeForm((f) => ({ ...f, color: e.target.value }))}
+                />
+              </label>
+
+              <label>
+                Spray tip code (optional)
+                <input
+                  type="text"
+                  placeholder="e.g. 110020"
+                  value={nozzleTypeForm.spray_tip_code}
+                  onChange={(e) => setNozzleTypeForm((f) => ({ ...f, spray_tip_code: e.target.value }))}
+                />
+              </label>
+
+              <label
+                style={{
+                  gridColumn: "1 / -1",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  display: "flex",
+                  fontWeight: 500
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={nozzleTypeForm.active}
+                  onChange={(e) => setNozzleTypeForm((f) => ({ ...f, active: e.target.checked }))}
+                />
+                Active
+              </label>
+
+              {nozzleTypeError ? <p className="form-error" style={{ gridColumn: "1 / -1" }}>{nozzleTypeError}</p> : null}
+
+              <div className="form-actions" style={{ gridColumn: "1 / -1" }}>
+                <button type="submit" disabled={nozzleTypeSaving}>
+                  {nozzleTypeSaving ? "Saving..." : "Save"}
+                </button>
+                <button type="button" className="secondary" onClick={closeNozzleTypeModal}>
                   Cancel
                 </button>
               </div>

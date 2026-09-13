@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
+import {
+  type RateUnit,
+  LIQUID_RATE_OPTIONS,
+  DRY_RATE_OPTIONS,
+  M2_TO_FT2,
+  M2_TO_HECTARES,
+  M2_TO_ACRES,
+  BAR_TO_PSI,
+  roundTo,
+  isDryChemical,
+  computeChemicalMl,
+  computeChemicalNeeded,
+  computeSprayVolumeL,
+  computeMixPlan
+} from "../utils/pestChemicalCalc";
 
 type SetupGroup = {
   id: string;
@@ -44,6 +59,25 @@ type Tank = {
   active: boolean;
 };
 
+type SprayMethod = "wanjet" | "bogaerts";
+
+type BogaertsRobot = {
+  id: string;
+  name: string;
+  tank_volume_liters: number;
+  active: boolean;
+};
+
+type BogaertsNozzleType = {
+  id: string;
+  name: string;
+  color: string | null;
+  spray_tip_code: string | null;
+  active: boolean;
+};
+
+type BatchSizePreset = "1000" | "600" | "300" | "custom";
+
 type CalibrationPoint = {
   psi: number;
   avg_ml_per_min: number;
@@ -69,43 +103,9 @@ type Chemical = {
 };
 
 type ApplicationType = "drench" | "spray";
-type RateUnit =
-  | "ml_per_acre" | "L_per_acre" | "ml_per_hectare" | "L_per_hectare"
-  | "g_per_acre"  | "kg_per_acre" | "g_per_hectare"  | "kg_per_hectare";
-
-const LIQUID_RATE_OPTIONS: { value: RateUnit; label: string }[] = [
-  { value: "ml_per_acre", label: "ml / acre" },
-  { value: "L_per_acre", label: "L / acre" },
-  { value: "ml_per_hectare", label: "ml / hectare" },
-  { value: "L_per_hectare", label: "L / hectare" }
-];
-
-const DRY_RATE_OPTIONS: { value: RateUnit; label: string }[] = [
-  { value: "g_per_acre", label: "g / acre" },
-  { value: "kg_per_acre", label: "kg / acre" },
-  { value: "g_per_hectare", label: "g / hectare" },
-  { value: "kg_per_hectare", label: "kg / hectare" }
-];
 
 const PSI_OPTIONS: number[] = [];
 for (let p = 40; p <= 1000; p += 5) PSI_OPTIONS.push(p);
-
-function isDryChemical(inventoryUnit: string): boolean {
-  const u = inventoryUnit.toLowerCase().trim();
-  if (["g", "kg", "grams", "gram", "kilograms", "kilogram"].includes(u)) return true;
-  if (u.startsWith("g/") || u.startsWith("kg/")) return true;
-  if (/(powder|dry|dust|granule|granules|wdg|wg|wp)/.test(u)) return true;
-  return false;
-}
-
-const M2_TO_FT2 = 10.7639;
-const M2_TO_HECTARES = 1 / 10000;
-const M2_TO_ACRES = 1 / 4046.8564224;
-
-function roundTo(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
 
 function formatHoursMinutes(hours: number): string {
   const totalMinutes = Math.round(hours * 60);
@@ -131,21 +131,6 @@ function interpolateFlowPerNozzle(psi: number, points: CalibrationPoint[]): numb
   const upper = sorted.find((p) => p.psi > psi)!;
   const t = (psi - lower.psi) / (upper.psi - lower.psi);
   return (lower.avg_ml_per_min + t * (upper.avg_ml_per_min - lower.avg_ml_per_min)) / 1000;
-}
-
-function computeChemicalMl(m2: number, rate: number, rateUnit: RateUnit): number {
-  const acres = m2 * M2_TO_ACRES;
-  const ha = m2 * M2_TO_HECTARES;
-  switch (rateUnit) {
-    case "ml_per_acre":    return rate * acres;
-    case "L_per_acre":     return rate * acres * 1000;
-    case "ml_per_hectare": return rate * ha;
-    case "L_per_hectare":  return rate * ha * 1000;
-    case "g_per_acre":     return rate * acres;
-    case "kg_per_acre":    return rate * acres * 1000;
-    case "g_per_hectare":  return rate * ha;
-    case "kg_per_hectare": return rate * ha * 1000;
-  }
 }
 
 // ── Planned Jobs types ────────────────────────────────────────────────────────
@@ -284,6 +269,19 @@ export function PestPlannerPage() {
   const [selectedPsi, setSelectedPsi] = useState("");
   const [sprayerCalibrations, setSprayerCalibrations] = useState<Record<string, CalibrationPoint[]>>({});
 
+  // ── Sprayer / Method + Bogaerts Qii-Jet
+  const [sprayMethod, setSprayMethod] = useState<SprayMethod>("wanjet");
+  const [bogaertsRobots, setBogaertsRobots] = useState<BogaertsRobot[]>([]);
+  const [bogaertsNozzleTypes, setBogaertsNozzleTypes] = useState<BogaertsNozzleType[]>([]);
+  const [targetVolumeLHa, setTargetVolumeLHa] = useState("");
+  const [activeNozzles, setActiveNozzles] = useState("");
+  const [nozzleTypeId, setNozzleTypeId] = useState("");
+  const [pressureBar, setPressureBar] = useState("");
+  const [mixingMethod, setMixingMethod] = useState<"tote" | "robot">("tote");
+  const [batchSizePreset, setBatchSizePreset] = useState<BatchSizePreset>("600");
+  const [customBatchSizeL, setCustomBatchSizeL] = useState("");
+  const [selectedRobotIds, setSelectedRobotIds] = useState<string[]>([]);
+
   // ── Chemical
   const [chemicalId, setChemicalId] = useState("");
   const [labelLoading, setLabelLoading] = useState(false);
@@ -299,12 +297,14 @@ export function PestPlannerPage() {
       setError(null);
 
       try {
-        const [setupRes, sprayersRes, tanksRes, chemicalsRes, calsRes] = await Promise.all([
+        const [setupRes, sprayersRes, tanksRes, chemicalsRes, calsRes, bogaertsRobotsRes, bogaertsNozzleTypesRes] = await Promise.all([
           apiFetch("/api/greenhouse-setup"),
           apiFetch("/api/pest/sprayers"),
           apiFetch("/api/pest/tanks"),
           apiFetch("/api/pest/chemicals"),
-          apiFetch("/api/pest/calibrations")
+          apiFetch("/api/pest/calibrations"),
+          apiFetch("/api/pest/bogaerts/robots"),
+          apiFetch("/api/pest/bogaerts/nozzle-types")
         ]);
 
         if (!setupRes.ok || !sprayersRes.ok || !tanksRes.ok || !chemicalsRes.ok) {
@@ -339,6 +339,15 @@ export function PestPlannerPage() {
             bySprayerId[row.sprayer_id].push({ psi: row.psi, avg_ml_per_min: row.avg_ml_per_min });
           }
           setSprayerCalibrations(bySprayerId);
+        }
+
+        // Non-fatal: an org that hasn't set up Bogaerts equipment yet should
+        // still get a working (empty) Bogaerts method, not a broken planner.
+        if (bogaertsRobotsRes.ok) {
+          setBogaertsRobots((await bogaertsRobotsRes.json()) as BogaertsRobot[]);
+        }
+        if (bogaertsNozzleTypesRes.ok) {
+          setBogaertsNozzleTypes((await bogaertsNozzleTypesRes.json()) as BogaertsNozzleType[]);
         }
       } catch (loadError) {
         setError(
@@ -518,59 +527,10 @@ export function PestPlannerPage() {
 
   // ── Application rate calculation ───────────────────────────────────────────
 
-  const chemicalNeededResult = useMemo(() => {
-    const rate = Number(rateValue);
-    if (!Number.isFinite(rate) || rate <= 0) return null;
-    if (totalM2 <= 0) return null;
-
-    const acres = totalM2 * M2_TO_ACRES;
-    const ha = totalM2 * M2_TO_HECTARES;
-
-    let ml: number;
-    let areaLabel: string;
-    let isDry = false;
-
-    switch (rateUnit) {
-      case "ml_per_acre":
-        ml = rate * acres;
-        areaLabel = `${roundTo(acres, 3)} acres`;
-        break;
-      case "L_per_acre":
-        ml = rate * acres * 1000;
-        areaLabel = `${roundTo(acres, 3)} acres`;
-        break;
-      case "ml_per_hectare":
-        ml = rate * ha;
-        areaLabel = `${roundTo(ha, 4)} ha`;
-        break;
-      case "L_per_hectare":
-        ml = rate * ha * 1000;
-        areaLabel = `${roundTo(ha, 4)} ha`;
-        break;
-      case "g_per_acre":
-        ml = rate * acres;
-        areaLabel = `${roundTo(acres, 3)} acres`;
-        isDry = true;
-        break;
-      case "kg_per_acre":
-        ml = rate * acres * 1000;
-        areaLabel = `${roundTo(acres, 3)} acres`;
-        isDry = true;
-        break;
-      case "g_per_hectare":
-        ml = rate * ha;
-        areaLabel = `${roundTo(ha, 4)} ha`;
-        isDry = true;
-        break;
-      case "kg_per_hectare":
-        ml = rate * ha * 1000;
-        areaLabel = `${roundTo(ha, 4)} ha`;
-        isDry = true;
-        break;
-    }
-
-    return { ml, L: ml / 1000, areaLabel, isDry, unit: isDry ? "g" : "ml", unitLarge: isDry ? "kg" : "L" };
-  }, [rateValue, rateUnit, totalM2]);
+  const chemicalNeededResult = useMemo(
+    () => computeChemicalNeeded(totalM2, Number(rateValue), rateUnit),
+    [rateValue, rateUnit, totalM2]
+  );
 
   const perValveBreakdown = useMemo(() => {
     if (targetMode !== "valve" || selectedValveIds.length === 0) return [];
@@ -693,27 +653,80 @@ export function PestPlannerPage() {
 
   const tankCalc = useMemo(() => {
     if (!sprayCalc || !effectiveTankVolume || !chemicalNeededResult) return null;
-    const totalVolumeL = sprayCalc.totalVolumeL;
-    const tankVolumeL = effectiveTankVolume;
-    if (totalVolumeL <= 0 || tankVolumeL <= 0) return null;
-
-    const tankCount = Math.ceil(totalVolumeL / tankVolumeL);
-    const chemPerLiterMl = chemicalNeededResult.ml / totalVolumeL;
-    const chemPerFullTankMl = chemPerLiterMl * tankVolumeL;
-    const rawFinalVolumeL = totalVolumeL % tankVolumeL;
-    const isLastFull = rawFinalVolumeL < 0.001;
-    const finalTankVolumeL = isLastFull ? tankVolumeL : rawFinalVolumeL;
-    const chemForFinalTankMl = chemPerLiterMl * finalTankVolumeL;
+    const plan = computeMixPlan(sprayCalc.totalVolumeL, chemicalNeededResult.ml, effectiveTankVolume);
+    if (!plan) return null;
 
     return {
-      tankCount,
-      chemPerLiterMl,
-      chemPerFullTankMl,
-      finalTankVolumeL,
-      chemForFinalTankMl,
-      isLastFull
+      tankCount: plan.totalBatchCount,
+      chemPerLiterMl: plan.chemPerLiterMl,
+      chemPerFullTankMl: plan.chemPerFullBatchMl,
+      finalTankVolumeL: plan.finalBatchVolumeL,
+      chemForFinalTankMl: plan.chemForFinalBatchMl,
+      isLastFull: plan.isLastFull
     };
   }, [sprayCalc, effectiveTankVolume, chemicalNeededResult]);
+
+  // ── Bogaerts Qii-Jet derivations ────────────────────────────────────────────
+
+  const selectedNozzleType = useMemo(
+    () => bogaertsNozzleTypes.find((n) => n.id === nozzleTypeId) ?? null,
+    [bogaertsNozzleTypes, nozzleTypeId]
+  );
+
+  const pressurePsi = useMemo(() => {
+    const bar = Number(pressureBar);
+    return Number.isFinite(bar) && bar > 0 ? bar * BAR_TO_PSI : null;
+  }, [pressureBar]);
+
+  const activeNozzlesNum = useMemo(() => {
+    const n = Number(activeNozzles);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
+  }, [activeNozzles]);
+
+  // SPRAY VOLUME — independent of the product rate; area x target L/ha only.
+  const totalSolutionL = useMemo(
+    () => computeSprayVolumeL(totalM2, Number(targetVolumeLHa)),
+    [totalM2, targetVolumeLHa]
+  );
+
+  const resolvedBatchSizeL = useMemo(() => {
+    if (batchSizePreset === "custom") {
+      const n = Number(customBatchSizeL);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    }
+    return Number(batchSizePreset);
+  }, [batchSizePreset, customBatchSizeL]);
+
+  // MIXING — divides the two independent totals above into batches. Never
+  // re-derives total solution or total chemical from anything else.
+  const bogaertsMixPlan = useMemo(() => {
+    if (!chemicalNeededResult || totalSolutionL == null || totalSolutionL <= 0) return null;
+    if (resolvedBatchSizeL <= 0) return null;
+    return computeMixPlan(totalSolutionL, chemicalNeededResult.ml, resolvedBatchSizeL);
+  }, [chemicalNeededResult, totalSolutionL, resolvedBatchSizeL]);
+
+  const selectedRobots = useMemo(
+    () => bogaertsRobots.filter((r) => selectedRobotIds.includes(r.id)),
+    [bogaertsRobots, selectedRobotIds]
+  );
+
+  const totalOnboardCapacityL = useMemo(
+    () => selectedRobots.reduce((sum, r) => sum + r.tank_volume_liters, 0),
+    [selectedRobots]
+  );
+
+  function toggleRobot(id: string) {
+    setSelectedRobotIds((prev) =>
+      prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]
+    );
+  }
+
+  const bogaertsInputsValid =
+    Number.isFinite(Number(targetVolumeLHa)) && Number(targetVolumeLHa) > 0 &&
+    Number.isInteger(activeNozzlesNum) && activeNozzlesNum >= 1 &&
+    nozzleTypeId !== "" &&
+    Number.isFinite(Number(pressureBar)) && Number(pressureBar) > 0 &&
+    resolvedBatchSizeL > 0;
 
   function handleSprayerChange(id: string) {
     setSprayerId(id);
@@ -765,7 +778,9 @@ export function PestPlannerPage() {
     showCreateJobCard &&
     chemicalId !== "" &&
     applicationDate !== "" &&
-    (applicationType === "drench" || selectedSprayer !== null);
+    (applicationType === "drench" ||
+      (sprayMethod === "wanjet" && selectedSprayer !== null) ||
+      (sprayMethod === "bogaerts" && bogaertsInputsValid));
 
   const createJobLabel =
     applicationType === "spray"
@@ -814,9 +829,13 @@ export function PestPlannerPage() {
             total_row_length_meters: totalRowLengthMeters
           };
 
+    const isBogaertsSpray = applicationType === "spray" && sprayMethod === "bogaerts";
+    const isWanjetSpray = applicationType === "spray" && sprayMethod === "wanjet";
+
     const sprayer_snapshot =
-      selectedSprayer && applicationType === "spray"
+      isWanjetSpray && selectedSprayer
         ? {
+            method: "wanjet",
             id: selectedSprayer.id,
             name: selectedSprayer.name,
             nozzle_count: selectedSprayer.nozzle_count,
@@ -827,16 +846,35 @@ export function PestPlannerPage() {
             selected_psi: Number(selectedPsi) || null,
             flow_per_nozzle_l_per_min: sprayCalc?.flowPerNozzle ?? selectedSprayer.nozzle_volume_l_per_min
           }
-        : {};
+        : isBogaertsSpray
+          ? {
+              method: "bogaerts",
+              nozzle_type_id: nozzleTypeId || null,
+              nozzle_type_name: selectedNozzleType?.name ?? null,
+              active_nozzles: activeNozzlesNum,
+              pressure_bar: Number(pressureBar) || null,
+              pressure_psi: pressurePsi,
+              target_volume_l_per_ha: Number(targetVolumeLHa) || null,
+              robot_ids: selectedRobotIds,
+              robot_names: selectedRobots.map((r) => r.name)
+            }
+          : {};
 
     const tank_snapshot =
-      applicationType === "spray" && effectiveTankVolume != null
+      isWanjetSpray && effectiveTankVolume != null
         ? {
             name: effectiveTankName ?? "Tank",
             volume_liters: effectiveTankVolume,
             is_builtin: selectedSprayer?.has_tank ?? false
           }
-        : {};
+        : isBogaertsSpray
+          ? {
+              mixing_method: mixingMethod,
+              batch_size_l: resolvedBatchSizeL || null,
+              robots_in_use: selectedRobotIds.length,
+              total_onboard_capacity_l: selectedRobots.length > 0 ? totalOnboardCapacityL : null
+            }
+          : {};
 
     const calc_base = chemicalNeededResult
       ? {
@@ -848,22 +886,40 @@ export function PestPlannerPage() {
         }
       : {};
 
-    const calculation_snapshot =
-      applicationType === "spray" && sprayCalc
+    const calculation_snapshot = isWanjetSpray && sprayCalc
+      ? {
+          ...calc_base,
+          type: "spray",
+          method: "wanjet",
+          total_volume_l: sprayCalc.totalVolumeL,
+          spray_time_minutes: sprayCalc.sprayTimeMinutes,
+          spray_time_hours: sprayCalc.sprayTimeHours,
+          total_flow_l_per_min: sprayCalc.totalFlowLPerMin,
+          tank_volume_l: effectiveTankVolume,
+          tank_count: tankCalc?.tankCount ?? null,
+          chem_per_liter_ml: tankCalc?.chemPerLiterMl ?? null,
+          chem_per_full_tank_ml: tankCalc?.chemPerFullTankMl ?? null,
+          final_tank_volume_l: tankCalc?.finalTankVolumeL ?? null,
+          chem_for_final_tank_ml: tankCalc?.chemForFinalTankMl ?? null,
+          is_last_full: tankCalc?.isLastFull ?? null
+        }
+      : isBogaertsSpray
         ? {
             ...calc_base,
             type: "spray",
-            total_volume_l: sprayCalc.totalVolumeL,
-            spray_time_minutes: sprayCalc.sprayTimeMinutes,
-            spray_time_hours: sprayCalc.sprayTimeHours,
-            total_flow_l_per_min: sprayCalc.totalFlowLPerMin,
-            tank_volume_l: effectiveTankVolume,
-            tank_count: tankCalc?.tankCount ?? null,
-            chem_per_liter_ml: tankCalc?.chemPerLiterMl ?? null,
-            chem_per_full_tank_ml: tankCalc?.chemPerFullTankMl ?? null,
-            final_tank_volume_l: tankCalc?.finalTankVolumeL ?? null,
-            chem_for_final_tank_ml: tankCalc?.chemForFinalTankMl ?? null,
-            is_last_full: tankCalc?.isLastFull ?? null
+            method: "bogaerts",
+            target_volume_l_per_ha: Number(targetVolumeLHa) || null,
+            // "tank_*" key names are the pre-existing generic batch-plan fields
+            // (see pest_control_todos.calculation_snapshot) — reused here so a
+            // Bogaerts batch plan is a batch plan, not a parallel shape.
+            total_volume_l: totalSolutionL,
+            tank_volume_l: resolvedBatchSizeL || null,
+            tank_count: bogaertsMixPlan?.totalBatchCount ?? null,
+            chem_per_liter_ml: bogaertsMixPlan?.chemPerLiterMl ?? null,
+            chem_per_full_tank_ml: bogaertsMixPlan?.chemPerFullBatchMl ?? null,
+            final_tank_volume_l: bogaertsMixPlan?.finalBatchVolumeL ?? null,
+            chem_for_final_tank_ml: bogaertsMixPlan?.chemForFinalBatchMl ?? null,
+            is_last_full: bogaertsMixPlan?.isLastFull ?? null
           }
         : { ...calc_base, type: applicationType };
 
@@ -1714,8 +1770,36 @@ export function PestPlannerPage() {
         </div>
       </div>
 
-      {/* ── Sprayer & Water Details (Spray only) ─────────── */}
+      {/* ── Sprayer / Method (Spray only) ─────────────────── */}
       {applicationType === "spray" ? (
+        <div className="coming-soon-card">
+          <h2>Sprayer / Method</h2>
+          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.75rem" }}>
+            {(["wanjet", "bogaerts"] as const).map((method) => (
+              <button
+                key={method}
+                type="button"
+                onClick={() => setSprayMethod(method)}
+                style={{
+                  padding: "0.3rem 0.85rem",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  background: sprayMethod === method ? "var(--brand)" : "var(--surface)",
+                  color: sprayMethod === method ? "#fff" : "var(--text)",
+                  fontWeight: sprayMethod === method ? 600 : 400,
+                  cursor: "pointer",
+                  fontSize: "0.85em"
+                }}
+              >
+                {method === "wanjet" ? "Wanjet" : "Bogaerts Qii-Jet"}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Sprayer & Water Details (Wanjet only) ─────────── */}
+      {applicationType === "spray" && sprayMethod === "wanjet" ? (
         <div className="coming-soon-card">
           <h2>Sprayer Details</h2>
 
@@ -2024,6 +2108,331 @@ export function PestPlannerPage() {
               ) : null}
             </>
           )}
+        </div>
+      ) : null}
+
+      {/* ── Bogaerts Qii-Jet Setup ─────────────────────────── */}
+      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
+        <div className="coming-soon-card">
+          <h2>Bogaerts Qii-Jet Setup</h2>
+
+          <div className="varieties-form" style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}>
+            <label>
+              Target Spray Volume (L/ha)
+              <input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="e.g. 1000"
+                value={targetVolumeLHa}
+                onChange={(e) => setTargetVolumeLHa(e.target.value)}
+              />
+            </label>
+            <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.1rem 0 0" }}>
+              The total carrier/spray solution to apply per hectare — independent of the
+              product rate above. This is not the chemical dose.
+            </p>
+
+            <label style={{ marginTop: "0.75rem" }}>
+              Active Nozzles
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="e.g. 14"
+                value={activeNozzles}
+                onChange={(e) => setActiveNozzles(e.target.value)}
+              />
+            </label>
+
+            <label style={{ marginTop: "0.75rem" }}>
+              Nozzle Type
+              {bogaertsNozzleTypes.filter((n) => n.active).length === 0 ? (
+                <p style={{ fontSize: "0.82em", color: "var(--text-muted)", margin: "0.3rem 0 0" }}>
+                  No nozzle types configured. Add them in Pest Control Setup.
+                </p>
+              ) : (
+                <select value={nozzleTypeId} onChange={(e) => setNozzleTypeId(e.target.value)}>
+                  <option value="">Select a nozzle type…</option>
+                  {bogaertsNozzleTypes.filter((n) => n.active).map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                      {n.spray_tip_code ? ` (${n.spray_tip_code})` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+
+            <label style={{ marginTop: "0.75rem" }}>
+              Pressure (bar)
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                placeholder="e.g. 10"
+                value={pressureBar}
+                onChange={(e) => setPressureBar(e.target.value)}
+              />
+            </label>
+            {pressurePsi != null ? (
+              <p style={{ fontSize: "0.82em", color: "var(--text-muted)", margin: "0.1rem 0 0" }}>
+                ≈ {roundTo(pressurePsi, 1)} psi
+              </p>
+            ) : null}
+          </div>
+
+          <p style={{ fontSize: "0.78em", color: "var(--text-muted)", marginTop: "0.75rem" }}>
+            Nozzle flow calibration is not yet configured in GrowLink — active nozzles, nozzle
+            type, and pressure are recorded here for the robot setup and job record, but are
+            not used to validate or calculate flow in this version.
+          </p>
+        </div>
+      ) : null}
+
+      {/* ── Bogaerts Mixing ────────────────────────────────── */}
+      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
+        <div className="coming-soon-card">
+          <h2>Mixing</h2>
+
+          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.75rem" }}>
+            {(["tote", "robot"] as const).map((method) => (
+              <button
+                key={method}
+                type="button"
+                onClick={() => setMixingMethod(method)}
+                style={{
+                  padding: "0.3rem 0.85rem",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  background: mixingMethod === method ? "var(--brand)" : "var(--surface)",
+                  color: mixingMethod === method ? "#fff" : "var(--text)",
+                  fontWeight: mixingMethod === method ? 600 : 400,
+                  cursor: "pointer",
+                  fontSize: "0.85em"
+                }}
+              >
+                {method === "tote" ? "Tote Mix" : "Robot Mix"}
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.4rem 0 0" }}>
+            {mixingMethod === "tote"
+              ? "Mixed in a separate tote, then used to fill robot tanks."
+              : "Mixed directly in the robot's onboard tank."}
+          </p>
+
+          <div style={{ marginTop: "0.85rem" }}>
+            <p style={{ fontWeight: 600, fontSize: "0.9em", margin: "0 0 0.4rem" }}>Batch Size</p>
+            <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+              {(["1000", "600", "300", "custom"] as const).map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setBatchSizePreset(preset)}
+                  style={{
+                    padding: "0.3rem 0.85rem",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border)",
+                    background: batchSizePreset === preset ? "var(--brand)" : "var(--surface)",
+                    color: batchSizePreset === preset ? "#fff" : "var(--text)",
+                    fontWeight: batchSizePreset === preset ? 600 : 400,
+                    cursor: "pointer",
+                    fontSize: "0.85em"
+                  }}
+                >
+                  {preset === "custom" ? "Custom" : `${preset} L`}
+                </button>
+              ))}
+            </div>
+            {batchSizePreset === "custom" ? (
+              <label style={{ display: "block", marginTop: "0.5rem", maxWidth: "200px" }}>
+                Custom batch size (L)
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder="e.g. 450"
+                  value={customBatchSizeL}
+                  onChange={(e) => setCustomBatchSizeL(e.target.value)}
+                />
+              </label>
+            ) : null}
+          </div>
+
+          <div style={{ marginTop: "0.85rem" }}>
+            <p style={{ fontWeight: 600, fontSize: "0.9em", margin: "0 0 0.4rem" }}>
+              Robots in Use <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional — for reference only)</span>
+            </p>
+            {bogaertsRobots.filter((r) => r.active).length === 0 ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                No Bogaerts robots configured. Add them in Pest Control Setup.
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                {bogaertsRobots.filter((r) => r.active).map((r) => (
+                  <label key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.88em", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedRobotIds.includes(r.id)}
+                      onChange={() => toggleRobot(r.id)}
+                    />
+                    {r.name} ({r.tank_volume_liters} L)
+                  </label>
+                ))}
+              </div>
+            )}
+            {selectedRobots.length > 0 ? (
+              <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                {selectedRobots.length} robot{selectedRobots.length !== 1 ? "s" : ""} × onboard tank
+                {" = "}
+                <strong>{roundTo(totalOnboardCapacityL, 0)} L</strong> total onboard capacity
+                {resolvedBatchSizeL > 0 && Math.abs(resolvedBatchSizeL - totalOnboardCapacityL) < 0.001
+                  ? ` — this batch size is one complete fill of ${selectedRobots.length === 1 ? "this robot" : "both robots"}.`
+                  : ""}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Bogaerts results: JOB TOTAL / MIXING INSTRUCTIONS / ROBOT SETUP ── */}
+      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
+        <div className="coming-soon-card">
+          <h2>Job Total</h2>
+          {totalM2 <= 0 ? (
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+              Select a target area to calculate job totals.
+            </p>
+          ) : (
+            <div className="greenhouse-group-stats" style={{ marginTop: "0.65rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Area (m²)</span>
+                <span className="greenhouse-stat-value">{roundTo(totalM2, 2).toLocaleString()}</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Area (ha)</span>
+                <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_HECTARES, 4)}</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Area (acres)</span>
+                <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_ACRES, 4)}</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Area (ft²)</span>
+                <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}</span>
+              </div>
+              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                <span className="greenhouse-stat-label">Total chemical required</span>
+                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                  {chemicalNeededResult
+                    ? `${roundTo(chemicalNeededResult.ml, 0).toLocaleString()} ${chemicalNeededResult.unit} (${roundTo(chemicalNeededResult.L, 3)} ${chemicalNeededResult.unitLarge})`
+                    : "Enter a chemical rate above."}
+                </span>
+              </div>
+              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                <span className="greenhouse-stat-label">Total solution required</span>
+                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                  {totalSolutionL != null
+                    ? `${roundTo(totalSolutionL, 1).toLocaleString()} L`
+                    : "Enter a Target Spray Volume above."}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
+        <div className="coming-soon-card">
+          <h2>Mixing Instructions</h2>
+          {!chemicalNeededResult || totalSolutionL == null || totalSolutionL <= 0 ? (
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+              Enter a chemical rate and Target Spray Volume to calculate the mixing plan.
+            </p>
+          ) : resolvedBatchSizeL <= 0 ? (
+            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+              Select or enter a batch size to calculate the mixing plan.
+            </p>
+          ) : bogaertsMixPlan ? (
+            <div className="greenhouse-group-stats" style={{ marginTop: "0.65rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Batch size</span>
+                <span className="greenhouse-stat-value">{roundTo(resolvedBatchSizeL, 1)} L</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Concentration</span>
+                <span className="greenhouse-stat-value">
+                  {roundTo(bogaertsMixPlan.chemPerLiterMl, 3)} {chemicalNeededResult.isDry ? "g/L" : "ml/L"}
+                </span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Full batches</span>
+                <span className="greenhouse-stat-value">{bogaertsMixPlan.fullBatchCount}</span>
+              </div>
+              <div className="greenhouse-stat-item">
+                <span className="greenhouse-stat-label">Chemical per full batch</span>
+                <span className="greenhouse-stat-value">
+                  {roundTo(bogaertsMixPlan.chemPerFullBatchMl, 1)} {chemicalNeededResult.isDry ? "g" : "ml"}
+                </span>
+              </div>
+              {!bogaertsMixPlan.isLastFull ? (
+                <>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Final batch</span>
+                    <span className="greenhouse-stat-value">{roundTo(bogaertsMixPlan.finalBatchVolumeL, 1)} L</span>
+                  </div>
+                  <div className="greenhouse-stat-item">
+                    <span className="greenhouse-stat-label">Chemical for final batch</span>
+                    <span className="greenhouse-stat-value">
+                      {roundTo(bogaertsMixPlan.chemForFinalBatchMl, 1)} {chemicalNeededResult.isDry ? "g" : "ml"}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Final batch</span>
+                  <span className="greenhouse-stat-value">Divides evenly — every batch is a full {roundTo(resolvedBatchSizeL, 1)} L batch.</span>
+                </div>
+              )}
+              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                <span className="greenhouse-stat-label">Total batches</span>
+                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                  {bogaertsMixPlan.totalBatchCount}
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
+        <div className="coming-soon-card">
+          <h2>Bogaerts Robot Setup</h2>
+          <div className="greenhouse-group-stats" style={{ marginTop: "0.65rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+            <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="greenhouse-stat-label">Application Volume</span>
+              <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                {targetVolumeLHa ? `${targetVolumeLHa} L/ha` : "—"}
+              </span>
+            </div>
+            <div className="greenhouse-stat-item">
+              <span className="greenhouse-stat-label">Pressure</span>
+              <span className="greenhouse-stat-value">
+                {pressureBar
+                  ? `${pressureBar} bar${pressurePsi != null ? ` / ~${roundTo(pressurePsi, 0)} psi` : ""}`
+                  : "—"}
+              </span>
+            </div>
+            <div className="greenhouse-stat-item">
+              <span className="greenhouse-stat-label">Active Nozzles</span>
+              <span className="greenhouse-stat-value">{activeNozzlesNum || "—"}</span>
+            </div>
+            <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="greenhouse-stat-label">Nozzle Type</span>
+              <span className="greenhouse-stat-value">{selectedNozzleType?.name ?? "—"}</span>
+            </div>
+          </div>
         </div>
       ) : null}
 
