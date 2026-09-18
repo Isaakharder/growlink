@@ -1,4 +1,7 @@
 PODS:
+  - AparajitaCapacitorSecureStorage (8.0.0):
+    - Capacitor
+    - KeychainSwift (~> 21.0)
   - Capacitor (8.5.2):
     - CapacitorCordova
   - CapacitorApp (8.1.1):
@@ -46,6 +49,7 @@ PODS:
     - GoogleUtilities/Privacy
   - GTMSessionFetcher/Core (3.5.0)
   - IONCameraLib (2.0.0)
+  - KeychainSwift (21.0.0)
   - MLImage (1.0.0-beta7)
   - MLKitBarcodeScanning (7.0.0):
     - MLKitCommon (~> 13.0)
@@ -71,6 +75,7 @@ PODS:
   - PromisesObjC (2.4.1)
 
 DEPENDENCIES:
+  - "AparajitaCapacitorSecureStorage (from `../../node_modules/@aparajita/capacitor-secure-storage`)"
   - "Capacitor (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorApp (from `../../node_modules/@capacitor/app`)"
   - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
@@ -91,6 +96,7 @@ SPEC REPOS:
     - GoogleUtilities
     - GTMSessionFetcher
     - IONCameraLib
+    - KeychainSwift
     - MLImage
     - MLKitBarcodeScanning
     - MLKitCommon
@@ -99,6 +105,8 @@ SPEC REPOS:
     - PromisesObjC
 
 EXTERNAL SOURCES:
+  AparajitaCapacitorSecureStorage:
+    :path: "../../node_modules/@aparajita/capacitor-secure-storage"
   Capacitor:
     :path: "../../node_modules/@capacitor/ios"
   CapacitorApp:
@@ -123,6 +131,7 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/status-bar"
 
 SPEC CHECKSUMS:
+  AparajitaCapacitorSecureStorage: 8128d05cafcb13b00448e20fb388a0edccd44b12
   Capacitor: 89067779e14fb7ea56af07b4817f45d1f0c2a269
   CapacitorApp: 305bd13c44f6f9d164e2ee66a4faa956ed8c0e06
   CapacitorCamera: 4299fe8cf9b2b15e6ad602bce68d063b2008e8be
@@ -140,6 +149,7 @@ SPEC CHECKSUMS:
   GoogleUtilities: 4e0c2ad9fa0d0d18b5c4df8bf57b461cba35b0bb
   GTMSessionFetcher: 5aea5ba6bd522a239e236100971f10cb71b96ab6
   IONCameraLib: 729cae576e1a952602ce750a9790b6dc7d7e2e95
+  KeychainSwift: 4a71a45c802fd9e73906457c2dcbdbdc06c9419d
   MLImage: 2ab9c968e75f57911c16f4c9d9e8a8e9604a86a1
   MLKitBarcodeScanning: 72c6437f13a900833b400136be53a8a5d86f42fa
   MLKitCommon: 26b779f072a182c1603d4c88a101c350cac837b1
@@ -147,6 +157,6 @@ SPEC CHECKSUMS:
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
 
-PODFILE CHECKSUM: 3768f4c97531978e317e6a8209050e33e54060a5
+PODFILE CHECKSUM: ac788a640b6bf3aafd972695722dea36a2035f33
 
 COCOAPODS: 1.17.0
