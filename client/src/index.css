@@ -7763,6 +7763,13 @@ textarea.cleaning-checklist-response-input {
   padding-bottom: 1rem;
 }
 
+/* Tighter than the shared .mobile-page heading (used by every other
+   mobile page — left untouched) so the tab bar and controls sit closer
+   to the top, leaving more of the screen for equipment/inventory data. */
+.maintenance-page h2 {
+  font-size: 1.1rem;
+}
+
 .maintenance-back-link {
   border: none;
   background: none;
@@ -7776,114 +7783,170 @@ textarea.cleaning-checklist-response-input {
 .maintenance-tab-bar {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.4rem;
-  margin: 0.9rem 0;
+  gap: 0.3rem;
+  margin: 0.6rem 0;
 }
 
 .maintenance-tab-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.82rem;
-  font-weight: 700;
-  padding: 0.55rem 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.15;
+  padding: 0.4rem 0.15rem;
+  min-height: 44px;
   text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Deliberately no white-space/overflow/text-overflow here — a label
+     that doesn't fit must wrap onto a second line (min-height gives it
+     room), never truncate to "Equi…". The 2x2 fallback below is what
+     actually keeps four full labels comfortably on one line; this is
+     just a safety net for extreme accessibility text-size settings. */
 }
 
 .maintenance-tab-button.active {
   background: var(--active);
   color: #0a5e4c;
   border-color: var(--brand);
+  font-weight: 700;
+}
+
+/* Below ~374px, four full labels ("Equipment") at a readable size no
+   longer comfortably fit one row — switch to 2x2 rather than shrinking
+   text further or truncating. 375px (the narrowest required test width
+   otherwise) keeps the single-row four-column layout. */
+@media (max-width: 374px) {
+  .maintenance-tab-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .maintenance-tab-button {
+    font-size: 0.78rem;
+  }
 }
 
 .maintenance-tab-panel {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.6rem;
 }
 
 .maintenance-toolbar {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem;
   align-items: center;
 }
 
-.maintenance-search-input {
+/* Single-class selectors below (.maintenance-scan-button, .maintenance-chip,
+   etc.) need the .maintenance-page prefix to actually win over the later,
+   equally-targeted `.maintenance-page button` base rule — without it,
+   CSS specificity (both are one class + one type selector) falls back to
+   source order and the base rule's padding/border-radius/colors silently
+   clobber these, which is what made the segmented filter and scan button
+   render as oversized default buttons instead of their intended compact
+   styling. */
+.maintenance-page .maintenance-search-input {
   flex: 1 1 auto;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
-  padding: 0.55rem 0.7rem;
+  padding: 0.45rem 0.6rem;
   font: inherit;
+  font-size: 0.88rem;
+  min-height: 44px;
 }
 
-.maintenance-scan-button {
+.maintenance-page .maintenance-scan-button {
   flex-shrink: 0;
   border: 1px solid var(--brand);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--brand);
   color: #fff;
   font: inherit;
+  font-size: 0.82rem;
   font-weight: 700;
-  padding: 0.55rem 0.85rem;
+  padding: 0.45rem 0.65rem;
+  min-height: 44px;
   white-space: nowrap;
 }
 
 .maintenance-filter-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
 }
 
 .maintenance-filter-row select {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
-  padding: 0.5rem 0.5rem;
+  padding: 0.4rem 0.35rem;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.76rem;
+  min-height: 44px;
+}
+
+/* Below ~374px, three selects side by side get too narrow to show a
+   selected value without clipping — wrap the third (Status) onto its own
+   full-width row rather than force horizontal scrolling or shrink text
+   further. */
+@media (max-width: 374px) {
+  .maintenance-filter-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .maintenance-filter-row select:last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .maintenance-chip-row {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.35rem;
   overflow-x: auto;
   padding-bottom: 0.15rem;
 }
 
-.maintenance-chip {
+/* A compact segmented filter, not three primary buttons — see the
+   specificity note above .maintenance-search-input for why the
+   .maintenance-page prefix is required here. */
+.maintenance-page .maintenance-chip {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.8rem;
-  font-weight: 700;
-  padding: 0.35rem 0.8rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0 0.65rem;
+  min-height: 44px;
   white-space: nowrap;
 }
 
-.maintenance-chip.active {
+.maintenance-page .maintenance-chip.active {
   background: var(--surface-soft);
   color: var(--text);
   border-color: var(--text-muted);
+  font-weight: 700;
 }
 
-.maintenance-chip-overdue.active {
+.maintenance-page .maintenance-chip-overdue.active {
   background: #fee2e2;
   color: #b42318;
   border-color: #b42318;
 }
 
-.maintenance-chip-due-soon.active {
+.maintenance-page .maintenance-chip-due-soon.active {
   background: #fef3c7;
   color: #92400e;
   border-color: #92400e;
@@ -8072,12 +8135,13 @@ textarea.cleaning-checklist-response-input {
 .maintenance-page button,
 .maintenance-sheet button {
   border: 1px solid var(--brand);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--brand);
   color: #fff;
   font: inherit;
+  font-size: 0.86rem;
   font-weight: 700;
-  padding: 0.6rem 0.9rem;
+  padding: 0.5rem 0.75rem;
   min-height: 44px;
   cursor: pointer;
 }
@@ -8461,11 +8525,6 @@ textarea.cleaning-checklist-response-input {
 /* ── Narrow phone widths (320–430px): tighten spacing, single-column filters ── */
 
 @media (max-width: 380px) {
-  .maintenance-tab-button {
-    font-size: 0.74rem;
-    padding: 0.5rem 0.2rem;
-  }
-
   .maintenance-detail-grid {
     grid-template-columns: 1fr;
   }
