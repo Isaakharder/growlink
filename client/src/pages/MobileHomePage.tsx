@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { usePermissions } from "../hooks/usePermissions";
 
 const IRRIGATION_PERMISSIONS = ["mobile:irrigation", "irrigation:view", "irrigation:edit"];
+const MAINTENANCE_PERMISSIONS = ["mobile:maintenance", "maintenance:view", "maintenance:edit"];
 
 export function MobileHomePage() {
   // canAny is optimistically true while membership is loading (see
@@ -9,6 +10,7 @@ export function MobileHomePage() {
   // common (authorized) case -- it's simply present from first render.
   const { canAny } = usePermissions();
   const canUseIrrigation = canAny(IRRIGATION_PERMISSIONS);
+  const canUseMaintenance = canAny(MAINTENANCE_PERMISSIONS);
 
   return (
     <section className="mobile-page">
@@ -41,6 +43,12 @@ export function MobileHomePage() {
         <Link className="mobile-card-button" to="/mobile/calibration">
           Calibration
         </Link>
+
+        {canUseMaintenance ? (
+          <Link className="mobile-card-button" to="/mobile/maintenance">
+            Maintenance
+          </Link>
+        ) : null}
       </div>
     </section>
   );

@@ -66,6 +66,8 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "calibration:view",      label: "Calibration — View" },
       { key: "calibration:edit",      label: "Calibration — Edit" },
       { key: "calibration:delete_records", label: "Calibration — Delete Records" },
+      { key: "maintenance:view",      label: "Maintenance — View" },
+      { key: "maintenance:edit",      label: "Maintenance — Edit" },
     ],
   },
   {
@@ -78,6 +80,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: "mobile:quality",      label: "Mobile — Quality" },
       { key: "mobile:food_safety",  label: "Mobile — Food Safety" },
       { key: "mobile:calibration",  label: "Mobile — Calibration" },
+      { key: "mobile:maintenance",  label: "Mobile — Maintenance" },
     ],
   },
   {

@@ -42,6 +42,8 @@ import { MobileFoodSafetyPage } from "../pages/MobileFoodSafetyPage";
 import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationPage";
 import { MobilePestCalibrationPage } from "../pages/MobilePestCalibrationPage";
 import { MobilePestCalibrationDeviceCompletePage } from "../pages/MobilePestCalibrationDeviceCompletePage";
+import { MobileMaintenancePage } from "../pages/MobileMaintenancePage";
+import { MobileMaintenanceEquipmentDetailPage } from "../pages/MobileMaintenanceEquipmentDetailPage";
 
 export const appRouter = createBrowserRouter([
   {
@@ -354,6 +356,22 @@ export const appRouter = createBrowserRouter([
             element: (
               <RequirePermission permission="mobile:calibration">
                 <MobilePestCalibrationDeviceCompletePage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "maintenance",
+            element: (
+              <RequirePermission permission={["mobile:maintenance", "maintenance:view", "maintenance:edit"]}>
+                <MobileMaintenancePage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "maintenance/equipment/:equipmentId",
+            element: (
+              <RequirePermission permission={["mobile:maintenance", "maintenance:view", "maintenance:edit"]}>
+                <MobileMaintenanceEquipmentDetailPage />
               </RequirePermission>
             )
           }

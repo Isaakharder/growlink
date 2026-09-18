@@ -13,12 +13,18 @@ const MOBILE_PERMISSIONS = [
   "mobile:pest",
   "mobile:quality",
   "mobile:food_safety",
-  // Desktop irrigation permissions also grant entry to the mobile shell —
-  // a user with only irrigation:view/edit (no mobile:* keys at all) must
-  // still be able to reach /mobile/irrigation-log if they navigate there
-  // directly; the per-route RequirePermission guard handles the specifics.
+  "mobile:maintenance",
+  // Desktop irrigation/maintenance permissions also grant entry to the
+  // mobile shell — a user with only irrigation:view/edit or
+  // maintenance:view/edit (no mobile:* keys at all) must still be able to
+  // reach /mobile/irrigation-log or /mobile/maintenance if they navigate
+  // there directly; the per-route RequirePermission guard handles the
+  // specifics. Maintenance has no desktop page at all in v1, so its
+  // view/edit keys only ever grant mobile entry.
   "irrigation:view",
-  "irrigation:edit"
+  "irrigation:edit",
+  "maintenance:view",
+  "maintenance:edit"
 ] as const;
 
 function MobileLayoutInner() {

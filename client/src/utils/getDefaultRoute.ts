@@ -18,6 +18,11 @@ const DESKTOP_PERMISSIONS = [
 
 // Mobile permission keys — any one of these means the user has mobile access.
 // mobile:access is the master gate enforced by MobileLayout.
+//
+// maintenance:view/maintenance:edit are included here (not in
+// DESKTOP_PERMISSIONS) because there is no desktop Maintenance page yet —
+// the module is mobile-only in v1, so holding only those keys must land a
+// member on /mobile, not "/".
 const MOBILE_PERMISSIONS = [
   "mobile:access",
   "mobile:daily_yield",
@@ -25,6 +30,9 @@ const MOBILE_PERMISSIONS = [
   "mobile:pest",
   "mobile:quality",
   "mobile:food_safety",
+  "mobile:maintenance",
+  "maintenance:view",
+  "maintenance:edit",
 ];
 
 /**

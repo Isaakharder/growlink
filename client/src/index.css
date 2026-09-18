@@ -3313,6 +3313,9 @@ body {
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--border);
   padding: 1rem;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
 }
 
 .mobile-header h1 {
@@ -3323,6 +3326,8 @@ body {
 .mobile-content {
   padding: 1rem;
   padding-bottom: 5.5rem;
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
 }
 
 .mobile-page h2 {
@@ -3380,6 +3385,9 @@ body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
   padding: 0.65rem 0.8rem;
+  padding-bottom: max(0.65rem, env(safe-area-inset-bottom));
+  padding-left: max(0.8rem, env(safe-area-inset-left));
+  padding-right: max(0.8rem, env(safe-area-inset-right));
 }
 
 .mobile-bottom-nav-single {
@@ -7747,4 +7755,726 @@ textarea.cleaning-checklist-response-input {
 
 .csv-template-mappings-view h4 {
   margin: 1rem 0 0.4rem;
+}
+
+/* ── Maintenance module (mobile) ──────────────────────────────────────── */
+
+.maintenance-page {
+  padding-bottom: 1rem;
+}
+
+.maintenance-back-link {
+  border: none;
+  background: none;
+  color: var(--brand);
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 0.4rem 0;
+  margin-bottom: 0.4rem;
+}
+
+.maintenance-tab-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0.9rem 0;
+}
+
+.maintenance-tab-button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 0.55rem 0.3rem;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.maintenance-tab-button.active {
+  background: var(--active);
+  color: #0a5e4c;
+  border-color: var(--brand);
+}
+
+.maintenance-tab-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.maintenance-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.maintenance-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+}
+
+.maintenance-scan-button {
+  flex-shrink: 0;
+  border: 1px solid var(--brand);
+  border-radius: 10px;
+  background: var(--brand);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.55rem 0.85rem;
+  white-space: nowrap;
+}
+
+.maintenance-filter-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.maintenance-filter-row select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.maintenance-chip-row {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+
+.maintenance-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.35rem 0.8rem;
+  white-space: nowrap;
+}
+
+.maintenance-chip.active {
+  background: var(--surface-soft);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.maintenance-chip-overdue.active {
+  background: #fee2e2;
+  color: #b42318;
+  border-color: #b42318;
+}
+
+.maintenance-chip-due-soon.active {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #92400e;
+}
+
+.maintenance-card-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.maintenance-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.maintenance-equipment-card {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.maintenance-card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.maintenance-card-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.maintenance-card-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.maintenance-empty-state {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  border-radius: 14px;
+}
+
+.maintenance-status-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.maintenance-status-badge.ok {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.maintenance-status-badge.warning {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.maintenance-status-badge.danger {
+  color: #b42318;
+  background: #fee2e2;
+}
+
+.maintenance-inactive-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  margin-left: 0.4rem;
+}
+
+/* ── Detail page ──────────────────────────────────────────────────────── */
+
+.maintenance-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+}
+
+.maintenance-detail-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.maintenance-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.maintenance-detail-grid span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.maintenance-instructions {
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
+.maintenance-meter-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.maintenance-schedule-row {
+  border-top: 1px solid var(--border);
+  padding-top: 0.7rem;
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.maintenance-schedule-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.maintenance-history-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.maintenance-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.5rem 0.65rem;
+}
+
+.maintenance-history-note {
+  width: 100%;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Buttons, forms, sheets ───────────────────────────────────────────── */
+
+.maintenance-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.maintenance-button-row button {
+  flex: 1 1 auto;
+  min-height: 44px;
+}
+
+.maintenance-page button,
+.maintenance-sheet button {
+  border: 1px solid var(--brand);
+  border-radius: 10px;
+  background: var(--brand);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.6rem 0.9rem;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.maintenance-page button:disabled,
+.maintenance-sheet button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.maintenance-page .btn-secondary,
+.maintenance-sheet .btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.maintenance-page .maintenance-danger-button,
+.maintenance-sheet .maintenance-danger-button {
+  background: #fff;
+  color: #b42318;
+  border-color: #b42318;
+}
+
+.maintenance-link-button {
+  border: none !important;
+  background: none !important;
+  color: var(--brand) !important;
+  font-weight: 700;
+  padding: 0.4rem 0 !important;
+  min-height: auto !important;
+  text-align: left;
+  width: fit-content;
+}
+
+.maintenance-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.maintenance-form label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.maintenance-form input,
+.maintenance-form select,
+.maintenance-form textarea {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.6rem 0.7rem;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--text);
+  min-height: 44px;
+}
+
+.maintenance-form textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.maintenance-checkbox-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.maintenance-checkbox-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-height: auto;
+  flex-shrink: 0;
+}
+
+.maintenance-checklist {
+  display: grid;
+  gap: 0.5rem;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+}
+
+.maintenance-confirm-block {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.maintenance-form-error-block {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.maintenance-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.maintenance-segmented button {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.maintenance-segmented button.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+
+.maintenance-readonly-note {
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* ── Sheets (bottom-docked on phone widths, matching GrowLink modals) ──── */
+
+.maintenance-sheet {
+  width: min(560px, 100%);
+  max-height: min(88vh, 100%);
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: 18px 18px 0 0;
+  box-shadow: var(--shadow);
+  align-self: end;
+  justify-self: center;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+.maintenance-confirm-sheet {
+  max-height: min(70vh, 100%);
+}
+
+.maintenance-sheet-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0.9rem 1rem;
+}
+
+.maintenance-sheet-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.maintenance-sheet-close {
+  border: none !important;
+  background: var(--surface-soft) !important;
+  color: var(--text) !important;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 0 !important;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.maintenance-sheet-body {
+  padding: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* ── QR scanner ───────────────────────────────────────────────────────── */
+
+.maintenance-qr-scan-area {
+  display: grid;
+  gap: 0.75rem;
+  text-align: center;
+}
+
+.maintenance-qr-video {
+  width: 100%;
+  border-radius: 14px;
+  background: #000;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+
+.maintenance-qr-hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.maintenance-qr-results {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.maintenance-qr-result-row {
+  display: flex;
+  justify-content: space-between;
+  background: var(--surface-soft);
+  color: var(--text);
+  border-color: var(--border);
+  text-align: left;
+}
+
+.maintenance-qr-code-body {
+  text-align: center;
+  align-items: center;
+  justify-items: center;
+}
+
+.maintenance-qr-code-name {
+  font-weight: 700;
+  margin: 0;
+}
+
+.maintenance-qr-code-asset {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.maintenance-qr-code-canvas {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.6rem;
+  background: #fff;
+}
+
+/* ── Inventory / restock / stock count line rows ─────────────────────── */
+
+.maintenance-restock-line-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.maintenance-restock-line-row {
+  display: grid;
+  grid-template-columns: 1fr 70px auto;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+}
+
+.maintenance-restock-line-row div {
+  display: grid;
+  min-width: 0;
+}
+
+.maintenance-restock-line-row strong {
+  font-size: 0.85rem;
+}
+
+.maintenance-restock-line-row span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.maintenance-restock-line-row input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem;
+  font: inherit;
+  min-height: 40px;
+  width: 100%;
+}
+
+.maintenance-restock-line-detail {
+  grid-template-columns: 1fr auto auto;
+}
+
+.maintenance-stock-count-row {
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.maintenance-stock-count-row input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  font: inherit;
+  min-height: 44px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.maintenance-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.maintenance-review-table th,
+.maintenance-review-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.4rem 0.3rem;
+  text-align: left;
+}
+
+.maintenance-review-row-conflict {
+  background: #fee2e2;
+}
+
+/* ── Setup accordion ──────────────────────────────────────────────────── */
+
+.maintenance-setup-accordion {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.maintenance-accordion-header {
+  width: 100%;
+  text-align: left;
+  background: var(--surface-soft) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+  font-weight: 700;
+}
+
+.maintenance-setup-section {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.6rem 0.2rem 1rem;
+}
+
+.maintenance-setup-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.maintenance-setup-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  flex-wrap: wrap;
+}
+
+.maintenance-setup-row > div:first-child {
+  min-width: 0;
+  flex: 1 1 160px;
+}
+
+.maintenance-setup-row strong {
+  font-size: 0.88rem;
+}
+
+.maintenance-setup-row p {
+  margin: 0.15rem 0 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.maintenance-setup-row-inactive {
+  opacity: 0.65;
+}
+
+.maintenance-inline-form {
+  background: var(--surface-soft);
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+/* ── Narrow phone widths (320–430px): tighten spacing, single-column filters ── */
+
+@media (max-width: 380px) {
+  .maintenance-tab-button {
+    font-size: 0.74rem;
+    padding: 0.5rem 0.2rem;
+  }
+
+  .maintenance-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .maintenance-restock-line-row {
+    grid-template-columns: 1fr;
+  }
+
+  .maintenance-restock-line-row input {
+    width: 100%;
+  }
 }

@@ -58,6 +58,11 @@ export default defineConfig({
       workbox: {
         // Precache only static build artifacts — no org/user data lives here
         globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
+        // Default cap is 2 MiB; the main chunk has grown past that as the
+        // app has grown (independent of any one feature), so precaching
+        // would silently drop it without this. Raised with headroom rather
+        // than tuned to the exact current size.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         // Serve index.html as the SPA shell for desktop navigation fallback.
         // The denylist ensures /mobile/* is never served index.html by the SW;
         // those requests fall through to the network so the server returns the
