@@ -7967,12 +7967,30 @@ textarea.cleaning-checklist-response-input {
   gap: 0.5rem;
 }
 
-.maintenance-equipment-card {
+/* Clean white/light card with dark text — not the default brand-green
+   button styling. Equipment/inventory/restock/stock-count cards are all
+   `<button class="maintenance-card maintenance-equipment-card">`, so
+   without the `.maintenance-page` prefix here the later, equally-general
+   `.maintenance-page button` rule (higher specificity: one class + one
+   type selector beats one class alone) would win and force a dark green
+   background with white text — exactly the readability bug this fixes.
+   Green is used only as an accent via the status/condition badges below,
+   never as the card's own background. */
+.maintenance-page .maintenance-equipment-card {
   width: 100%;
   text-align: left;
   font: inherit;
-  color: inherit;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem;
   cursor: pointer;
+}
+
+.maintenance-page .maintenance-equipment-card:active {
+  background: var(--surface-soft);
 }
 
 .maintenance-card-top-row {
@@ -8022,6 +8040,11 @@ textarea.cleaning-checklist-response-input {
 .maintenance-status-badge.warning {
   color: #92400e;
   background: #fef3c7;
+}
+
+.maintenance-status-badge.neutral {
+  color: var(--text-muted);
+  background: var(--surface-soft);
 }
 
 .maintenance-status-badge.danger {
@@ -8117,6 +8140,13 @@ textarea.cleaning-checklist-response-input {
   width: 100%;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.maintenance-history-primary {
+  width: 100%;
+  font-weight: 700;
+  color: var(--text);
+  font-style: normal;
 }
 
 /* ── Buttons, forms, sheets ───────────────────────────────────────────── */

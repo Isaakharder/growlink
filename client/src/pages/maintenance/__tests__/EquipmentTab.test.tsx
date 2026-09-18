@@ -44,6 +44,33 @@ describe("EquipmentTab", () => {
     expect(screen.getByText("OK")).toBeInTheDocument();
   });
 
+  it("each card shows the complete required set of equipment details", async () => {
+    listEquipment.mockResolvedValue(EQUIPMENT_FIXTURE);
+    listSetupResource.mockResolvedValue([]);
+    renderTab();
+    await screen.findByText("Boom Sprayer");
+
+    const card = screen.getByText("Boom Sprayer").closest("button");
+    expect(card).not.toBeNull();
+    const within = card!;
+
+    expect(within.textContent).toContain("Boom Sprayer"); // name
+    expect(within.textContent).toContain("SPRAY-001"); // asset code
+    expect(within.textContent).toContain("Sprayers"); // category
+    expect(within.textContent).toContain("Bay A"); // location
+    expect(within.textContent).toContain("Active"); // status
+    expect(within.textContent).toContain("120 Hours"); // latest meter reading
+    expect(within.textContent).toContain("Overdue"); // maintenance condition badge
+  });
+
+  it("shows 'No reading yet' instead of a blank value when equipment has no meter reading", async () => {
+    listEquipment.mockResolvedValue(EQUIPMENT_FIXTURE);
+    listSetupResource.mockResolvedValue([]);
+    renderTab();
+
+    expect(await screen.findByText("No reading yet")).toBeInTheDocument();
+  });
+
   it("shows an empty state distinct from a load error when there is no equipment", async () => {
     listEquipment.mockResolvedValue([]);
     listSetupResource.mockResolvedValue([]);

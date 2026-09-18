@@ -53,6 +53,14 @@ export function equipmentStatusLabel(status: EquipmentStatus): string {
   return { active: "Active", out_of_service: "Out of Service", retired: "Retired" }[status];
 }
 
+// Active is a neutral/positive "ok" badge (not alarming), out_of_service is
+// a warning (equipment exists and needs attention, but isn't necessarily
+// overdue on maintenance), retired uses the same neutral "ok" styling as
+// active since it's an intentional end-state, not a problem.
+export function equipmentStatusClassSuffix(status: EquipmentStatus): string {
+  return { active: "ok", out_of_service: "warning", retired: "neutral" }[status];
+}
+
 export function recurrenceLabel(type: RecurrenceType, interval: number): string {
   if (type === "one_time") return "One-time";
   const unit = { daily: "day", weekly: "week", monthly: "month", yearly: "year" }[type];

@@ -7,12 +7,12 @@
 
 import { apiFetch } from "../../lib/api";
 import {
-  EquipmentDetail, EquipmentPayload, EquipmentRow, EquipmentStatus, DueSummary,
+  EquipmentDetail, EquipmentPayload, EquipmentRow, EquipmentStatus, DueSummary, EquipmentHistoryEntry,
   InventoryItemPayload, InventoryItemRow, InventoryTransactionResult, InventoryTransactionRow,
   DirectInventoryTransactionType, MaintenanceBadges, MeterReadingRow, RestockRequestDetail,
   RestockRequestRow, RestockReceiveResult, ScheduleCompletion, ScheduleDetail, SchedulePayload,
   ScheduleRow, SetupRecord, StockCountConflict, StockCountLineRow, StockCountSessionDetail,
-  StockCountSessionRow
+  StockCountSessionRow, WorkLogRow
 } from "./types";
 
 export class MaintenanceApiError extends Error {
@@ -129,6 +129,19 @@ export function recordMeterReading(equipmentId: string, payload: { value: number
 
 export function listMeterReadings(equipmentId: string, limit = 50, offset = 0) {
   return request<MeterReadingRow[]>(`/api/maintenance/equipment/${equipmentId}/meter-readings${qs({ limit: String(limit), offset: String(offset) })}`);
+}
+
+// ── Work logs ────────────────────────────────────────────────────────────
+
+export function logEquipmentWork(
+  equipmentId: string,
+  payload: { request_id: string; work_performed: string; meter_reading_value: number | null; notes: string | null; performed_at: string | null }
+) {
+  return postJson<WorkLogRow>(`/api/maintenance/equipment/${equipmentId}/work-logs`, payload);
+}
+
+export function getEquipmentHistory(equipmentId: string, limit = 100) {
+  return request<EquipmentHistoryEntry[]>(`/api/maintenance/equipment/${equipmentId}/history${qs({ limit: String(limit) })}`);
 }
 
 // ── Schedules ────────────────────────────────────────────────────────────

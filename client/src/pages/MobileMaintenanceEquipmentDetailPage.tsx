@@ -1,18 +1,54 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getEquipment, getScheduleHistory, listMeterReadings } from "./maintenance/api";
-import { MeterReadingSheet } from "./maintenance/MeterReadingSheet";
+import { getEquipment, getEquipmentHistory } from "./maintenance/api";
 import { QrCodeSheet } from "./maintenance/QrCodeSheet";
 import { ScheduleCompleteSheet } from "./maintenance/ScheduleCompleteSheet";
+import { WorkLogSheet } from "./maintenance/WorkLogSheet";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   dueStatusClassSuffix, dueStatusLabel, equipmentMeterUnit, equipmentStatusLabel, formatDate, formatDateTime, recurrenceLabel
 } from "./maintenance/formatters";
-import { EquipmentDetail, MeterReadingRow, ScheduleCompletion } from "./maintenance/types";
+import { EquipmentDetail, EquipmentHistoryEntry } from "./maintenance/types";
 
 const MAINTENANCE_ACT_PERMISSIONS = ["mobile:maintenance", "maintenance:edit"];
 
 type LoadState = { status: "loading" } | { status: "loaded"; equipment: EquipmentDetail } | { status: "error"; message: string };
+
+function HistoryEntryRow({ entry }: { entry: EquipmentHistoryEntry }) {
+  if (entry.type === "work_log") {
+    return (
+      <div className="maintenance-history-row">
+        <span className="maintenance-history-primary">{entry.work_performed}</span>
+        <span>{formatDateTime(entry.at)}</span>
+        <span>{entry.performed_by_name_snapshot}</span>
+        {entry.meter_reading_value !== null ? <span>Reading: {entry.meter_reading_value} {entry.meter_reading_unit_snapshot}</span> : null}
+        {entry.notes ? <span className="maintenance-history-note">{entry.notes}</span> : null}
+      </div>
+    );
+  }
+
+  if (entry.type === "meter_reading") {
+    return (
+      <div className="maintenance-history-row">
+        <span className="maintenance-history-primary">
+          Meter reading: {entry.value} {entry.unit_snapshot}{entry.is_reset ? " (reset)" : ""}
+        </span>
+        <span>{formatDateTime(entry.at)}</span>
+        <span>{entry.recorded_by_name_snapshot}</span>
+        {entry.note ? <span className="maintenance-history-note">{entry.note}</span> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="maintenance-history-row">
+      <span className="maintenance-history-primary">Scheduled maintenance completed: {entry.schedule_name_snapshot}</span>
+      <span>{formatDateTime(entry.at)}</span>
+      <span>{entry.completed_by_name_snapshot}</span>
+      {entry.notes ? <span className="maintenance-history-note">{entry.notes}</span> : null}
+    </div>
+  );
+}
 
 export function MobileMaintenanceEquipmentDetailPage() {
   const { equipmentId } = useParams<{ equipmentId: string }>();
@@ -21,17 +57,13 @@ export function MobileMaintenanceEquipmentDetailPage() {
   const canAct = canAny(MAINTENANCE_ACT_PERMISSIONS);
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [meterSheetOpen, setMeterSheetOpen] = useState(false);
+  const [workLogSheetOpen, setWorkLogSheetOpen] = useState(false);
   const [qrSheetOpen, setQrSheetOpen] = useState(false);
   const [completingScheduleId, setCompletingScheduleId] = useState<string | null>(null);
 
-  const [meterHistoryOpen, setMeterHistoryOpen] = useState(false);
-  const [meterHistory, setMeterHistory] = useState<MeterReadingRow[] | null>(null);
-  const [meterHistoryError, setMeterHistoryError] = useState<string | null>(null);
-
-  const [scheduleHistoryOpenId, setScheduleHistoryOpenId] = useState<string | null>(null);
-  const [scheduleHistory, setScheduleHistory] = useState<ScheduleCompletion[] | null>(null);
-  const [scheduleHistoryError, setScheduleHistoryError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<EquipmentHistoryEntry[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   async function load() {
     if (!equipmentId) return;
@@ -49,31 +81,21 @@ export function MobileMaintenanceEquipmentDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equipmentId]);
 
-  async function toggleMeterHistory() {
-    const next = !meterHistoryOpen;
-    setMeterHistoryOpen(next);
-    if (next && meterHistory === null && equipmentId) {
-      setMeterHistoryError(null);
-      try {
-        setMeterHistory(await listMeterReadings(equipmentId));
-      } catch (err) {
-        setMeterHistoryError(err instanceof Error ? err.message : "Failed to load meter history.");
-      }
+  async function loadHistory() {
+    if (!equipmentId) return;
+    setHistoryError(null);
+    try {
+      setHistory(await getEquipmentHistory(equipmentId));
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : "Failed to load history.");
     }
   }
 
-  async function toggleScheduleHistory(scheduleId: string) {
-    if (scheduleHistoryOpenId === scheduleId) {
-      setScheduleHistoryOpenId(null);
-      return;
-    }
-    setScheduleHistoryOpenId(scheduleId);
-    setScheduleHistory(null);
-    setScheduleHistoryError(null);
-    try {
-      setScheduleHistory(await getScheduleHistory(scheduleId));
-    } catch (err) {
-      setScheduleHistoryError(err instanceof Error ? err.message : "Failed to load history.");
+  async function toggleHistory() {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (next && history === null) {
+      await loadHistory();
     }
   }
 
@@ -139,28 +161,21 @@ export function MobileMaintenanceEquipmentDetailPage() {
 
         <div className="maintenance-button-row">
           {canAct ? (
-            <button type="button" onClick={() => setMeterSheetOpen(true)}>
-              Record Reading
+            <button type="button" onClick={() => setWorkLogSheetOpen(true)}>
+              Log / Work
             </button>
           ) : null}
-          <button type="button" className="btn-secondary" onClick={() => void toggleMeterHistory()}>
-            {meterHistoryOpen ? "Hide History" : "View History"}
+          <button type="button" className="btn-secondary" onClick={() => void toggleHistory()}>
+            {historyOpen ? "Hide History" : "View History"}
           </button>
         </div>
 
-        {meterHistoryOpen ? (
+        {historyOpen ? (
           <div className="maintenance-history-list">
-            {meterHistoryError ? <p className="form-error">{meterHistoryError}</p> : null}
-            {meterHistory === null && !meterHistoryError ? <p>Loading…</p> : null}
-            {meterHistory && meterHistory.length === 0 ? <p>No readings recorded yet.</p> : null}
-            {meterHistory?.map((reading) => (
-              <div key={reading.id} className="maintenance-history-row">
-                <span>{reading.value} {reading.unit_snapshot}{reading.is_reset ? " (reset)" : ""}</span>
-                <span>{formatDateTime(reading.recorded_at)}</span>
-                <span>{reading.recorded_by_name_snapshot}</span>
-                {reading.note ? <span className="maintenance-history-note">{reading.note}</span> : null}
-              </div>
-            ))}
+            {historyError ? <p className="form-error">{historyError}</p> : null}
+            {history === null && !historyError ? <p>Loading…</p> : null}
+            {history && history.length === 0 ? <p>No history recorded yet.</p> : null}
+            {history?.map((entry) => <HistoryEntryRow key={`${entry.type}-${entry.id}`} entry={entry} />)}
           </div>
         ) : null}
       </div>
@@ -182,42 +197,25 @@ export function MobileMaintenanceEquipmentDetailPage() {
             <p>Next due: {formatDate(schedule.next_due_date)}</p>
             {schedule.last_completed_at ? <p>Last completed {formatDateTime(schedule.last_completed_at)}</p> : null}
 
-            <div className="maintenance-button-row">
-              {canAct && schedule.is_active ? (
+            {canAct && schedule.is_active ? (
+              <div className="maintenance-button-row">
                 <button type="button" onClick={() => setCompletingScheduleId(schedule.id)}>
                   Mark Complete
                 </button>
-              ) : null}
-              <button type="button" className="btn-secondary" onClick={() => void toggleScheduleHistory(schedule.id)}>
-                {scheduleHistoryOpenId === schedule.id ? "Hide History" : "View History"}
-              </button>
-            </div>
-
-            {scheduleHistoryOpenId === schedule.id ? (
-              <div className="maintenance-history-list">
-                {scheduleHistoryError ? <p className="form-error">{scheduleHistoryError}</p> : null}
-                {scheduleHistory === null && !scheduleHistoryError ? <p>Loading…</p> : null}
-                {scheduleHistory && scheduleHistory.length === 0 ? <p>No completions recorded yet.</p> : null}
-                {scheduleHistory?.map((completion) => (
-                  <div key={completion.id} className="maintenance-history-row">
-                    <span>Completed {formatDateTime(completion.completed_at)}</span>
-                    <span>{completion.completed_by_name_snapshot}</span>
-                    {completion.notes ? <span className="maintenance-history-note">{completion.notes}</span> : null}
-                  </div>
-                ))}
               </div>
             ) : null}
           </div>
         ))}
       </div>
 
-      {meterSheetOpen ? (
-        <MeterReadingSheet
+      {workLogSheetOpen ? (
+        <WorkLogSheet
           equipment={equipment}
-          onClose={() => setMeterSheetOpen(false)}
-          onRecorded={() => {
-            setMeterSheetOpen(false);
-            setMeterHistory(null);
+          onClose={() => setWorkLogSheetOpen(false)}
+          onSaved={() => {
+            setWorkLogSheetOpen(false);
+            setHistory(null);
+            setHistoryOpen(false);
             void load();
           }}
         />
@@ -231,7 +229,8 @@ export function MobileMaintenanceEquipmentDetailPage() {
           onClose={() => setCompletingScheduleId(null)}
           onCompleted={() => {
             setCompletingScheduleId(null);
-            setScheduleHistory(null);
+            setHistory(null);
+            setHistoryOpen(false);
             void load();
           }}
         />

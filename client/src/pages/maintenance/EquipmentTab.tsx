@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { listEquipment, listSetupResource } from "./api";
 import { QrScannerSheet } from "./QrScannerSheet";
 import { EquipmentRow, SetupRecord } from "./types";
-import { dueStatusClassSuffix, dueStatusLabel, equipmentMeterUnit, equipmentStatusLabel } from "./formatters";
+import { dueStatusClassSuffix, dueStatusLabel, equipmentMeterUnit, equipmentStatusClassSuffix, equipmentStatusLabel } from "./formatters";
 
 type LoadState =
   | { status: "loading" }
@@ -142,7 +142,9 @@ export function EquipmentTab() {
                 {item.location ? <span>{item.location.name}</span> : null}
               </div>
               <div className="maintenance-card-meta-row">
-                <span>{equipmentStatusLabel(item.status)}</span>
+                <span className={`maintenance-status-badge ${equipmentStatusClassSuffix(item.status)}`}>
+                  {equipmentStatusLabel(item.status)}
+                </span>
                 <span>
                   {item.current_meter_reading !== null
                     ? `${item.current_meter_reading} ${equipmentMeterUnit(item)}`

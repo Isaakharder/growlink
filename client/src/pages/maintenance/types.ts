@@ -102,7 +102,36 @@ export type MeterReadingRow = {
   is_reset: boolean;
   reset_reason: string | null;
   created_at: string;
+  related_work_log_id: string | null;
 };
+
+// ── Work logs ────────────────────────────────────────────────────────────
+
+export type WorkLogRow = {
+  id: string;
+  organization_id: string;
+  equipment_id: string | null;
+  equipment_name_snapshot: string;
+  asset_code_snapshot: string;
+  work_performed: string;
+  meter_reading_value: number | null;
+  meter_reading_unit_snapshot: string | null;
+  notes: string | null;
+  performed_at: string;
+  performed_by: string | null;
+  performed_by_name_snapshot: string;
+  request_id: string;
+  created_at: string;
+};
+
+// Discriminated union returned by GET /maintenance/equipment/:id/history —
+// each entry carries its own full row fields alongside a `type` tag and a
+// normalized `at` timestamp the client can sort/display uniformly without
+// needing to know which underlying table it came from.
+export type EquipmentHistoryEntry =
+  | (WorkLogRow & { type: "work_log"; at: string })
+  | (MeterReadingRow & { type: "meter_reading"; at: string })
+  | (ScheduleCompletion & { type: "schedule_completion"; at: string });
 
 export type DueSummarySchedule = {
   id: string;

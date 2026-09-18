@@ -10,6 +10,7 @@ import { restockRouter } from "./restock";
 import { stockCountsRouter } from "./stockCounts";
 import { reportsRouter } from "./reports";
 import { badgesRouter } from "./badges";
+import { workLogsRouter } from "./workLogs";
 
 const maintenanceRouter = Router();
 
@@ -17,6 +18,7 @@ maintenanceRouter.use(setupRouter);
 maintenanceRouter.use(equipmentRouter);
 maintenanceRouter.use(qrRouter);
 maintenanceRouter.use(metersRouter);
+maintenanceRouter.use(workLogsRouter);
 maintenanceRouter.use(schedulesRouter);
 maintenanceRouter.use(inventoryRouter);
 maintenanceRouter.use(transactionsRouter);
