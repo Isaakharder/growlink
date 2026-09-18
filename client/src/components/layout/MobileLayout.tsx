@@ -5,6 +5,7 @@ import { Unauthorized } from "../auth/RequirePermission";
 import { OfflineBanner } from "../mobile/OfflineBanner";
 import { SyncStatusBar } from "../mobile/SyncStatusBar";
 import { useOfflineQueue } from "../../hooks/useOfflineQueue";
+import { MAINTENANCE_ACCESS_PERMISSIONS } from "../../pages/maintenance/access";
 
 const MOBILE_PERMISSIONS = [
   "mobile:access",
@@ -13,19 +14,18 @@ const MOBILE_PERMISSIONS = [
   "mobile:pest",
   "mobile:quality",
   "mobile:food_safety",
-  "mobile:maintenance",
-  // Desktop irrigation/maintenance permissions also grant entry to the
-  // mobile shell — a user with only irrigation:view/edit or
-  // maintenance:view/edit (no mobile:* keys at all) must still be able to
-  // reach /mobile/irrigation-log or /mobile/maintenance if they navigate
-  // there directly; the per-route RequirePermission guard handles the
-  // specifics. Maintenance has no desktop page at all in v1, so its
-  // view/edit keys only ever grant mobile entry.
+  // Desktop irrigation permissions also grant entry to the mobile shell —
+  // a user with only irrigation:view/edit (no mobile:* keys at all) must
+  // still be able to reach /mobile/irrigation-log if they navigate there
+  // directly; the per-route RequirePermission guard handles the specifics.
   "irrigation:view",
   "irrigation:edit",
-  "maintenance:view",
-  "maintenance:edit"
-] as const;
+  // Maintenance has no desktop page at all in v1, so its keys only ever
+  // grant mobile entry — sourced from the same constant the Maintenance
+  // route guards and Mobile Home card use, so this list can't silently
+  // drift out of sync with who can actually reach /mobile/maintenance.
+  ...MAINTENANCE_ACCESS_PERMISSIONS
+];
 
 function MobileLayoutInner() {
   const { loading, canAny } = usePermissions();
@@ -65,7 +65,7 @@ function MobileLayoutInner() {
         />
         {/* Show nothing while loading (avoids flash of restricted content).
             Deny access unless the user has mobile:access or any mobile feature permission. */}
-        {!loading && !canAny([...MOBILE_PERMISSIONS]) ? <Unauthorized /> : loading ? null : <Outlet />}
+        {!loading && !canAny(MOBILE_PERMISSIONS) ? <Unauthorized /> : loading ? null : <Outlet />}
       </main>
 
       {nav}

@@ -1,3 +1,5 @@
+import { MAINTENANCE_ACCESS_PERMISSIONS } from "../pages/maintenance/access";
+
 // Desktop permission keys — any one of these means the user has web/dashboard access.
 const DESKTOP_PERMISSIONS = [
   "yield:view",
@@ -19,10 +21,12 @@ const DESKTOP_PERMISSIONS = [
 // Mobile permission keys — any one of these means the user has mobile access.
 // mobile:access is the master gate enforced by MobileLayout.
 //
-// maintenance:view/maintenance:edit are included here (not in
-// DESKTOP_PERMISSIONS) because there is no desktop Maintenance page yet —
-// the module is mobile-only in v1, so holding only those keys must land a
-// member on /mobile, not "/".
+// The Maintenance keys come from MAINTENANCE_ACCESS_PERMISSIONS (not
+// written out here) because there is no desktop Maintenance page yet — the
+// module is mobile-only in v1, so holding only those keys must land a
+// member on /mobile, not "/" — and sourcing them from the same constant
+// the route guards and Mobile Home card use means this list can't drift
+// out of sync with who can actually reach /mobile/maintenance.
 const MOBILE_PERMISSIONS = [
   "mobile:access",
   "mobile:daily_yield",
@@ -30,9 +34,7 @@ const MOBILE_PERMISSIONS = [
   "mobile:pest",
   "mobile:quality",
   "mobile:food_safety",
-  "mobile:maintenance",
-  "maintenance:view",
-  "maintenance:edit",
+  ...MAINTENANCE_ACCESS_PERMISSIONS,
 ];
 
 /**

@@ -44,6 +44,7 @@ import { MobileFoodSafetyPage } from "../pages/MobileFoodSafetyPage";
 import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationPage";
 import { MobilePestCalibrationPage } from "../pages/MobilePestCalibrationPage";
 import { MobilePestCalibrationDeviceCompletePage } from "../pages/MobilePestCalibrationDeviceCompletePage";
+import { MAINTENANCE_ACCESS_PERMISSIONS } from "../pages/maintenance/access";
 
 // Maintenance (Equipment/Inventory/Reports/Setup tabs and their sheets) is
 // the single largest module in the app and is only ever reached by users
@@ -375,7 +376,7 @@ export const appRouter = createBrowserRouter([
           {
             path: "maintenance",
             element: (
-              <RequirePermission permission={["mobile:maintenance", "maintenance:view", "maintenance:edit"]}>
+              <RequirePermission permission={MAINTENANCE_ACCESS_PERMISSIONS}>
                 <LazyRoute>
                   <MobileMaintenancePage />
                 </LazyRoute>
@@ -385,7 +386,7 @@ export const appRouter = createBrowserRouter([
           {
             path: "maintenance/equipment/:equipmentId",
             element: (
-              <RequirePermission permission={["mobile:maintenance", "maintenance:view", "maintenance:edit"]}>
+              <RequirePermission permission={MAINTENANCE_ACCESS_PERMISSIONS}>
                 <LazyRoute>
                   <MobileMaintenanceEquipmentDetailPage />
                 </LazyRoute>
