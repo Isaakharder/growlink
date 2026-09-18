@@ -1,4 +1,5 @@
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "../pages/maintenance/access";
+import { MOBILE_HOME } from "../config/platform";
 
 // Desktop permission keys — any one of these means the user has web/dashboard access.
 const DESKTOP_PERMISSIONS = [
@@ -40,16 +41,28 @@ const MOBILE_PERMISSIONS = [
 /**
  * Returns the correct landing route for a user based on their role and permissions.
  *
- * Rules:
+ * Rules (web build):
  *   owner | admin           → "/"         (full access, no permission check needed)
  *   member with any desktop → "/"         (desktop wins even if mobile is also present)
  *   member with only mobile → "/mobile"
  *   member with nothing     → "/no-access"
+ *
+ * Under the native iOS build there is no separate desktop dashboard route —
+ * the native router mounts the mobile app at "/" (MOBILE_HOME) instead of
+ * "/mobile" (see config/platform.ts). So natively, "/" and "/mobile" both
+ * collapse onto MOBILE_HOME; "/no-access" is unaffected, since that route
+ * exists unchanged in both routers.
  */
 export function getDefaultRoute(
   role: string | null,
   permissions: Record<string, boolean>
 ): string {
+  const route = computeWebRoute(role, permissions);
+  if (route === "/no-access") return route;
+  return MOBILE_HOME === "/" ? MOBILE_HOME : route;
+}
+
+function computeWebRoute(role: string | null, permissions: Record<string, boolean>): string {
   // Owners and admins bypass all permission checks; always send to dashboard.
   if (role === "owner" || role === "admin") return "/";
 

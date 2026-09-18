@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { usePermissions } from "../hooks/usePermissions";
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "./maintenance/access";
+import { mobilePath } from "../config/platform";
 
 const IRRIGATION_PERMISSIONS = ["mobile:irrigation", "irrigation:view", "irrigation:edit"];
 
@@ -18,34 +19,34 @@ export function MobileHomePage() {
       <p>Choose a task to start quick mobile logging.</p>
 
       <div className="mobile-card-grid">
-        <Link className="mobile-card-button" to="/mobile/daily-yield">
+        <Link className="mobile-card-button" to={mobilePath("/daily-yield")}>
           Daily Yield
         </Link>
 
-        <Link className="mobile-card-button" to="/mobile/quality-check">
+        <Link className="mobile-card-button" to={mobilePath("/quality-check")}>
           Quality Check
         </Link>
 
         {canUseIrrigation ? (
-          <Link className="mobile-card-button" to="/mobile/irrigation-log">
+          <Link className="mobile-card-button" to={mobilePath("/irrigation-log")}>
             Irrigation Log
           </Link>
         ) : null}
 
-        <Link className="mobile-card-button" to="/mobile/pest-log">
+        <Link className="mobile-card-button" to={mobilePath("/pest-log")}>
           Pest Log
         </Link>
 
-        <Link className="mobile-card-button" to="/mobile/food-safety">
+        <Link className="mobile-card-button" to={mobilePath("/food-safety")}>
           Food Safety
         </Link>
 
-        <Link className="mobile-card-button" to="/mobile/calibration">
+        <Link className="mobile-card-button" to={mobilePath("/calibration")}>
           Calibration
         </Link>
 
         {canUseMaintenance ? (
-          <Link className="mobile-card-button" to="/mobile/maintenance">
+          <Link className="mobile-card-button" to={mobilePath("/maintenance")}>
             Maintenance
           </Link>
         ) : null}

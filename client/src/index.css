@@ -3394,6 +3394,13 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Native iOS only — see native/keyboard.ts. The fixed bottom nav would
+   otherwise sit on top of the iOS keyboard's accessory area, hiding
+   itself and part of whatever input the keyboard is now covering. */
+body.keyboard-open .mobile-bottom-nav {
+  display: none;
+}
+
 .mobile-bottom-link {
   border: 1px solid var(--border);
   border-radius: 10px;

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!-- App-level declaration only: what GrowLink Mobile's own code (not a
+	     plugin) directly does with a required-reason API. Every bundled
+	     Capacitor/Google/ML Kit pod that itself touches one of these APIs
+	     ships its own PrivacyInfo.xcprivacy already (see ios/App/Pods/*),
+	     which Apple aggregates separately at submission — this file must
+	     not re-declare those. @capacitor/preferences (session storage —
+	     see src/lib/nativeAuthStorage.ts) is UserDefaults-backed and has
+	     no manifest of its own, so that usage is declared here instead. -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- CA92.1: access info from the app's own UserDefaults suite (or an
+				     App Group it's a member of), never another app's. -->
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+	<!-- No additional data types are collected by GrowLink Mobile's own
+	     native (Swift/Capacitor) code — all account and organization data
+	     (email, org membership, work logs, etc.) is fetched over HTTPS
+	     from the existing Supabase/Express backend at the JS layer, not
+	     via a native API this manifest would need to declare. -->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+</dict>
+</plist>

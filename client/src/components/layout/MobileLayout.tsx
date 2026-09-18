@@ -6,6 +6,7 @@ import { OfflineBanner } from "../mobile/OfflineBanner";
 import { SyncStatusBar } from "../mobile/SyncStatusBar";
 import { useOfflineQueue } from "../../hooks/useOfflineQueue";
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "../../pages/maintenance/access";
+import { MOBILE_HOME } from "../../config/platform";
 
 const MOBILE_PERMISSIONS = [
   "mobile:access",
@@ -37,7 +38,7 @@ function MobileLayoutInner() {
       aria-label="Mobile navigation"
     >
       <NavLink
-        to="/mobile"
+        to={MOBILE_HOME}
         end
         className={({ isActive }) =>
           `mobile-bottom-link ${isActive ? "active" : ""}`

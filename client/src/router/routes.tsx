@@ -59,6 +59,105 @@ const MobileMaintenanceEquipmentDetailPage = lazy(() =>
   import("../pages/MobileMaintenanceEquipmentDetailPage").then((m) => ({ default: m.MobileMaintenanceEquipmentDetailPage }))
 );
 
+// The mobile app's route children (Mobile Home + every mobile feature
+// page), shared verbatim between the web router (mounted under "/mobile",
+// alongside the desktop app in the same bundle) and the native iOS
+// router (mounted at "/" — see router/nativeRoutes.tsx and
+// main.native.tsx). All paths here are relative to whichever parent
+// mounts them, so this array itself never needs to know which build it's
+// running under; only the handful of pages that build an *absolute*
+// mobile link (via config/platform.ts's mobilePath()/MOBILE_HOME) do.
+export const mobileRouteChildren = [
+  {
+    index: true,
+    element: <MobileHomePage />
+  },
+  {
+    path: "food-safety",
+    element: (
+      <RequirePermission permission="mobile:food_safety">
+        <MobileFoodSafetyPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "food-safety/:locationId",
+    element: (
+      <RequirePermission permission="mobile:food_safety">
+        <MobileFoodSafetyLocationPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "daily-yield",
+    element: (
+      <RequirePermission permission="mobile:daily_yield">
+        <MobileDailyYieldPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "irrigation-log",
+    element: (
+      <RequirePermission permission={["mobile:irrigation", "irrigation:view", "irrigation:edit"]}>
+        <MobileIrrigationLogPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "pest-log",
+    element: (
+      <RequirePermission permission="mobile:pest">
+        <MobilePestLogPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "quality-check",
+    element: (
+      <RequirePermission permission="mobile:quality">
+        <MobileQualityCheckPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "calibration",
+    element: (
+      <RequirePermission permission="mobile:calibration">
+        <MobilePestCalibrationPage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "calibration/:deviceId",
+    element: (
+      <RequirePermission permission="mobile:calibration">
+        <MobilePestCalibrationDeviceCompletePage />
+      </RequirePermission>
+    )
+  },
+  {
+    path: "maintenance",
+    element: (
+      <RequirePermission permission={MAINTENANCE_ACCESS_PERMISSIONS}>
+        <LazyRoute>
+          <MobileMaintenancePage />
+        </LazyRoute>
+      </RequirePermission>
+    )
+  },
+  {
+    path: "maintenance/equipment/:equipmentId",
+    element: (
+      <RequirePermission permission={MAINTENANCE_ACCESS_PERMISSIONS}>
+        <LazyRoute>
+          <MobileMaintenanceEquipmentDetailPage />
+        </LazyRoute>
+      </RequirePermission>
+    )
+  }
+];
+
 export const appRouter = createBrowserRouter([
   {
     path: "/login",
@@ -304,96 +403,7 @@ export const appRouter = createBrowserRouter([
         // MobileLayout provides MembershipProvider and guards mobile:access
         // for every child route. Individual pages add finer-grained guards.
         element: <MobileLayout />,
-        children: [
-          {
-            index: true,
-            element: <MobileHomePage />
-          },
-          {
-            path: "food-safety",
-            element: (
-              <RequirePermission permission="mobile:food_safety">
-                <MobileFoodSafetyPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "food-safety/:locationId",
-            element: (
-              <RequirePermission permission="mobile:food_safety">
-                <MobileFoodSafetyLocationPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "daily-yield",
-            element: (
-              <RequirePermission permission="mobile:daily_yield">
-                <MobileDailyYieldPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "irrigation-log",
-            element: (
-              <RequirePermission permission={["mobile:irrigation", "irrigation:view", "irrigation:edit"]}>
-                <MobileIrrigationLogPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "pest-log",
-            element: (
-              <RequirePermission permission="mobile:pest">
-                <MobilePestLogPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "quality-check",
-            element: (
-              <RequirePermission permission="mobile:quality">
-                <MobileQualityCheckPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "calibration",
-            element: (
-              <RequirePermission permission="mobile:calibration">
-                <MobilePestCalibrationPage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "calibration/:deviceId",
-            element: (
-              <RequirePermission permission="mobile:calibration">
-                <MobilePestCalibrationDeviceCompletePage />
-              </RequirePermission>
-            )
-          },
-          {
-            path: "maintenance",
-            element: (
-              <RequirePermission permission={MAINTENANCE_ACCESS_PERMISSIONS}>
-                <LazyRoute>
-                  <MobileMaintenancePage />
-                </LazyRoute>
-              </RequirePermission>
-            )
-          },
-          {
-            path: "maintenance/equipment/:equipmentId",
-            element: (
-              <RequirePermission permission={MAINTENANCE_ACCESS_PERMISSIONS}>
-                <LazyRoute>
-                  <MobileMaintenanceEquipmentDetailPage />
-                </LazyRoute>
-              </RequirePermission>
-            )
-          }
-        ]
+        children: mobileRouteChildren
       }
     ]
   }

@@ -4,6 +4,7 @@ import { apiFetch, apiUrl } from "../lib/api";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { enqueue, onQueueChange } from "../services/offlineQueue";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { mobilePath } from "../config/platform";
 
 // How far back a worker may backdate a checklist completion via the
 // long-press date selector below — mirrors MAX_BACKDATE_DAYS in
@@ -604,7 +605,7 @@ export function MobileFoodSafetyLocationPage() {
   if (loading) {
     return (
       <section className="mobile-page">
-        <Link to="/mobile/food-safety" className="mobile-back-link">
+        <Link to={mobilePath("/food-safety")} className="mobile-back-link">
           ‹ Food Safety
         </Link>
         <p>Loading…</p>
@@ -615,7 +616,7 @@ export function MobileFoodSafetyLocationPage() {
   if (!location) {
     return (
       <section className="mobile-page">
-        <Link to="/mobile/food-safety" className="mobile-back-link">
+        <Link to={mobilePath("/food-safety")} className="mobile-back-link">
           ‹ Food Safety
         </Link>
         <p className="form-error">{error ?? "This location could not be found."}</p>
@@ -629,7 +630,7 @@ export function MobileFoodSafetyLocationPage() {
 
   return (
     <section className="mobile-page">
-      <Link to="/mobile/food-safety" className="mobile-back-link">
+      <Link to={mobilePath("/food-safety")} className="mobile-back-link">
         ‹ Food Safety
       </Link>
 

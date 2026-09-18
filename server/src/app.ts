@@ -49,6 +49,15 @@ const DEV_ORIGINS = [
   "http://localhost:5174",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
+  // The Capacitor iOS app (client/capacitor.config.ts) loads its bundle
+  // from this origin — not a browser page, but WKWebView still sends a
+  // real Origin header, so it's still subject to this same allowlist.
+  // Listed here (dev-only) so the iOS app can be pointed at a local dev
+  // server; the production server's origin support for it is added via
+  // the CORS_ORIGINS env var below, deliberately NOT hardcoded here, so
+  // enabling it in production is its own explicit, reviewable change
+  // rather than something that ships silently with this file.
+  "capacitor://localhost",
 ];
 
 function buildAllowedOrigins(): Set<string> {

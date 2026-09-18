@@ -4,6 +4,7 @@ import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { DeviceDetail } from "./pestCalibration/types";
 import { CalibrationForm, CalibrationFormPayload } from "./pestCalibration/CalibrationForm";
+import { mobilePath } from "../config/platform";
 
 // The organization's timezone for the calibration date control below —
 // deliberately the ORG timezone (not the device's own local timezone, as
@@ -339,7 +340,7 @@ export function MobilePestCalibrationDeviceCompletePage() {
           ) : (
             <p>This device is calibrated on demand — no next due date.</p>
           )}
-          <button type="button" className="primary-action-button" onClick={() => navigate("/mobile/calibration")}>
+          <button type="button" className="primary-action-button" onClick={() => navigate(mobilePath("/calibration"))}>
             Done
           </button>
         </div>

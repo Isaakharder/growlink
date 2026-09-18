@@ -1,10 +1,39 @@
 import { useEffect, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { ModalOverlay } from "../../components/ModalOverlay";
 import { listEquipment, lookupEquipmentByQrToken, MaintenanceApiError } from "./api";
 import { decodeQrFrame, looksLikeEquipmentQrToken, preloadQrDecoder } from "./qrCodec";
 import { EquipmentRow } from "./types";
 
 type CameraState = "requesting" | "streaming" | "denied" | "unsupported" | "error";
+
+// Native iOS: ML Kit's scan() opens its own full-screen native camera UI
+// (see the effect below) — nothing from the web getUserMedia+canvas path
+// (videoRef/canvasRef/decodeQrFrame) runs there at all, so there is no
+// in-sheet "streaming" state to show; native jumps straight from
+// "requesting" (permission) to either a result or back to "camera" mode
+// closed (user cancelled).
+async function scanNative(): Promise<string | null> {
+  const { BarcodeScanner, BarcodeFormat } = await import("@capacitor-mlkit/barcode-scanning");
+
+  const { camera } = await BarcodeScanner.checkPermissions();
+  if (camera !== "granted" && camera !== "limited") {
+    const requested = await BarcodeScanner.requestPermissions();
+    if (requested.camera !== "granted" && requested.camera !== "limited") {
+      throw new Error("denied");
+    }
+  }
+
+  const { supported } = await BarcodeScanner.isSupported();
+  if (!supported) {
+    throw new Error("unsupported");
+  }
+
+  const { barcodes } = await BarcodeScanner.scan({ formats: [BarcodeFormat.QrCode] });
+  // Cancelling the native scanner (back/close) resolves with no barcodes
+  // rather than rejecting — that's a deliberate exit, not an error.
+  return barcodes[0]?.displayValue ?? null;
+}
 
 type Props = {
   onClose: () => void;
@@ -44,6 +73,29 @@ export function QrScannerSheet({ onClose, onMatch }: Props) {
     activeRef.current = true;
     setCameraState("requesting");
     setLookupError(null);
+
+    if (Capacitor.isNativePlatform()) {
+      scanNative()
+        .then((code) => {
+          if (!activeRef.current) return;
+          if (code === null) {
+            // User cancelled the native scanner — close the sheet rather
+            // than show an error for a deliberate exit.
+            onClose();
+            return;
+          }
+          void handleScanned(code);
+        })
+        .catch((err) => {
+          if (!activeRef.current) return;
+          if (err instanceof Error && err.message === "denied") setCameraState("denied");
+          else if (err instanceof Error && err.message === "unsupported") setCameraState("unsupported");
+          else setCameraState("error");
+        });
+      return () => {
+        activeRef.current = false;
+      };
+    }
 
     async function start() {
       if (!navigator.mediaDevices?.getUserMedia) {

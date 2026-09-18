@@ -9,6 +9,7 @@ import {
   dueStatusClassSuffix, dueStatusLabel, equipmentMeterUnit, equipmentStatusLabel, formatDate, formatDateTime, recurrenceLabel
 } from "./maintenance/formatters";
 import { EquipmentDetail, EquipmentHistoryEntry } from "./maintenance/types";
+import { mobilePath } from "../config/platform";
 
 const MAINTENANCE_ACT_PERMISSIONS = ["mobile:maintenance", "maintenance:edit"];
 
@@ -113,7 +114,7 @@ export function MobileMaintenanceEquipmentDetailPage() {
         <div className="maintenance-card">
           <p className="form-error">{state.message}</p>
           <button type="button" onClick={() => void load()}>Retry</button>
-          <Link to="/mobile/maintenance" className="maintenance-link-button">Back to Maintenance</Link>
+          <Link to={mobilePath("/maintenance")} className="maintenance-link-button">Back to Maintenance</Link>
         </div>
       </section>
     );
@@ -123,7 +124,7 @@ export function MobileMaintenanceEquipmentDetailPage() {
 
   return (
     <section className="mobile-page maintenance-page maintenance-detail-page">
-      <button type="button" className="maintenance-back-link" onClick={() => navigate("/mobile/maintenance")}>
+      <button type="button" className="maintenance-back-link" onClick={() => navigate(mobilePath("/maintenance"))}>
         ← Equipment
       </button>
 

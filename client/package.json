@@ -6,11 +6,23 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:ios": "tsc -b && vite build --config vite.ios.config.ts --mode ios && mv dist-ios/native.html dist-ios/index.html",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.ts",
-    "test:caddy-routing": "bash scripts/verify-caddy-routing.sh"
+    "test:caddy-routing": "bash scripts/verify-caddy-routing.sh",
+    "cap:sync": "cap sync ios"
   },
   "dependencies": {
+    "@capacitor-mlkit/barcode-scanning": "8.2.1",
+    "@capacitor/app": "8.1.1",
+    "@capacitor/camera": "8.2.4",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/keyboard": "8.0.5",
+    "@capacitor/network": "8.0.1",
+    "@capacitor/preferences": "8.0.1",
+    "@capacitor/push-notifications": "8.1.2",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.3",
     "@supabase/supabase-js": "^2.105.4",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
@@ -22,6 +34,8 @@
     "recharts": "^3.8.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "@capacitor/ios": "8.5.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
