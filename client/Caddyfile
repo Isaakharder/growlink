@@ -1,0 +1,97 @@
+# Custom Caddyfile — overrides Railpack's generated static-site Caddyfile
+# (Railpack detects this file at the service root, which for the client
+# Railway service is this client/ directory, and renders it through its own
+# Go text/template engine before handing it to `caddy fmt` + `caddy run`,
+# exactly like its generated default — see core/providers/node/spa.go and
+# core/providers/node/Caddyfile.template in railwayapp/railpack).
+#
+# {{.DIST_DIR}} and {{if .IndexFallback}}...{{end}} are NOT typos — they are
+# Railpack's own template placeholders, resolved to /app/dist and `true`
+# respectively for this Vite build before Caddy ever parses this file. This
+# mirrors Railpack's first-party example at
+# examples/node-vite-custom-caddyfile/Caddyfile in the same repo.
+#
+# Why this file exists: index.html (desktop) and mobile.html (mobile) are
+# two separate Vite build entries (see vite.config.ts). Vite's own dev
+# server rewrites /mobile and every /mobile/* request to mobile.html via
+# mobileHtmlFallbackPlugin — but that plugin only hooks configureServer /
+# configurePreviewServer, which never run in production. Without an
+# equivalent rewrite here, Railway's Caddy-served production build fell
+# through to the default SPA fallback (index.html, the desktop shell) for
+# every /mobile/* path except the bare /mobile route, serving the wrong
+# <title>, the wrong manifest link, and dropping viewport-fit=cover (so iOS
+# safe-area insets silently resolved to zero) on any direct load or hard
+# refresh of a mobile route.
+{
+	admin off
+	persist_config off
+	auto_https off
+
+	log {
+		format json
+	}
+
+	servers {
+		trusted_proxies static private_ranges 100.0.0.0/8 # trust railway's proxy
+	}
+}
+:{$PORT:80} {
+	log {
+		format json
+	}
+
+	# Security headers
+	header {
+		# Prevent some browsers from MIME-sniffing a response away from the declared Content-Type
+		X-Content-Type-Options "nosniff"
+		# Remove Server header
+		-Server
+	}
+
+	# serve from the 'dist' folder (Vite builds into the 'dist' folder)
+	root * {{.DIST_DIR}}
+
+	# Compression with more formats
+	encode {
+		gzip
+		zstd
+	}
+
+	# Everything order-sensitive lives in one explicit route so it runs in
+	# the literal sequence written here, rather than Caddy's automatic
+	# per-directive sort order — which bit us twice while building this:
+	# both a bare `respond /health 200` AND a `route /health { respond 200 }`
+	# placed as their own top-level directives still sorted *after*
+	# try_files's rewrite, so /health silently got the SPA fallback
+	# (index.html) instead of a bare 200. Confirmed this exact ordering
+	# issue also exists in Railpack's own unmodified default Caddyfile —
+	# not something introduced here, but worth fixing since it's this
+	# cheap once the routing has to be made explicit anyway.
+	route {
+		# Health check must win before the SPA fallback below ever runs.
+		route /health {
+			respond 200
+		}
+
+		# Internally rewrite /mobile and every /mobile/* request to the
+		# mobile SPA shell. `rewrite` changes only the request URI that
+		# try_files/file_server see next — it is not a redirect, so the
+		# browser's address bar and history entry are untouched, and
+		# React Router (identical bundle in both shells) still reads the
+		# real window.location and renders the matching route either way.
+		# Real static assets never match this: nothing under dist/ is
+		# named "mobile" or "mobile/*" except mobile.html itself, and
+		# /assets/* is a disjoint path.
+		@mobile path /mobile /mobile/*
+		rewrite @mobile /mobile.html
+
+		# match against direct against HTML file matches, folder-level index.html, and optionally fallback to root index.html
+		try_files {path} {path}.html {path}/index.html{{if .IndexFallback}} /index.html{{end}}
+
+		# Handle static files
+		file_server {
+			hide .git
+			hide .env*
+		}
+	}
+}
