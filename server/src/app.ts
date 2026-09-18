@@ -42,6 +42,7 @@ import { yieldProjectionsRouter } from "./routes/yieldProjections";
 import { yieldSizesRouter } from "./routes/yieldSizes";
 import { flowMasterSizeRulesRouter } from "./routes/flowMasterSizeRules";
 import { csvMappingTemplatesRouter } from "./routes/csvMappingTemplates";
+import { maintenanceRouter } from "./routes/maintenance";
 
 const DEV_ORIGINS = [
   "http://localhost:5173",
@@ -144,6 +145,7 @@ app.use("/api", qualityBonusAdjustmentRouter);
 app.use("/api", integrationsRouter);
 app.use("/api", wasteImportsRouter);
 app.use("/api", irrigationSetupRouter);
+app.use("/api", maintenanceRouter);
 app.use("/api", varietiesRouter);
 app.use("/api", yieldEntriesRouter);
 app.use("/api", yieldProjectionsRouter);
