@@ -1,6 +1,8 @@
+import { lazy } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLayout } from "../components/layout/AppLayout";
 import { MobileLayout } from "../components/layout/MobileLayout";
+import { LazyRoute } from "../components/LazyRoute";
 import { RequireAuth } from "../components/auth/RequireAuth";
 import { RequirePermission } from "../components/auth/RequirePermission";
 import { DashboardPage } from "../pages/DashboardPage";
@@ -42,8 +44,19 @@ import { MobileFoodSafetyPage } from "../pages/MobileFoodSafetyPage";
 import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationPage";
 import { MobilePestCalibrationPage } from "../pages/MobilePestCalibrationPage";
 import { MobilePestCalibrationDeviceCompletePage } from "../pages/MobilePestCalibrationDeviceCompletePage";
-import { MobileMaintenancePage } from "../pages/MobileMaintenancePage";
-import { MobileMaintenanceEquipmentDetailPage } from "../pages/MobileMaintenanceEquipmentDetailPage";
+
+// Maintenance (Equipment/Inventory/Reports/Setup tabs and their sheets) is
+// the single largest module in the app and is only ever reached by users
+// with Maintenance access — lazy-loading it here, rather than the eager
+// static import every other page uses, is what keeps its ~400KB of code
+// out of the bundle every user downloads on first load. See LazyRoute for
+// the loading/error UI this pairs with.
+const MobileMaintenancePage = lazy(() =>
+  import("../pages/MobileMaintenancePage").then((m) => ({ default: m.MobileMaintenancePage }))
+);
+const MobileMaintenanceEquipmentDetailPage = lazy(() =>
+  import("../pages/MobileMaintenanceEquipmentDetailPage").then((m) => ({ default: m.MobileMaintenanceEquipmentDetailPage }))
+);
 
 export const appRouter = createBrowserRouter([
   {
@@ -363,7 +376,9 @@ export const appRouter = createBrowserRouter([
             path: "maintenance",
             element: (
               <RequirePermission permission={["mobile:maintenance", "maintenance:view", "maintenance:edit"]}>
-                <MobileMaintenancePage />
+                <LazyRoute>
+                  <MobileMaintenancePage />
+                </LazyRoute>
               </RequirePermission>
             )
           },
@@ -371,7 +386,9 @@ export const appRouter = createBrowserRouter([
             path: "maintenance/equipment/:equipmentId",
             element: (
               <RequirePermission permission={["mobile:maintenance", "maintenance:view", "maintenance:edit"]}>
-                <MobileMaintenanceEquipmentDetailPage />
+                <LazyRoute>
+                  <MobileMaintenanceEquipmentDetailPage />
+                </LazyRoute>
               </RequirePermission>
             )
           }

@@ -8478,3 +8478,53 @@ textarea.cleaning-checklist-response-input {
     width: 100%;
   }
 }
+
+/* ── Lazy route loading / error states (React.lazy + Suspense) ─────────── */
+
+.lazy-route-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.lazy-route-spinner {
+  display: inline-block;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 3px solid var(--border);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: lazy-route-spin 0.7s linear infinite;
+}
+
+@keyframes lazy-route-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lazy-route-error p {
+  margin: 0;
+}
+
+.lazy-route-error p:first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lazy-route-error button {
+  margin-top: 0.4rem;
+  border: 1px solid var(--brand);
+  border-radius: 10px;
+  background: var(--brand);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.55rem 1.1rem;
+  cursor: pointer;
+}
