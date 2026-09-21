@@ -108,10 +108,15 @@ const TARGET_SNAP_KEYS = ["target_mode", "valve_ids", "valve_names", "group_ids"
 // keys (nozzle_count..flow_per_nozzle_l_per_min) are unchanged, and the
 // Bogaerts keys (nozzle_type_id..robot_names) are additive — a Wanjet
 // snapshot simply never sets them.
+// pressure_bar / target_volume_l_per_ha are legacy Bogaerts keys (robot is
+// now calibrated/operated in PSI and L/acre); kept in the allow-list only so
+// GET responses for older rows already containing them round-trip through
+// any future write path unchanged — new saves never populate them.
 const SPRAYER_SNAP_KEYS = [
   "method",
   "id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open", "selected_psi", "flow_per_nozzle_l_per_min",
-  "nozzle_type_id", "nozzle_type_name", "active_nozzles", "pressure_bar", "pressure_psi", "target_volume_l_per_ha", "robot_ids", "robot_names"
+  "nozzle_type_id", "nozzle_type_name", "active_nozzles", "pressure_psi", "target_volume_l_per_acre", "robot_ids", "robot_names",
+  "pressure_bar", "target_volume_l_per_ha"
 ] as const;
 // Wanjet keys (name/volume_liters/is_builtin) describe a single physical
 // tank; Bogaerts keys describe the job-level mixing choice instead (there is
@@ -125,7 +130,7 @@ const CALC_SNAP_KEYS = [
   "area_label", "total_volume_l", "spray_time_minutes", "spray_time_hours",
   "total_flow_l_per_min", "tank_volume_l", "tank_count", "chem_per_liter_ml",
   "chem_per_full_tank_ml", "final_tank_volume_l", "chem_for_final_tank_ml", "is_last_full",
-  "target_volume_l_per_ha"
+  "target_volume_l_per_acre", "target_volume_l_per_ha"
 ] as const;
 
 function pickSnapshotKeys<K extends string>(raw: unknown, keys: readonly K[]): Record<string, unknown> {
