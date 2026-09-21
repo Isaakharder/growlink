@@ -4199,6 +4199,46 @@ body {
   }
 }
 
+/* Two-card responsive row — used to pair related Bogaerts Qii-Jet cards
+   (Setup | Mixing, Job Total | Mixing Instructions) side by side on desktop.
+   "start" alignment (not "stretch") lets a short card stay short instead of
+   being padded out to match a taller neighbour. */
+.pest-planner-card-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1.25rem;
+}
+
+.pest-planner-card-grid-2 > .coming-soon-card {
+  margin-top: 0;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .pest-planner-card-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Denser padding for the Bogaerts setup/summary cards — same border,
+   radius and colors as .coming-soon-card, just less empty space. */
+.pest-planner-compact-card {
+  padding: 0.85rem 1rem;
+}
+
+/* Bogaerts Robot Setup: a small standalone summary, not a full-width card. */
+.pest-planner-narrow-card {
+  max-width: 480px;
+}
+
+@media (max-width: 640px) {
+  .pest-planner-narrow-card {
+    max-width: none;
+  }
+}
+
 /* ── Mobile Pest Log ─────────────────────────────────────────────────────── */
 
 .pest-todo-card {
