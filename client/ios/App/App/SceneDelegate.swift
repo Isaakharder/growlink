@@ -10,19 +10,23 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window = UIWindow(windowScene: windowScene)
         window?.rootViewController = CAPBridgeViewController()
 
-        // Overscroll/background fix (paired with capacitor.config.ts's
-        // backgroundColor): Capacitor's own backgroundColor config sets the
-        // WKWebView and its scrollView, but not this window or the root
-        // view controller's own view — see CAPBridgeViewController.swift's
-        // prepareWebView. Left unset, whichever of these is briefly
-        // revealed during a rubber-band overscroll past the top/bottom (or
-        // behind the status bar / home indicator safe areas) defaults to
-        // black. #f7f9f8 matches GrowLink Mobile's page background exactly
-        // (.mobile-layout / :root in src/index.css) — not a separately
-        // invented colour.
-        let mobileBackground = UIColor(red: 0xF7 / 255.0, green: 0xF9 / 255.0, blue: 0xF8 / 255.0, alpha: 1.0)
-        window?.backgroundColor = mobileBackground
-        window?.rootViewController?.view.backgroundColor = mobileBackground
+        // Overscroll/background fix — the UIWindow fallback half. Kept
+        // deliberately minimal: CAPBridgeViewController.loadView() does
+        // `view = webView` (see @capacitor/ios's
+        // CAPBridgeViewController.swift), so the view controller's own
+        // .view IS the WKWebView — there is no separate container view
+        // here to also color; capacitor.config.ts's top-level
+        // backgroundColor already covers it (and its scrollView). What
+        // capacitor.config.ts genuinely cannot reach is this UIWindow
+        // itself, a real distinct layer one level further out — set here
+        // as a fallback in case anything is ever briefly visible behind
+        // both the webview and (for the status-bar strip specifically)
+        // @capacitor/status-bar's own background view, whose color is
+        // set separately via capacitor.config.ts's plugins.StatusBar
+        // .backgroundColor. #f7f9f8 matches GrowLink Mobile's page
+        // background exactly (.mobile-layout / :root in src/index.css) —
+        // not a separately invented colour.
+        window?.backgroundColor = UIColor(red: 0xF7 / 255.0, green: 0xF9 / 255.0, blue: 0xF8 / 255.0, alpha: 1.0)
 
         window?.makeKeyAndVisible()
 

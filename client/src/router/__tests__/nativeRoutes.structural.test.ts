@@ -194,19 +194,37 @@ describe("ios/App/App/capacitor.config.json — the file Capacitor's native runt
     const json = JSON.parse(readSource("../../../ios/App/App/capacitor.config.json"));
     expect(json.backgroundColor).toBe("#f7f9f8");
   });
+
+  it("has plugins.StatusBar.backgroundColor \"#f7f9f8\", not the plugin's own black default (run `npx cap sync ios` first if this fails)", () => {
+    const json = JSON.parse(readSource("../../../ios/App/App/capacitor.config.json"));
+    expect(json.plugins?.StatusBar?.backgroundColor).toBe("#f7f9f8");
+    expect(json.plugins?.StatusBar?.overlaysWebView).toBe(false);
+  });
 });
 
 describe("iOS overscroll/background fix — every layer uses the SAME GrowLink Mobile page-background token (#f7f9f8), never a different or duplicated colour", () => {
-  // Regression test for a real device bug: pulling to rubber-band scroll
-  // past the top or bottom revealed a black native background. Root
-  // cause, confirmed by reading @capacitor/ios's own installed source
-  // (CAPBridgeViewController.swift): with no `backgroundColor` config set,
-  // Capacitor falls back to UIColor.systemBackground for the WKWebView
-  // and its scrollView, which renders black under system Dark Mode — and
-  // that same source shows Capacitor's config never touches the
-  // containing view controller's own .view or the UIWindow at all, which
-  // is why the native Swift change in SceneDelegate.swift was also
-  // needed, not just a config value.
+  // Regression test for a real device bug, fixed in two passes.
+  //
+  // Pass 1 (commit aec5918) fixed BOTTOM overscroll: with no
+  // capacitor.config.ts `backgroundColor` set, Capacitor's
+  // CAPBridgeViewController.swift (prepareWebView) falls back to
+  // UIColor.systemBackground for the WKWebView and its scrollView, which
+  // renders black under system Dark Mode.
+  //
+  // TOP overscroll stayed black after that fix. Root cause, confirmed by
+  // reading @capacitor/ios's source before editing anything further:
+  // CAPBridgeViewController.loadView() does `view = webView` — the view
+  // controller's own .view IS the webview, already covered by the SAME
+  // backgroundColor config, not a separate layer. The actual remaining
+  // black view is a THIRD, distinct native ancestor: because
+  // native/statusBar.ts calls StatusBar.setOverlaysWebView({overlay:
+  // false}), @capacitor/status-bar's StatusBar.swift creates its own
+  // "backgroundView" UIView covering exactly the status-bar strip, added
+  // as a sibling of the webview directly under the window. That plugin's
+  // own backgroundColor property defaults to UIColor.black
+  // (StatusBarConfig.swift) and nothing had ever set it — fixed via
+  // capacitor.config.ts's plugins.StatusBar.backgroundColor, which the
+  // plugin reads at load() time, before any JS runs.
   const MOBILE_BG_HEX = "#f7f9f8";
 
   it("capacitor.config.ts sets the top-level backgroundColor to the token (covers the WKWebView + its scrollView)", () => {
@@ -245,11 +263,36 @@ describe("iOS overscroll/background fix — every layer uses the SAME GrowLink M
     expect(mobileLayoutRule![1]).toMatch(new RegExp(`background:\\s*${MOBILE_BG_HEX.replace("#", "#")}`));
   });
 
-  it("SceneDelegate.swift sets both the window's and the root view controller's view background to the token's exact RGB (0xF7, 0xF9, 0xF8), covering the layers capacitor.config.ts's backgroundColor cannot reach", () => {
+  it("SceneDelegate.swift sets the window's background to the token's exact RGB (0xF7, 0xF9, 0xF8) — the one layer capacitor.config.ts's backgroundColor genuinely cannot reach", () => {
     const swift = stripSwiftComments(readSource("../../../ios/App/App/SceneDelegate.swift"));
-    expect(swift).toMatch(/0xF7\s*\/\s*255\.0.*0xF9\s*\/\s*255\.0.*0xF8\s*\/\s*255\.0/s);
-    expect(swift).toMatch(/window\?\.backgroundColor\s*=\s*mobileBackground/);
-    expect(swift).toMatch(/window\?\.rootViewController\?\.view\.backgroundColor\s*=\s*mobileBackground/);
+    expect(swift).toMatch(/window\?\.backgroundColor\s*=\s*UIColor\(red:\s*0xF7\s*\/\s*255\.0,\s*green:\s*0xF9\s*\/\s*255\.0,\s*blue:\s*0xF8\s*\/\s*255\.0/);
+  });
+
+  it("SceneDelegate.swift does NOT redundantly set the root view controller's own .view background — it IS the webview (loadView does `view = webView`), already covered by capacitor.config.ts's backgroundColor", () => {
+    const swift = stripSwiftComments(readSource("../../../ios/App/App/SceneDelegate.swift"));
+    expect(swift).not.toMatch(/rootViewController\?\.view\.backgroundColor/);
+  });
+
+  it("@capacitor/ios's own CAPBridgeViewController.loadView really does `view = webView` — the assumption the two tests above and the code comments rely on", () => {
+    // Not our source, but pinned here: if a future @capacitor/ios upgrade
+    // ever changes this, the reasoning above (and the deliberate omission
+    // of a redundant .view.backgroundColor line) needs re-checking, not
+    // silent staleness.
+    const capBridgeSource = readSource("../../../node_modules/@capacitor/ios/Capacitor/Capacitor/CAPBridgeViewController.swift");
+    expect(capBridgeSource).toMatch(/view\s*=\s*webView/);
+  });
+
+  it("capacitor.config.ts sets plugins.StatusBar.backgroundColor to the token — fixes the actual top-overscroll cause (the plugin's own status-bar background view, which otherwise defaults to black)", () => {
+    const config = stripJsComments(readSource("../../../capacitor.config.ts"));
+    const statusBarBlock = config.match(/StatusBar:\s*\{([^}]*)\}/);
+    expect(statusBarBlock).not.toBeNull();
+    expect(statusBarBlock![1]).toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
+    expect(statusBarBlock![1]).toMatch(/overlaysWebView:\s*false/);
+  });
+
+  it("@capacitor/status-bar's own StatusBarConfig really does default backgroundColor to black — the assumption the StatusBar config fix above relies on", () => {
+    const statusBarConfigSource = readSource("../../../node_modules/@capacitor/status-bar/ios/Sources/StatusBarPlugin/StatusBarConfig.swift");
+    expect(statusBarConfigSource).toMatch(/backgroundColor:\s*UIColor\s*=\s*\.black/);
   });
 
   it("normal iOS bounce scrolling is preserved — this fix never sets scrollView.bounces or disables scrolling anywhere", () => {
