@@ -7,12 +7,11 @@ import {
   M2_TO_FT2,
   M2_TO_HECTARES,
   M2_TO_ACRES,
-  BAR_TO_PSI,
   roundTo,
   isDryChemical,
   computeChemicalMl,
   computeChemicalNeeded,
-  computeSprayVolumeL,
+  computeSprayVolumeLPerAcre,
   computeMixPlan
 } from "../utils/pestChemicalCalc";
 
@@ -273,10 +272,10 @@ export function PestPlannerPage() {
   const [sprayMethod, setSprayMethod] = useState<SprayMethod>("wanjet");
   const [bogaertsRobots, setBogaertsRobots] = useState<BogaertsRobot[]>([]);
   const [bogaertsNozzleTypes, setBogaertsNozzleTypes] = useState<BogaertsNozzleType[]>([]);
-  const [targetVolumeLHa, setTargetVolumeLHa] = useState("");
+  const [targetVolumeLAcre, setTargetVolumeLAcre] = useState("");
   const [activeNozzles, setActiveNozzles] = useState("");
   const [nozzleTypeId, setNozzleTypeId] = useState("");
-  const [pressureBar, setPressureBar] = useState("");
+  const [pressurePsi, setPressurePsi] = useState("");
   const [mixingMethod, setMixingMethod] = useState<"tote" | "robot">("tote");
   const [batchSizePreset, setBatchSizePreset] = useState<BatchSizePreset>("600");
   const [customBatchSizeL, setCustomBatchSizeL] = useState("");
@@ -673,20 +672,17 @@ export function PestPlannerPage() {
     [bogaertsNozzleTypes, nozzleTypeId]
   );
 
-  const pressurePsi = useMemo(() => {
-    const bar = Number(pressureBar);
-    return Number.isFinite(bar) && bar > 0 ? bar * BAR_TO_PSI : null;
-  }, [pressureBar]);
-
   const activeNozzlesNum = useMemo(() => {
     const n = Number(activeNozzles);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
   }, [activeNozzles]);
 
-  // SPRAY VOLUME — independent of the product rate; area x target L/ha only.
+  // SPRAY VOLUME — independent of the product rate; area x target L/acre only.
+  // The Qii-Jet robot is calibrated in acres, so this must always be
+  // (area in acres) x (L/acre) — never a hectare-based step.
   const totalSolutionL = useMemo(
-    () => computeSprayVolumeL(totalM2, Number(targetVolumeLHa)),
-    [totalM2, targetVolumeLHa]
+    () => computeSprayVolumeLPerAcre(totalM2, Number(targetVolumeLAcre)),
+    [totalM2, targetVolumeLAcre]
   );
 
   const resolvedBatchSizeL = useMemo(() => {
@@ -722,10 +718,10 @@ export function PestPlannerPage() {
   }
 
   const bogaertsInputsValid =
-    Number.isFinite(Number(targetVolumeLHa)) && Number(targetVolumeLHa) > 0 &&
+    Number.isFinite(Number(targetVolumeLAcre)) && Number(targetVolumeLAcre) > 0 &&
     Number.isInteger(activeNozzlesNum) && activeNozzlesNum >= 1 &&
     nozzleTypeId !== "" &&
-    Number.isFinite(Number(pressureBar)) && Number(pressureBar) > 0 &&
+    Number.isFinite(Number(pressurePsi)) && Number(pressurePsi) > 0 &&
     resolvedBatchSizeL > 0;
 
   function handleSprayerChange(id: string) {
@@ -852,9 +848,8 @@ export function PestPlannerPage() {
               nozzle_type_id: nozzleTypeId || null,
               nozzle_type_name: selectedNozzleType?.name ?? null,
               active_nozzles: activeNozzlesNum,
-              pressure_bar: Number(pressureBar) || null,
-              pressure_psi: pressurePsi,
-              target_volume_l_per_ha: Number(targetVolumeLHa) || null,
+              pressure_psi: Number(pressurePsi) || null,
+              target_volume_l_per_acre: Number(targetVolumeLAcre) || null,
               robot_ids: selectedRobotIds,
               robot_names: selectedRobots.map((r) => r.name)
             }
@@ -908,7 +903,7 @@ export function PestPlannerPage() {
             ...calc_base,
             type: "spray",
             method: "bogaerts",
-            target_volume_l_per_ha: Number(targetVolumeLHa) || null,
+            target_volume_l_per_acre: Number(targetVolumeLAcre) || null,
             // "tank_*" key names are the pre-existing generic batch-plan fields
             // (see pest_control_todos.calculation_snapshot) — reused here so a
             // Bogaerts batch plan is a batch plan, not a parallel shape.

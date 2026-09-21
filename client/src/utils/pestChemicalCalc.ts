@@ -23,11 +23,15 @@ export const DRY_RATE_OPTIONS: { value: RateUnit; label: string }[] = [
 
 export const M2_TO_FT2 = 10.7639;
 export const M2_TO_HECTARES = 1 / 10000;
+// 1 acre = 4046.8564224 m² exactly.
 export const M2_TO_ACRES = 1 / 4046.8564224;
+// 1 hectare = 2.4710538147 acres exactly.
+export const HECTARES_TO_ACRES = 2.4710538147;
 
-// 1 bar = 14.5038 psi. Bar is always the stored/native value for Bogaerts;
-// psi is a derived display-only conversion, never entered directly.
-export const BAR_TO_PSI = 14.5038;
+// 1 bar = 14.5037738 psi. Kept for converting legacy bar-based records; the
+// Bogaerts Qii-Jet robot is calibrated in PSI and PSI is entered directly —
+// bar is never a live input in the Bogaerts workflow.
+export const BAR_TO_PSI = 14.5037738;
 
 export function roundTo(value: number, decimals: number): number {
   const factor = 10 ** decimals;
@@ -96,17 +100,20 @@ export function computeChemicalNeeded(
 }
 
 // SPRAY VOLUME — "how much total spray solution/water is required."
-// Independent input (target application volume, e.g. L/ha) x area. Must
-// never be derived from the product rate — a label rate like 500 mL/ha
+// Independent input (target application volume, e.g. L/acre) x area. Must
+// never be derived from the product rate — a label rate like 500 mL/acre
 // does not by itself imply any particular carrier volume.
-export function computeSprayVolumeL(
+//
+// The Bogaerts Qii-Jet robot is calibrated and operated in acres, so this is
+// always acres x L/acre — never /10000 or any other hectare-based step.
+export function computeSprayVolumeLPerAcre(
   m2: number,
-  targetVolumeLPerHa: number
+  targetVolumeLPerAcre: number
 ): number | null {
   if (!Number.isFinite(m2) || m2 <= 0) return null;
-  if (!Number.isFinite(targetVolumeLPerHa) || targetVolumeLPerHa <= 0) return null;
-  const ha = m2 * M2_TO_HECTARES;
-  return targetVolumeLPerHa * ha;
+  if (!Number.isFinite(targetVolumeLPerAcre) || targetVolumeLPerAcre <= 0) return null;
+  const acres = m2 * M2_TO_ACRES;
+  return targetVolumeLPerAcre * acres;
 }
 
 export type MixPlan = {
