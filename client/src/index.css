@@ -36,6 +36,24 @@ body {
   color: var(--text);
 }
 
+/* Native iOS overscroll/background fix — scoped to native.html's
+   body.native-shell only (see that file's own comment), never applied to
+   index.html (desktop) or mobile.html (web/PWA), so neither's appearance
+   changes. A rubber-band overscroll past the top/bottom of the page (or
+   any gap the WKWebView/its containing native view briefly reveals) now
+   shows this flat colour instead of the desktop's decorative corner
+   gradients — #f7f9f8 is the exact same value .mobile-layout below
+   already uses as GrowLink Mobile's page background, not a new one. This
+   is the CSS-layer half of the fix; capacitor.config.ts's
+   backgroundColor and ios/App/App/SceneDelegate.swift cover the
+   WKWebView/its scrollView and the native window/view controller
+   respectively — see their own comments for why CSS alone can't reach
+   those. */
+body.native-shell,
+body.native-shell #root {
+  background: #f7f9f8;
+}
+
 .app-container {
   display: flex;
   min-height: 100vh;
@@ -3296,6 +3314,9 @@ body {
 }
 
 /* ── Mobile layout ─────────────────────────────────────────────────────────── */
+/* #f7f9f8 here is GrowLink Mobile's page-background token — the same
+   value body.native-shell above, capacitor.config.ts's backgroundColor,
+   and ios/App/App/SceneDelegate.swift's overscroll fix all use. */
 
 .mobile-layout {
   min-height: 100vh;

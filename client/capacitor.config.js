@@ -23,6 +23,20 @@ const config = {
     // this value when explicitly set, so leaving this one authoritative is
     // what keeps there being a single source of truth.
     loggingBehavior: "none",
+    // Overscroll/background fix: GrowLink Mobile's own page background is
+    // #f7f9f8 — the flat colour .mobile-layout (src/index.css) and :root
+    // both already use. Left unset, Capacitor falls back to
+    // UIColor.systemBackground for the WKWebView AND its internal
+    // scrollView (see @capacitor/ios's CAPBridgeViewController.swift,
+    // prepareWebView) — systemBackground is a dynamic color that renders
+    // black under system Dark Mode, which is exactly the "black native
+    // background" a rubber-band overscroll (top or bottom) revealed. This
+    // is the one config layer Capacitor's own supported configuration DOES
+    // cover; it does NOT cover the view controller's own view or the
+    // window, which have no config-file equivalent — see
+    // ios/App/App/SceneDelegate.swift for the matching native Swift fix
+    // for those two.
+    backgroundColor: "#f7f9f8",
     ios: {
         // Leaves the default `capacitor` scheme (origin capacitor://localhost)
         // rather than overriding it to plain http — CORS/auth on the server

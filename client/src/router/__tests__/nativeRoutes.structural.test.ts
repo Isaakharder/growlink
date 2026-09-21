@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 // Structural guard, on top of nativeRoutes.test.tsx's behavioral coverage:
@@ -22,6 +23,31 @@ function stripJsComments(source: string): string {
 
 function stripHtmlComments(source: string): string {
   return source.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+// CSS has no "//" line comments (unlike stripJsComments, which also
+// strips those) — a bare "//" can legitimately appear in CSS, e.g. inside
+// a url(). Only /* */ block comments are ever actually comments here.
+function stripCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+// Swift uses both // and /* */ comments, unlike CSS.
+function stripSwiftComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
+// index.css must be read via process.cwd(), NOT
+// fileURLToPath(new URL(..., import.meta.url)) like readSource() above —
+// Vite's static-asset transform intercepts new URL() calls whose target
+// ends in .css specifically (but not .ts/.tsx/.html), producing a URL
+// object node:url's fileURLToPath then rejects with "The URL must be of
+// scheme file." Discovered and fixed once already (see
+// pages/maintenance/__tests__/equipmentCardStyles.test.ts); readSource()
+// itself is left alone since every OTHER file it reads in this file is
+// fine with the import.meta.url form.
+function readCss(): string {
+  return readFileSync(path.resolve(process.cwd(), "src/index.css"), "utf8");
 }
 
 // A representative sample of desktop-only pages (from router/routes.tsx's
@@ -162,5 +188,75 @@ describe("ios/App/App/capacitor.config.json — the file Capacitor's native runt
   it("has loggingBehavior \"none\" (run `npx cap sync ios` first if this fails after editing capacitor.config.ts)", () => {
     const json = JSON.parse(readSource("../../../ios/App/App/capacitor.config.json"));
     expect(json.loggingBehavior).toBe("none");
+  });
+
+  it("has backgroundColor \"#f7f9f8\" (run `npx cap sync ios` first if this fails after editing capacitor.config.ts)", () => {
+    const json = JSON.parse(readSource("../../../ios/App/App/capacitor.config.json"));
+    expect(json.backgroundColor).toBe("#f7f9f8");
+  });
+});
+
+describe("iOS overscroll/background fix — every layer uses the SAME GrowLink Mobile page-background token (#f7f9f8), never a different or duplicated colour", () => {
+  // Regression test for a real device bug: pulling to rubber-band scroll
+  // past the top or bottom revealed a black native background. Root
+  // cause, confirmed by reading @capacitor/ios's own installed source
+  // (CAPBridgeViewController.swift): with no `backgroundColor` config set,
+  // Capacitor falls back to UIColor.systemBackground for the WKWebView
+  // and its scrollView, which renders black under system Dark Mode — and
+  // that same source shows Capacitor's config never touches the
+  // containing view controller's own .view or the UIWindow at all, which
+  // is why the native Swift change in SceneDelegate.swift was also
+  // needed, not just a config value.
+  const MOBILE_BG_HEX = "#f7f9f8";
+
+  it("capacitor.config.ts sets the top-level backgroundColor to the token (covers the WKWebView + its scrollView)", () => {
+    const config = stripJsComments(readSource("../../../capacitor.config.ts"));
+    expect(config).toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
+  });
+
+  it("native.html's <body> carries the native-shell class that scopes the CSS fix to native only", () => {
+    const html = stripHtmlComments(readSource("../../../native.html"));
+    expect(html).toMatch(/<body[^>]*\bclass="native-shell"/);
+  });
+
+  it("index.css gives body.native-shell (and #root under it) the same flat token — scoped so desktop/web are untouched", () => {
+    const css = stripCssComments(readCss());
+    expect(css).toMatch(/body\.native-shell,\s*body\.native-shell #root\s*\{[^}]*background:\s*#f7f9f8/);
+  });
+
+  it("the desktop/web body rule (unscoped, shared by index.html and mobile.html) still has its own decorative gradient — proves this fix didn't touch it", () => {
+    const css = stripCssComments(readCss());
+    // The desktop body background is distinctive enough (its two named
+    // corner gradients) that just confirming it's still present, intact,
+    // proves this fix left it alone — it's the ONLY rule that has it.
+    expect(css).toMatch(/radial-gradient\(circle at 10% -10%, #eef8f4/);
+
+    // And the scoped native-shell override itself must NOT carry that
+    // gradient — it's a flat colour, not "the gradient, scoped."
+    const nativeShellRule = css.match(/body\.native-shell,\s*body\.native-shell #root\s*\{([^}]*)\}/);
+    expect(nativeShellRule).not.toBeNull();
+    expect(nativeShellRule![1]).not.toMatch(/radial-gradient/);
+  });
+
+  it(".mobile-layout (the mobile app's own root container, rendered on both web and native) already uses the same token", () => {
+    const css = stripCssComments(readCss());
+    const mobileLayoutRule = css.match(/\.mobile-layout\s*\{([^}]*)\}/);
+    expect(mobileLayoutRule).not.toBeNull();
+    expect(mobileLayoutRule![1]).toMatch(new RegExp(`background:\\s*${MOBILE_BG_HEX.replace("#", "#")}`));
+  });
+
+  it("SceneDelegate.swift sets both the window's and the root view controller's view background to the token's exact RGB (0xF7, 0xF9, 0xF8), covering the layers capacitor.config.ts's backgroundColor cannot reach", () => {
+    const swift = stripSwiftComments(readSource("../../../ios/App/App/SceneDelegate.swift"));
+    expect(swift).toMatch(/0xF7\s*\/\s*255\.0.*0xF9\s*\/\s*255\.0.*0xF8\s*\/\s*255\.0/s);
+    expect(swift).toMatch(/window\?\.backgroundColor\s*=\s*mobileBackground/);
+    expect(swift).toMatch(/window\?\.rootViewController\?\.view\.backgroundColor\s*=\s*mobileBackground/);
+  });
+
+  it("normal iOS bounce scrolling is preserved — this fix never sets scrollView.bounces or disables scrolling anywhere", () => {
+    const swift = stripSwiftComments(readSource("../../../ios/App/App/SceneDelegate.swift"));
+    expect(swift).not.toMatch(/\.bounces\s*=/);
+    expect(swift).not.toMatch(/isScrollEnabled\s*=\s*false/);
+    const css = stripCssComments(readCss());
+    expect(css).not.toMatch(/overscroll-behavior\s*:\s*none/);
   });
 });

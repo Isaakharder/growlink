@@ -14,7 +14,11 @@
          vite-plugin-pwa from this build entirely). -->
     <title>GrowLink Mobile</title>
   </head>
-  <body>
+  <!-- native-shell: scopes src/index.css's overscroll-background fix to
+       this entry only, so it never affects index.html (desktop) or
+       mobile.html (the web/PWA shell) — see the ".native-shell" rule in
+       index.css. -->
+  <body class="native-shell">
     <div id="root"></div>
     <script type="module" src="/src/main.native.tsx"></script>
   </body>
