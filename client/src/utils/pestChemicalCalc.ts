@@ -33,6 +33,32 @@ export const HECTARES_TO_ACRES = 2.4710538147;
 // bar is never a live input in the Bogaerts workflow.
 export const BAR_TO_PSI = 14.5037738;
 
+// Target carrier-volume unit for the Bogaerts Qii-Jet robot only. Area basis
+// is always acres (never hectares) — see M2_TO_ACRES above. The unit
+// identifier is spelled out as "imp_gal_per_acre" (never bare "gal") so a
+// stored value can never be misread as US gallons.
+export type TargetVolumeUnit = "L_per_acre" | "imp_gal_per_acre";
+
+export const TARGET_VOLUME_UNIT_OPTIONS: { value: TargetVolumeUnit; label: string }[] = [
+  { value: "L_per_acre", label: "L/acre" },
+  { value: "imp_gal_per_acre", label: "imp gal/acre" }
+];
+
+// 1 Imperial gallon = 4.54609 L. Confirmed directly from the physical
+// Bogaerts Qii-Jet display, which reads "imp gal/acre" — Imperial gallons,
+// not US gallons (3.785411784 L). Do not swap this constant without
+// re-confirming against the robot's own display, since the two differ by
+// ~20% and silently mixing them up would misstate total carrier volume and,
+// downstream, how much chemical ends up in each L of solution.
+export const IMPERIAL_GALLON_TO_L = 4.54609;
+
+// Normalizes a raw Target Spray Volume entry (in whichever unit the operator
+// selected) to L/acre, so every downstream calculation (total solution,
+// mixing/batch plan) only ever has to reason about liters.
+export function convertTargetVolumeToLPerAcre(value: number, unit: TargetVolumeUnit): number {
+  return unit === "imp_gal_per_acre" ? value * IMPERIAL_GALLON_TO_L : value;
+}
+
 export function roundTo(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;

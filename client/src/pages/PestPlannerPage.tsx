@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 import {
   type RateUnit,
+  type TargetVolumeUnit,
   LIQUID_RATE_OPTIONS,
   DRY_RATE_OPTIONS,
+  TARGET_VOLUME_UNIT_OPTIONS,
+  IMPERIAL_GALLON_TO_L,
   M2_TO_FT2,
   M2_TO_HECTARES,
   M2_TO_ACRES,
@@ -12,6 +15,7 @@ import {
   computeChemicalMl,
   computeChemicalNeeded,
   computeSprayVolumeLPerAcre,
+  convertTargetVolumeToLPerAcre,
   computeMixPlan
 } from "../utils/pestChemicalCalc";
 
@@ -272,7 +276,8 @@ export function PestPlannerPage() {
   const [sprayMethod, setSprayMethod] = useState<SprayMethod>("wanjet");
   const [bogaertsRobots, setBogaertsRobots] = useState<BogaertsRobot[]>([]);
   const [bogaertsNozzleTypes, setBogaertsNozzleTypes] = useState<BogaertsNozzleType[]>([]);
-  const [targetVolumeLAcre, setTargetVolumeLAcre] = useState("");
+  const [targetVolumeValue, setTargetVolumeValue] = useState("");
+  const [targetVolumeUnit, setTargetVolumeUnit] = useState<TargetVolumeUnit>("L_per_acre");
   const [activeNozzles, setActiveNozzles] = useState("");
   const [nozzleTypeId, setNozzleTypeId] = useState("");
   const [pressurePsi, setPressurePsi] = useState("");
@@ -677,12 +682,21 @@ export function PestPlannerPage() {
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
   }, [activeNozzles]);
 
+  // Target Spray Volume can be entered as L/acre or imp gal/acre — confirmed
+  // directly from the physical Qii-Jet display, see IMPERIAL_GALLON_TO_L.
+  // Normalize to L/acre once here so every downstream calc only reasons in liters.
+  const targetVolumeLPerAcre = useMemo(() => {
+    const raw = Number(targetVolumeValue);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    return convertTargetVolumeToLPerAcre(raw, targetVolumeUnit);
+  }, [targetVolumeValue, targetVolumeUnit]);
+
   // SPRAY VOLUME — independent of the product rate; area x target L/acre only.
   // The Qii-Jet robot is calibrated in acres, so this must always be
   // (area in acres) x (L/acre) — never a hectare-based step.
   const totalSolutionL = useMemo(
-    () => computeSprayVolumeLPerAcre(totalM2, Number(targetVolumeLAcre)),
-    [totalM2, targetVolumeLAcre]
+    () => (targetVolumeLPerAcre != null ? computeSprayVolumeLPerAcre(totalM2, targetVolumeLPerAcre) : null),
+    [totalM2, targetVolumeLPerAcre]
   );
 
   const resolvedBatchSizeL = useMemo(() => {
@@ -718,7 +732,7 @@ export function PestPlannerPage() {
   }
 
   const bogaertsInputsValid =
-    Number.isFinite(Number(targetVolumeLAcre)) && Number(targetVolumeLAcre) > 0 &&
+    Number.isFinite(Number(targetVolumeValue)) && Number(targetVolumeValue) > 0 &&
     Number.isInteger(activeNozzlesNum) && activeNozzlesNum >= 1 &&
     nozzleTypeId !== "" &&
     Number.isFinite(Number(pressurePsi)) && Number(pressurePsi) > 0 &&
@@ -849,7 +863,13 @@ export function PestPlannerPage() {
               nozzle_type_name: selectedNozzleType?.name ?? null,
               active_nozzles: activeNozzlesNum,
               pressure_psi: Number(pressurePsi) || null,
-              target_volume_l_per_acre: Number(targetVolumeLAcre) || null,
+              // target_volume_value/target_volume_unit record exactly what the
+              // operator entered/selected (unambiguous audit trail);
+              // target_volume_l_per_acre is always the normalized-to-liters
+              // value used in the actual calculation — never reinterpret it.
+              target_volume_value: Number(targetVolumeValue) || null,
+              target_volume_unit: targetVolumeUnit,
+              target_volume_l_per_acre: targetVolumeLPerAcre,
               robot_ids: selectedRobotIds,
               robot_names: selectedRobots.map((r) => r.name)
             }
@@ -903,7 +923,9 @@ export function PestPlannerPage() {
             ...calc_base,
             type: "spray",
             method: "bogaerts",
-            target_volume_l_per_acre: Number(targetVolumeLAcre) || null,
+            target_volume_value: Number(targetVolumeValue) || null,
+            target_volume_unit: targetVolumeUnit,
+            target_volume_l_per_acre: targetVolumeLPerAcre,
             // "tank_*" key names are the pre-existing generic batch-plan fields
             // (see pest_control_todos.calculation_snapshot) — reused here so a
             // Bogaerts batch plan is a batch plan, not a parallel shape.
@@ -2112,21 +2134,36 @@ export function PestPlannerPage() {
           <div className="coming-soon-card pest-planner-compact-card">
             <h2>Bogaerts Qii-Jet Setup</h2>
 
-            <div className="varieties-form" style={{ marginTop: "0.55rem", gridTemplateColumns: "1fr", gap: "0.5rem" }}>
-              <label>
-                Target Spray Volume (L/acre)
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  placeholder="e.g. 400"
-                  value={targetVolumeLAcre}
-                  onChange={(e) => setTargetVolumeLAcre(e.target.value)}
-                />
+            <div className="varieties-form" style={{ marginTop: "0.55rem", gridTemplateColumns: "minmax(0, 1fr)", gap: "0.5rem" }}>
+              <label style={{ minWidth: 0 }}>
+                Target Spray Volume
+                <div style={{ display: "flex", gap: "0.4rem", minWidth: 0 }}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 400"
+                    value={targetVolumeValue}
+                    onChange={(e) => setTargetVolumeValue(e.target.value)}
+                    style={{ flex: "1 1 auto", minWidth: 0 }}
+                  />
+                  <select
+                    value={targetVolumeUnit}
+                    onChange={(e) => setTargetVolumeUnit(e.target.value as TargetVolumeUnit)}
+                    style={{ flex: "0 0 auto", width: "9rem" }}
+                  >
+                    {TARGET_VOLUME_UNIT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
               </label>
               <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.05rem 0 0" }}>
                 The total carrier/spray solution to apply per acre — independent of the
                 product rate above. This is not the chemical dose.
+                {targetVolumeUnit === "imp_gal_per_acre" && targetVolumeLPerAcre != null
+                  ? ` imp gal/acre is Imperial gallons (1 imp gal = ${IMPERIAL_GALLON_TO_L} L) — equal to ${roundTo(targetVolumeLPerAcre, 2).toLocaleString()} L/acre.`
+                  : ""}
               </p>
 
               <label>
@@ -2404,8 +2441,15 @@ export function PestPlannerPage() {
             <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
               <span className="greenhouse-stat-label">Application Volume</span>
               <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
-                {targetVolumeLAcre ? `${targetVolumeLAcre} L/acre` : "—"}
+                {targetVolumeValue
+                  ? `${targetVolumeValue} ${targetVolumeUnit === "imp_gal_per_acre" ? "imp gal/acre" : "L/acre"}`
+                  : "—"}
               </span>
+              {targetVolumeUnit === "imp_gal_per_acre" && targetVolumeLPerAcre != null ? (
+                <span style={{ fontSize: "0.78em", color: "var(--text-muted)" }}>
+                  ({roundTo(targetVolumeLPerAcre, 2).toLocaleString()} L/acre)
+                </span>
+              ) : null}
             </div>
             <div className="greenhouse-stat-item">
               <span className="greenhouse-stat-label">Pressure</span>
