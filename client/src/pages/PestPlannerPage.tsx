@@ -731,10 +731,19 @@ export function PestPlannerPage() {
     );
   }
 
+  // Validates the normalized L/acre figure rather than the raw entry, so an
+  // imp gal/acre entry is checked against the same value the mixing plan uses.
+  //
+  // Nozzle type is deliberately NOT required. Nozzle flow calibration is not
+  // implemented in this version — nozzle type is recorded on the job for the
+  // robot operator's reference and feeds no calculation (see the note rendered
+  // under the Bogaerts Qii-Jet Setup card). Requiring it made Create Spray Job
+  // permanently un-clickable for any org with no pest_bogaerts_nozzle_types
+  // rows, because the Nozzle Type select is not rendered at all when that list
+  // is empty — there was no way to satisfy the condition from the UI.
   const bogaertsInputsValid =
-    Number.isFinite(Number(targetVolumeValue)) && Number(targetVolumeValue) > 0 &&
+    targetVolumeLPerAcre != null && targetVolumeLPerAcre > 0 &&
     Number.isInteger(activeNozzlesNum) && activeNozzlesNum >= 1 &&
-    nozzleTypeId !== "" &&
     Number.isFinite(Number(pressurePsi)) && Number(pressurePsi) > 0 &&
     resolvedBatchSizeL > 0;
 
@@ -791,6 +800,35 @@ export function PestPlannerPage() {
     (applicationType === "drench" ||
       (sprayMethod === "wanjet" && selectedSprayer !== null) ||
       (sprayMethod === "bogaerts" && bogaertsInputsValid));
+
+  // A disabled Create Job button with no explanation is indistinguishable from
+  // a bug (and was one — see bogaertsInputsValid above). Name the single unmet
+  // condition so the operator can fix it without guessing. Returns null when
+  // the "Select a chemical" message above the button already covers it.
+  const createJobBlockedReason = useMemo(() => {
+    if (!showCreateJobCard || canCreateJob || chemicalId === "") return null;
+    if (applicationDate === "") return "Set an application date in Application Details.";
+    if (applicationType === "spray" && sprayMethod === "wanjet" && !selectedSprayer) {
+      return "Select a sprayer in Sprayer Details.";
+    }
+    if (applicationType === "spray" && sprayMethod === "bogaerts") {
+      if (targetVolumeLPerAcre == null || targetVolumeLPerAcre <= 0) {
+        return "Enter a Target Spray Volume greater than 0 in Bogaerts Qii-Jet Setup.";
+      }
+      if (!Number.isInteger(activeNozzlesNum) || activeNozzlesNum < 1) {
+        return "Enter Active Nozzles (1 or more) in Bogaerts Qii-Jet Setup.";
+      }
+      if (!Number.isFinite(Number(pressurePsi)) || Number(pressurePsi) <= 0) {
+        return "Enter a Pressure (PSI) greater than 0 in Bogaerts Qii-Jet Setup.";
+      }
+      if (resolvedBatchSizeL <= 0) return "Choose a batch size in Mixing.";
+    }
+    return null;
+  }, [
+    showCreateJobCard, canCreateJob, chemicalId, applicationDate, applicationType,
+    sprayMethod, selectedSprayer, targetVolumeLPerAcre, activeNozzlesNum,
+    pressurePsi, resolvedBatchSizeL
+  ]);
 
   const createJobLabel =
     applicationType === "spray"
@@ -2508,6 +2546,11 @@ export function PestPlannerPage() {
             {todoSavedMessage ? (
               <p style={{ fontSize: "0.85em", color: "var(--brand)", margin: 0 }}>
                 {todoSavedMessage}
+              </p>
+            ) : null}
+            {createJobBlockedReason ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: 0 }}>
+                {createJobBlockedReason}
               </p>
             ) : null}
           </div>
