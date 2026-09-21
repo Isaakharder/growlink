@@ -9,6 +9,22 @@ const config: CapacitorConfig = {
   appId: "com.linklogictechnologies.growlink",
   appName: "GrowLink Mobile",
   webDir: "dist-ios",
+  // Security fix: Capacitor's own default ("debug") logs native bridge
+  // calls — including plugin call arguments/results, which is how a first
+  // physical-device Debug build printed the full Supabase session (access
+  // token included) returned from SecureStorage's native getItem into the
+  // Xcode console. "none" disables that logging unconditionally, in every
+  // build configuration (Debug AND Release) — Capacitor reads this one
+  // value from the SAME capacitor.config.json bundled into the app in
+  // both configurations; there is no separate Debug/Release config file,
+  // so there is nothing to solve per-configuration here (Xcode's Debug vs
+  // Release build settings never override it — see
+  // ios/App/App.xcodeproj/project.pbxproj, which has no logging-related
+  // build setting at all). Do not rely on Capacitor's per-platform
+  // `ios.loggingBehavior` override instead of this — it only overrides
+  // this value when explicitly set, so leaving this one authoritative is
+  // what keeps there being a single source of truth.
+  loggingBehavior: "none",
   ios: {
     // Leaves the default `capacitor` scheme (origin capacitor://localhost)
     // rather than overriding it to plain http — CORS/auth on the server

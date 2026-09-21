@@ -114,3 +114,45 @@ describe("main.native.tsx — never registers the PWA service worker", () => {
     expect(source).not.toMatch(/appRouter/);
   });
 });
+
+describe("capacitor.config.ts — native bridge logging is fully disabled", () => {
+  // Regression test for a real leak: a first physical-device Debug build
+  // printed the complete Supabase session (access token included) to the
+  // Xcode console via Capacitor's own bridge logging, because Capacitor's
+  // default loggingBehavior ("debug") logs native plugin call
+  // arguments/results — including whatever SecureStorage's native getItem
+  // returned. "none" is a single top-level setting read from one
+  // capacitor.config.json bundled into the app for every build
+  // configuration (see capacitor.config.ts's own comment) — there is no
+  // separate Debug/Release value to get out of sync, so one assertion
+  // covers both.
+  const source = stripJsComments(readSource("../../../capacitor.config.ts"));
+
+  it("sets the top-level loggingBehavior to \"none\"", () => {
+    expect(source).toMatch(/loggingBehavior:\s*["']none["']/);
+  });
+
+  it("does not set loggingBehavior to \"debug\" or \"production\" anywhere (no weaker override)", () => {
+    const loggingBehaviorValues = [...source.matchAll(/loggingBehavior:\s*["'](\w+)["']/g)].map((m) => m[1]);
+    expect(loggingBehaviorValues.length).toBeGreaterThan(0);
+    expect(loggingBehaviorValues.every((v) => v === "none")).toBe(true);
+  });
+
+  it("still uses Keychain-backed secure storage for the native auth adapter (this fix must not weaken it)", () => {
+    const authStorage = stripJsComments(readSource("../../lib/nativeAuthStorage.ts"));
+    expect(authStorage).toMatch(/@aparajita\/capacitor-secure-storage/);
+    expect(authStorage).not.toMatch(/@capacitor\/preferences/);
+  });
+});
+
+describe("ios/App/App/capacitor.config.json — the file Capacitor's native runtime actually reads", () => {
+  // capacitor.config.ts is the source; this generated JSON (written by
+  // `npx cap sync ios` from capacitor.config.ts) is what's bundled into
+  // the app and what the native bridge reads at launch, in every build
+  // configuration — this is the file to check to be sure the fix actually
+  // reached the native project, not just the TypeScript source.
+  it("has loggingBehavior \"none\" (run `npx cap sync ios` first if this fails after editing capacitor.config.ts)", () => {
+    const json = JSON.parse(readSource("../../../ios/App/App/capacitor.config.json"));
+    expect(json.loggingBehavior).toBe("none");
+  });
+});
