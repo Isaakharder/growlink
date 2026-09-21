@@ -14,12 +14,11 @@ import react from "@vitejs/plugin-react";
 //     back-to-back, or in either order, without one touching the other's
 //     output directory. See scripts/__tests__ for a test asserting this.
 //
-// VITE_APP_TARGET=native (which src/config/platform.ts reads to mount the
-// shared mobile route tree at "/" instead of "/mobile" — see
-// router/nativeRoutes.tsx) lives in .env.ios, loaded automatically by
-// running this build with `--mode ios` (see package.json's build:ios
-// script), alongside the production API/Supabase URLs that build connects
-// to.
+// `--mode ios` (see package.json's build:ios script) loads .env.ios
+// automatically, which points this build at the production API/Supabase
+// URLs — main.native.tsx renders router/nativeRoutes.tsx, which mounts
+// the shared mobile route tree at "/mobile", the same path the web build
+// uses (see config/platform.ts).
 export default defineConfig({
     plugins: [react()],
     build: {

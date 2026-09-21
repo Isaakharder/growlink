@@ -58,15 +58,23 @@ describe("router/nativeRoutes.tsx — cannot reach a desktop route", () => {
     expect(source).toMatch(/children:\s*mobileRouteChildren/);
   });
 
-  it("mounts the shared mobile route tree at \"/\", not \"/mobile\"", () => {
-    // The MobileLayout branch must sit directly under the "/" RequireAuth
-    // route, not nested under a "/mobile" path segment like the web router.
-    expect(source).not.toMatch(/path:\s*["']\/mobile["']/);
-    expect(source).toMatch(/path:\s*["']\/["'][\s\S]*element:\s*<RequireAuth/);
+  it("mounts the shared mobile route tree at \"mobile\" (i.e. \"/mobile\"), the same path the web router uses", () => {
+    // Regression test for the bug this fix addresses: mounting at "/"
+    // instead of "/mobile" made every mobile page's plain "/mobile/..."
+    // links (e.g. EquipmentTab's equipment-detail navigation) 404 under
+    // the native router, since only links that went through
+    // mobilePath()/MOBILE_HOME were rewritten. Mounting at the identical
+    // path as web means a literal "/mobile/..." string is correct under
+    // either router — no per-component conversion required.
+    expect(source).toMatch(/path:\s*["']mobile["'][\s\S]*element:\s*<MobileLayout/);
   });
 
-  it("has a catch-all that redirects any unmatched path back to Mobile Home, never leaving it unhandled", () => {
-    expect(source).toMatch(/path:\s*["']\*["'][\s\S]{0,80}<Navigate to="\/" replace \/>/);
+  it("redirects the bare \"/\" route to \"/mobile\" instead of mounting MobileLayout there directly", () => {
+    expect(source).toMatch(/index:\s*true[\s\S]{0,40}<Navigate to="\/mobile" replace \/>/);
+  });
+
+  it("has a catch-all that redirects any unmatched path to Mobile Home (\"/mobile\"), never leaving it unhandled", () => {
+    expect(source).toMatch(/path:\s*["']\*["'][\s\S]{0,80}<Navigate to="\/mobile" replace \/>/);
   });
 });
 

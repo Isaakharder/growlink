@@ -62,11 +62,12 @@ const MobileMaintenanceEquipmentDetailPage = lazy(() =>
 // The mobile app's route children (Mobile Home + every mobile feature
 // page), shared verbatim between the web router (mounted under "/mobile",
 // alongside the desktop app in the same bundle) and the native iOS
-// router (mounted at "/" — see router/nativeRoutes.tsx and
-// main.native.tsx). All paths here are relative to whichever parent
-// mounts them, so this array itself never needs to know which build it's
-// running under; only the handful of pages that build an *absolute*
-// mobile link (via config/platform.ts's mobilePath()/MOBILE_HOME) do.
+// router (also mounted at "/mobile" — see router/nativeRoutes.tsx and
+// main.native.tsx). Both routers mount this array at the identical path,
+// so an absolute "/mobile/..." link built anywhere — via
+// config/platform.ts's mobilePath() helper or a plain template literal —
+// resolves correctly under either one; this array itself never needs to
+// know which build it's running under.
 export const mobileRouteChildren = [
   {
     index: true,

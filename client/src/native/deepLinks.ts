@@ -25,17 +25,24 @@ export function registerDeepLinkHandling(router: DataRouter): void {
   });
 }
 
-// Accepts either a custom-scheme URL (growlink://maintenance/equipment/123)
-// or an https universal link (https://growlinkclient-production.up.railway.app/mobile/maintenance) —
-// both collapse to the same in-app path. Anything that isn't a recognized
-// authorized mobile route falls through to "/" via the native router's
-// catch-all (see router/nativeRoutes.tsx), never to a desktop route, since
-// the native router doesn't have any.
+// Accepts either a custom-scheme URL without the /mobile prefix
+// (growlink://maintenance/equipment/123 — a mobile-relative path is all a
+// custom scheme needs) or an https universal link that mirrors the web
+// site's own URL structure
+// (https://growlinkclient-production.up.railway.app/mobile/maintenance —
+// already "/mobile"-prefixed, same as any other mobile link on web).
+// The native router mounts the mobile tree at "/mobile", identically to
+// web (see router/nativeRoutes.tsx), so an already-prefixed path is
+// passed through unchanged rather than having "/mobile" stripped off.
+// Anything that isn't a recognized authorized mobile route falls through
+// to "/mobile" via the native router's catch-all, never to a desktop
+// route, since the native router doesn't have any.
 export function extractInAppPath(url: string): string | null {
   try {
     const parsed = new URL(url);
     const path = parsed.pathname + parsed.search;
-    return path.startsWith("/mobile") ? mobilePath(path.slice("/mobile".length) || "/") : path;
+    if (path === "/" || path === "") return "/mobile";
+    return path.startsWith("/mobile") ? path : mobilePath(path);
   } catch {
     return null;
   }
