@@ -112,10 +112,15 @@ const TARGET_SNAP_KEYS = ["target_mode", "valve_ids", "valve_names", "group_ids"
 // now calibrated/operated in PSI and L/acre); kept in the allow-list only so
 // GET responses for older rows already containing them round-trip through
 // any future write path unchanged — new saves never populate them.
+// target_volume_value/target_volume_unit record exactly what the operator
+// entered (L/acre or imp_gal_per_acre — Imperial gallons, confirmed from the
+// robot's own display); target_volume_l_per_acre is always the
+// normalized-to-liters figure actually used in the calculation.
 const SPRAYER_SNAP_KEYS = [
   "method",
   "id", "name", "nozzle_count", "nozzle_volume_l_per_min", "nozzle_psi", "speed_m_per_min", "nozzles_open", "selected_psi", "flow_per_nozzle_l_per_min",
   "nozzle_type_id", "nozzle_type_name", "active_nozzles", "pressure_psi", "target_volume_l_per_acre", "robot_ids", "robot_names",
+  "target_volume_value", "target_volume_unit",
   "pressure_bar", "target_volume_l_per_ha"
 ] as const;
 // Wanjet keys (name/volume_liters/is_builtin) describe a single physical
@@ -130,7 +135,7 @@ const CALC_SNAP_KEYS = [
   "area_label", "total_volume_l", "spray_time_minutes", "spray_time_hours",
   "total_flow_l_per_min", "tank_volume_l", "tank_count", "chem_per_liter_ml",
   "chem_per_full_tank_ml", "final_tank_volume_l", "chem_for_final_tank_ml", "is_last_full",
-  "target_volume_l_per_acre", "target_volume_l_per_ha"
+  "target_volume_l_per_acre", "target_volume_l_per_ha", "target_volume_value", "target_volume_unit"
 ] as const;
 
 function pickSnapshotKeys<K extends string>(raw: unknown, keys: readonly K[]): Record<string, unknown> {
