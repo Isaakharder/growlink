@@ -37,11 +37,13 @@ export async function registerPushListeners(): Promise<void> {
 
   const { PushNotifications } = await import("@capacitor/push-notifications");
 
-  PushNotifications.addListener("registration", (token) => {
+  PushNotifications.addListener("registration", () => {
     // Stage 3: POST token.value to the server, associated with this
-    // device/user/organization. Logged for now so registration can be
-    // verified end-to-end during Stage 2 device testing.
-    console.info("[push] APNs device token received", token.value);
+    // device/user/organization. Deliberately never logs token.value
+    // itself — an APNs device token is a credential (it lets a server
+    // address push notifications to this specific device) and must not
+    // reach the console, Xcode's log, or a Safari Web Inspector session.
+    console.info("[push] APNs registration succeeded");
   });
 
   PushNotifications.addListener("registrationError", (error) => {

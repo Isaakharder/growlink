@@ -22,6 +22,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Accurate, not a shortcut: GrowLink Mobile's only network traffic is
+	     standard HTTPS/TLS to Supabase and the existing Express server, via
+	     iOS's own URLSession/WKWebView networking — no encryption algorithm
+	     the app implements itself. The only other encryption-adjacent thing
+	     it touches is Apple's own Keychain Services (see
+	     src/lib/nativeAuthStorage.ts), which is exempt for the same reason.
+	     This is a declaration, made ahead of time in the same place Apple's
+	     own export-compliance documentation puts it, not a workaround. -->
 	<key>NSCameraUsageDescription</key>
 	<string>GrowLink Mobile uses the camera to scan an equipment QR code, so you can quickly open that equipment's record without searching for it by name.</string>
 	<key>UIApplicationSceneManifest</key>

@@ -56,7 +56,15 @@ const config: CapacitorConfig = {
       // fixed timer, so a slow first load never flashes a bare white
       // screen before Mobile Home is ready to render.
       launchAutoHide: false,
-      backgroundColor: "#f8fbf9"
+      // #f7f9f8 — the same GrowLink Mobile page-background token used
+      // everywhere else natively (top-level backgroundColor above,
+      // plugins.StatusBar.backgroundColor below, body.native-shell in
+      // src/index.css, SceneDelegate.swift's window fallback). Was
+      // #f8fbf9 — a slightly different value, noted as a pre-existing
+      // inconsistency back when the overscroll fix first established
+      // #f7f9f8 as the token; reconciled here so every native surface
+      // uses the exact same colour, not two visually-near-identical ones.
+      backgroundColor: "#f7f9f8"
     },
     // Overscroll/background fix (top half — the actual cause of the
     // black TOP overscroll the WKWebView/window fix above didn't reach):

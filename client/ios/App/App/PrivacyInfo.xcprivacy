@@ -11,9 +11,16 @@
 	     Capacitor/Google/ML Kit pod that itself touches one of these APIs
 	     ships its own PrivacyInfo.xcprivacy already (see ios/App/Pods/*),
 	     which Apple aggregates separately at submission — this file must
-	     not re-declare those. @capacitor/preferences (session storage —
-	     see src/lib/nativeAuthStorage.ts) is UserDefaults-backed and has
-	     no manifest of its own, so that usage is declared here instead. -->
+	     not re-declare those. @capacitor/preferences is UserDefaults-backed
+	     and has no manifest of its own, so that usage is declared here
+	     instead — it remains installed for non-sensitive flags/settings
+	     (its native PreferencesPlugin is still compiled into the app,
+	     which is what a privacy-manifest audit actually needs to account
+	     for) even though no current app code calls it. Corrected here:
+	     an earlier version of this comment said it backed session storage
+	     — that moved to Keychain (@aparajita/capacitor-secure-storage) via
+	     src/lib/nativeAuthStorage.ts; Keychain APIs are not on Apple's
+	     required-reason list, so that change needs no entry here. -->
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>

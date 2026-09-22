@@ -302,4 +302,42 @@ describe("iOS overscroll/background fix — every layer uses the SAME GrowLink M
     const css = stripCssComments(readCss());
     expect(css).not.toMatch(/overscroll-behavior\s*:\s*none/);
   });
+
+  it("plugins.SplashScreen.backgroundColor also uses the SAME token — reconciled from a pre-existing #f8fbf9 mismatch for the TestFlight prep pass, no second near-identical colour left anywhere native", () => {
+    const config = stripJsComments(readSource("../../../capacitor.config.ts"));
+    const splashBlock = config.match(/SplashScreen:\s*\{([^}]*)\}/);
+    expect(splashBlock).not.toBeNull();
+    expect(splashBlock![1]).toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
+    expect(config).not.toMatch(/#f8fbf9/i);
+  });
+});
+
+describe("native/pushNotifications.ts — never logs the APNs device token itself", () => {
+  // Regression test for the release-prep fix: the "registration" listener
+  // used to log token.value directly (useful for verifying registration
+  // during Stage 2 device testing, but an APNs device token is a
+  // credential — it lets a server address push notifications to this
+  // specific device — and must never reach a console/log). Confirming
+  // it's gone from the SOURCE, not just from a manual read, so a future
+  // edit that reintroduces it (e.g. while wiring up the Stage 3 backend)
+  // fails a test instead of shipping quietly.
+  const source = stripJsComments(readSource("../../native/pushNotifications.ts"));
+
+  it("does not log token.value (or any other property access on the registration token) anywhere", () => {
+    expect(source).not.toMatch(/token\.value/);
+    expect(source).not.toMatch(/console\.(log|info|warn|error|debug)\([^)]*\btoken\b/);
+  });
+
+  it("still logs that registration happened, for on-device debugging, just without the token's actual value", () => {
+    expect(source).toMatch(/addListener\("registration",[\s\S]{0,120}console\.info/);
+  });
+
+  it("native/bootstrap.ts's initializeNativeApp() never calls requestPushPermissionAndRegister() — permission is requested only from an explicit future UI action, never automatically on launch", () => {
+    // requestPushPermissionAndRegister is DEFINED in pushNotifications.ts
+    // (that file's own declaration line legitimately contains this
+    // string, so it isn't asserted against here) but must never be
+    // CALLED from app bootstrap.
+    const bootstrapSource = stripJsComments(readSource("../../native/bootstrap.ts"));
+    expect(bootstrapSource).not.toMatch(/requestPushPermissionAndRegister/);
+  });
 });
