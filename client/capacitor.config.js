@@ -49,10 +49,13 @@ const config = {
     },
     plugins: {
         SplashScreen: {
-            // Hidden explicitly once the app has bootstrapped (see
-            // native/bootstrap.ts's SplashScreen.hide() call) rather than on a
-            // fixed timer, so a slow first load never flashes a bare white
-            // screen before Mobile Home is ready to render.
+            // Hidden explicitly once the app has bootstrapped AND at least
+            // ~1000ms of real wall-clock time have passed (see
+            // native/bootstrap.ts's SplashScreen.hide() call and the
+            // MINIMUM_SPLASH_VISIBLE_MS floor there) rather than on a fixed
+            // timer, so a slow first load never flashes a bare white screen
+            // before Mobile Home is ready — and a fast one still shows the
+            // splash for approximately one second, not a near-instant blink.
             launchAutoHide: false,
             // #f7f9f8 — the same GrowLink Mobile page-background token used
             // everywhere else natively (top-level backgroundColor above,
@@ -62,7 +65,17 @@ const config = {
             // inconsistency back when the overscroll fix first established
             // #f7f9f8 as the token; reconciled here so every native surface
             // uses the exact same colour, not two visually-near-identical ones.
-            backgroundColor: "#f7f9f8"
+            // Redundant with (but must match) LaunchScreen.storyboard's own
+            // root-view background — @capacitor/splash-screen's showSplash()
+            // (SplashScreen.swift) instantiates that SAME storyboard for its
+            // own overlay, then overwrites its view's backgroundColor with
+            // this config value, so the two are really one asset either way.
+            backgroundColor: "#f7f9f8",
+            // False already by the plugin's own Swift-side default
+            // (SplashScreenConfig.swift) — set explicitly so "no spinner" is a
+            // stated requirement here, not an assumption about an unread
+            // default.
+            showSpinner: false
         },
         // Overscroll/background fix (top half — the actual cause of the
         // black TOP overscroll the WKWebView/window fix above didn't reach):

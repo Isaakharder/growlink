@@ -312,6 +312,83 @@ describe("iOS overscroll/background fix — every layer uses the SAME GrowLink M
   });
 });
 
+describe("iOS launch/splash screen — Linked Leaf artwork, centered at 50% width, ~1s minimum cold-launch duration", () => {
+  // Regression coverage for the splash-screen release task: the OLD
+  // LaunchScreen.storyboard used a placeholder image AS the root view
+  // itself (contentMode="scaleAspectFill", filling/cropping the screen,
+  // with an adaptive systemBackgroundColor that renders white/black
+  // depending on system appearance). The NEW design is a plain view with
+  // an explicit #f7f9f8 background and a single centered, non-cropped
+  // (scaleAspectFit) image constrained to exactly 50% of the view's
+  // width with a pinned 1:1 aspect ratio.
+  const MOBILE_BG_HEX = "#f7f9f8";
+
+  it("LaunchScreen.storyboard's root view uses the exact #f7f9f8 RGB, not an adaptive systemColor (which would render black in Dark Mode)", () => {
+    const storyboard = readSource("../../../ios/App/App/Base.lproj/LaunchScreen.storyboard");
+    expect(storyboard).toMatch(
+      /<color key="backgroundColor" red="0\.96862745098039223" green="0\.97647058823529409" blue="0\.97254901960784324" alpha="1" colorSpace="custom" customColorSpace="sRGB"\/>/
+    );
+    expect(storyboard).not.toMatch(/systemColor="systemBackgroundColor"/);
+  });
+
+  it("LaunchScreen.storyboard's image view uses scaleAspectFit (never stretches or crops) and is centered on both axes", () => {
+    const storyboard = readSource("../../../ios/App/App/Base.lproj/LaunchScreen.storyboard");
+    expect(storyboard).toMatch(/<imageView[^>]*contentMode="scaleAspectFit"[^>]*image="Splash"/);
+    expect(storyboard).toMatch(/firstAttribute="centerX"[^\/]*secondAttribute="centerX"/);
+    expect(storyboard).toMatch(/firstAttribute="centerY"[^\/]*secondAttribute="centerY"/);
+  });
+
+  it("LaunchScreen.storyboard constrains the image to 50% of the view's width with a pinned 1:1 (square) aspect ratio", () => {
+    const storyboard = readSource("../../../ios/App/App/Base.lproj/LaunchScreen.storyboard");
+    expect(storyboard).toMatch(/firstAttribute="width"[^\/]*secondAttribute="width" multiplier="0\.5"/);
+    expect(storyboard).toMatch(/firstAttribute="height"[^\/]*secondAttribute="width" multiplier="1:1"/);
+  });
+
+  it("LaunchScreen.storyboard has no spinner, label, or animation element — just the one image view", () => {
+    const storyboard = readSource("../../../ios/App/App/Base.lproj/LaunchScreen.storyboard");
+    expect(storyboard).not.toMatch(/<activityIndicatorView/);
+    expect(storyboard).not.toMatch(/<label/);
+  });
+
+  it("Splash.imageset's Contents.json still points at the same three filenames cap sync/Xcode expect (only the PNG bytes changed, not the manifest)", () => {
+    const contents = JSON.parse(
+      readSource("../../../ios/App/App/Assets.xcassets/Splash.imageset/Contents.json")
+    );
+    const filenames = contents.images.map((img: { filename?: string }) => img.filename).filter(Boolean);
+    expect(filenames.sort()).toEqual(
+      ["splash-2732x2732-1.png", "splash-2732x2732-2.png", "splash-2732x2732.png"].sort()
+    );
+  });
+
+  it("capacitor.config.ts's SplashScreen plugin block sets showSpinner: false explicitly", () => {
+    const config = stripJsComments(readSource("../../../capacitor.config.ts"));
+    const splashBlock = config.match(/SplashScreen:\s*\{([^}]*)\}/);
+    expect(splashBlock).not.toBeNull();
+    expect(splashBlock![1]).toMatch(/showSpinner:\s*false/);
+    expect(splashBlock![1]).toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
+  });
+
+  it("native/bootstrap.ts enforces a ~1000ms minimum splash-visible floor before calling SplashScreen.hide(), so a fast cold launch doesn't blink the splash away instantly", () => {
+    const source = stripJsComments(readSource("../../native/bootstrap.ts"));
+    expect(source).toMatch(/MINIMUM_SPLASH_VISIBLE_MS\s*=\s*1000/);
+    // The delay must actually be awaited alongside the real bootstrap work
+    // (not fired-and-forgotten) and precede the hide() call, otherwise the
+    // floor does nothing.
+    const hideCallIndex = source.indexOf("SplashScreen.hide()");
+    const promiseAllIndex = source.indexOf("Promise.all([");
+    expect(hideCallIndex).toBeGreaterThan(-1);
+    expect(promiseAllIndex).toBeGreaterThan(-1);
+    expect(promiseAllIndex).toBeLessThan(hideCallIndex);
+    expect(source).toMatch(/Promise\.all\(\[[\s\S]*delay\(MINIMUM_SPLASH_VISIBLE_MS\)[\s\S]*?\]\)/);
+  });
+
+  it("native/bootstrap.ts calls SplashScreen.hide() only once — no second, visually-different splash stage introduced by this change", () => {
+    const source = stripJsComments(readSource("../../native/bootstrap.ts"));
+    const hideCalls = source.match(/SplashScreen\.hide\(\)/g) ?? [];
+    expect(hideCalls.length).toBe(1);
+  });
+});
+
 describe("native/pushNotifications.ts — never logs the APNs device token itself", () => {
   // Regression test for the release-prep fix: the "registration" listener
   // used to log token.value directly (useful for verifying registration
