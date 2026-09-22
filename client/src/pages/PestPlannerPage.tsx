@@ -2,17 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 import {
   type RateUnit,
+  type TargetVolumeUnit,
   LIQUID_RATE_OPTIONS,
   DRY_RATE_OPTIONS,
+  TARGET_VOLUME_UNIT_OPTIONS,
+  IMPERIAL_GALLON_TO_L,
   M2_TO_FT2,
   M2_TO_HECTARES,
   M2_TO_ACRES,
-  BAR_TO_PSI,
   roundTo,
   isDryChemical,
   computeChemicalMl,
   computeChemicalNeeded,
-  computeSprayVolumeL,
+  computeSprayVolumeLPerAcre,
+  convertTargetVolumeToLPerAcre,
   computeMixPlan
 } from "../utils/pestChemicalCalc";
 
@@ -273,10 +276,11 @@ export function PestPlannerPage() {
   const [sprayMethod, setSprayMethod] = useState<SprayMethod>("wanjet");
   const [bogaertsRobots, setBogaertsRobots] = useState<BogaertsRobot[]>([]);
   const [bogaertsNozzleTypes, setBogaertsNozzleTypes] = useState<BogaertsNozzleType[]>([]);
-  const [targetVolumeLHa, setTargetVolumeLHa] = useState("");
+  const [targetVolumeValue, setTargetVolumeValue] = useState("");
+  const [targetVolumeUnit, setTargetVolumeUnit] = useState<TargetVolumeUnit>("L_per_acre");
   const [activeNozzles, setActiveNozzles] = useState("");
   const [nozzleTypeId, setNozzleTypeId] = useState("");
-  const [pressureBar, setPressureBar] = useState("");
+  const [pressurePsi, setPressurePsi] = useState("");
   const [mixingMethod, setMixingMethod] = useState<"tote" | "robot">("tote");
   const [batchSizePreset, setBatchSizePreset] = useState<BatchSizePreset>("600");
   const [customBatchSizeL, setCustomBatchSizeL] = useState("");
@@ -673,20 +677,26 @@ export function PestPlannerPage() {
     [bogaertsNozzleTypes, nozzleTypeId]
   );
 
-  const pressurePsi = useMemo(() => {
-    const bar = Number(pressureBar);
-    return Number.isFinite(bar) && bar > 0 ? bar * BAR_TO_PSI : null;
-  }, [pressureBar]);
-
   const activeNozzlesNum = useMemo(() => {
     const n = Number(activeNozzles);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
   }, [activeNozzles]);
 
-  // SPRAY VOLUME — independent of the product rate; area x target L/ha only.
+  // Target Spray Volume can be entered as L/acre or imp gal/acre — confirmed
+  // directly from the physical Qii-Jet display, see IMPERIAL_GALLON_TO_L.
+  // Normalize to L/acre once here so every downstream calc only reasons in liters.
+  const targetVolumeLPerAcre = useMemo(() => {
+    const raw = Number(targetVolumeValue);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    return convertTargetVolumeToLPerAcre(raw, targetVolumeUnit);
+  }, [targetVolumeValue, targetVolumeUnit]);
+
+  // SPRAY VOLUME — independent of the product rate; area x target L/acre only.
+  // The Qii-Jet robot is calibrated in acres, so this must always be
+  // (area in acres) x (L/acre) — never a hectare-based step.
   const totalSolutionL = useMemo(
-    () => computeSprayVolumeL(totalM2, Number(targetVolumeLHa)),
-    [totalM2, targetVolumeLHa]
+    () => (targetVolumeLPerAcre != null ? computeSprayVolumeLPerAcre(totalM2, targetVolumeLPerAcre) : null),
+    [totalM2, targetVolumeLPerAcre]
   );
 
   const resolvedBatchSizeL = useMemo(() => {
@@ -721,11 +731,20 @@ export function PestPlannerPage() {
     );
   }
 
+  // Validates the normalized L/acre figure rather than the raw entry, so an
+  // imp gal/acre entry is checked against the same value the mixing plan uses.
+  //
+  // Nozzle type is deliberately NOT required. Nozzle flow calibration is not
+  // implemented in this version — nozzle type is recorded on the job for the
+  // robot operator's reference and feeds no calculation (see the note rendered
+  // under the Bogaerts Qii-Jet Setup card). Requiring it made Create Spray Job
+  // permanently un-clickable for any org with no pest_bogaerts_nozzle_types
+  // rows, because the Nozzle Type select is not rendered at all when that list
+  // is empty — there was no way to satisfy the condition from the UI.
   const bogaertsInputsValid =
-    Number.isFinite(Number(targetVolumeLHa)) && Number(targetVolumeLHa) > 0 &&
+    targetVolumeLPerAcre != null && targetVolumeLPerAcre > 0 &&
     Number.isInteger(activeNozzlesNum) && activeNozzlesNum >= 1 &&
-    nozzleTypeId !== "" &&
-    Number.isFinite(Number(pressureBar)) && Number(pressureBar) > 0 &&
+    Number.isFinite(Number(pressurePsi)) && Number(pressurePsi) > 0 &&
     resolvedBatchSizeL > 0;
 
   function handleSprayerChange(id: string) {
@@ -781,6 +800,35 @@ export function PestPlannerPage() {
     (applicationType === "drench" ||
       (sprayMethod === "wanjet" && selectedSprayer !== null) ||
       (sprayMethod === "bogaerts" && bogaertsInputsValid));
+
+  // A disabled Create Job button with no explanation is indistinguishable from
+  // a bug (and was one — see bogaertsInputsValid above). Name the single unmet
+  // condition so the operator can fix it without guessing. Returns null when
+  // the "Select a chemical" message above the button already covers it.
+  const createJobBlockedReason = useMemo(() => {
+    if (!showCreateJobCard || canCreateJob || chemicalId === "") return null;
+    if (applicationDate === "") return "Set an application date in Application Details.";
+    if (applicationType === "spray" && sprayMethod === "wanjet" && !selectedSprayer) {
+      return "Select a sprayer in Sprayer Details.";
+    }
+    if (applicationType === "spray" && sprayMethod === "bogaerts") {
+      if (targetVolumeLPerAcre == null || targetVolumeLPerAcre <= 0) {
+        return "Enter a Target Spray Volume greater than 0 in Bogaerts Qii-Jet Setup.";
+      }
+      if (!Number.isInteger(activeNozzlesNum) || activeNozzlesNum < 1) {
+        return "Enter Active Nozzles (1 or more) in Bogaerts Qii-Jet Setup.";
+      }
+      if (!Number.isFinite(Number(pressurePsi)) || Number(pressurePsi) <= 0) {
+        return "Enter a Pressure (PSI) greater than 0 in Bogaerts Qii-Jet Setup.";
+      }
+      if (resolvedBatchSizeL <= 0) return "Choose a batch size in Mixing.";
+    }
+    return null;
+  }, [
+    showCreateJobCard, canCreateJob, chemicalId, applicationDate, applicationType,
+    sprayMethod, selectedSprayer, targetVolumeLPerAcre, activeNozzlesNum,
+    pressurePsi, resolvedBatchSizeL
+  ]);
 
   const createJobLabel =
     applicationType === "spray"
@@ -852,9 +900,14 @@ export function PestPlannerPage() {
               nozzle_type_id: nozzleTypeId || null,
               nozzle_type_name: selectedNozzleType?.name ?? null,
               active_nozzles: activeNozzlesNum,
-              pressure_bar: Number(pressureBar) || null,
-              pressure_psi: pressurePsi,
-              target_volume_l_per_ha: Number(targetVolumeLHa) || null,
+              pressure_psi: Number(pressurePsi) || null,
+              // target_volume_value/target_volume_unit record exactly what the
+              // operator entered/selected (unambiguous audit trail);
+              // target_volume_l_per_acre is always the normalized-to-liters
+              // value used in the actual calculation — never reinterpret it.
+              target_volume_value: Number(targetVolumeValue) || null,
+              target_volume_unit: targetVolumeUnit,
+              target_volume_l_per_acre: targetVolumeLPerAcre,
               robot_ids: selectedRobotIds,
               robot_names: selectedRobots.map((r) => r.name)
             }
@@ -908,7 +961,9 @@ export function PestPlannerPage() {
             ...calc_base,
             type: "spray",
             method: "bogaerts",
-            target_volume_l_per_ha: Number(targetVolumeLHa) || null,
+            target_volume_value: Number(targetVolumeValue) || null,
+            target_volume_unit: targetVolumeUnit,
+            target_volume_l_per_acre: targetVolumeLPerAcre,
             // "tank_*" key names are the pre-existing generic batch-plan fields
             // (see pest_control_todos.calculation_snapshot) — reused here so a
             // Bogaerts batch plan is a batch plan, not a parallel shape.
@@ -2111,317 +2166,333 @@ export function PestPlannerPage() {
         </div>
       ) : null}
 
-      {/* ── Bogaerts Qii-Jet Setup ─────────────────────────── */}
+      {/* ── Bogaerts Qii-Jet Setup + Mixing — side by side on desktop ────── */}
       {applicationType === "spray" && sprayMethod === "bogaerts" ? (
-        <div className="coming-soon-card">
-          <h2>Bogaerts Qii-Jet Setup</h2>
+        <div className="pest-planner-card-grid-2">
+          <div className="coming-soon-card pest-planner-compact-card">
+            <h2>Bogaerts Qii-Jet Setup</h2>
 
-          <div className="varieties-form" style={{ marginTop: "0.65rem", gridTemplateColumns: "1fr" }}>
-            <label>
-              Target Spray Volume (L/ha)
-              <input
-                type="number"
-                min="0"
-                step="any"
-                placeholder="e.g. 1000"
-                value={targetVolumeLHa}
-                onChange={(e) => setTargetVolumeLHa(e.target.value)}
-              />
-            </label>
-            <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.1rem 0 0" }}>
-              The total carrier/spray solution to apply per hectare — independent of the
-              product rate above. This is not the chemical dose.
-            </p>
-
-            <label style={{ marginTop: "0.75rem" }}>
-              Active Nozzles
-              <input
-                type="number"
-                min="1"
-                step="1"
-                placeholder="e.g. 14"
-                value={activeNozzles}
-                onChange={(e) => setActiveNozzles(e.target.value)}
-              />
-            </label>
-
-            <label style={{ marginTop: "0.75rem" }}>
-              Nozzle Type
-              {bogaertsNozzleTypes.filter((n) => n.active).length === 0 ? (
-                <p style={{ fontSize: "0.82em", color: "var(--text-muted)", margin: "0.3rem 0 0" }}>
-                  No nozzle types configured. Add them in Pest Control Setup.
-                </p>
-              ) : (
-                <select value={nozzleTypeId} onChange={(e) => setNozzleTypeId(e.target.value)}>
-                  <option value="">Select a nozzle type…</option>
-                  {bogaertsNozzleTypes.filter((n) => n.active).map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.name}
-                      {n.spray_tip_code ? ` (${n.spray_tip_code})` : ""}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </label>
-
-            <label style={{ marginTop: "0.75rem" }}>
-              Pressure (bar)
-              <input
-                type="number"
-                min="0"
-                step="0.1"
-                placeholder="e.g. 10"
-                value={pressureBar}
-                onChange={(e) => setPressureBar(e.target.value)}
-              />
-            </label>
-            {pressurePsi != null ? (
-              <p style={{ fontSize: "0.82em", color: "var(--text-muted)", margin: "0.1rem 0 0" }}>
-                ≈ {roundTo(pressurePsi, 1)} psi
+            <div className="varieties-form" style={{ marginTop: "0.55rem", gridTemplateColumns: "minmax(0, 1fr)", gap: "0.5rem" }}>
+              <label style={{ minWidth: 0 }}>
+                Target Spray Volume
+                <div style={{ display: "flex", gap: "0.4rem", minWidth: 0 }}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 400"
+                    value={targetVolumeValue}
+                    onChange={(e) => setTargetVolumeValue(e.target.value)}
+                    style={{ flex: "1 1 auto", minWidth: 0 }}
+                  />
+                  <select
+                    value={targetVolumeUnit}
+                    onChange={(e) => setTargetVolumeUnit(e.target.value as TargetVolumeUnit)}
+                    style={{ flex: "0 0 auto", width: "9rem" }}
+                  >
+                    {TARGET_VOLUME_UNIT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </label>
+              <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.05rem 0 0" }}>
+                The total carrier/spray solution to apply per acre — independent of the
+                product rate above. This is not the chemical dose.
+                {targetVolumeUnit === "imp_gal_per_acre" && targetVolumeLPerAcre != null
+                  ? ` imp gal/acre is Imperial gallons (1 imp gal = ${IMPERIAL_GALLON_TO_L} L) — equal to ${roundTo(targetVolumeLPerAcre, 2).toLocaleString()} L/acre.`
+                  : ""}
               </p>
-            ) : null}
+
+              <label>
+                Active Nozzles
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="e.g. 14"
+                  value={activeNozzles}
+                  onChange={(e) => setActiveNozzles(e.target.value)}
+                />
+              </label>
+
+              <label>
+                Nozzle Type
+                {bogaertsNozzleTypes.filter((n) => n.active).length === 0 ? (
+                  <p style={{ fontSize: "0.82em", color: "var(--text-muted)", margin: "0.25rem 0 0" }}>
+                    No nozzle types configured. Add them in Pest Control Setup.
+                  </p>
+                ) : (
+                  <select value={nozzleTypeId} onChange={(e) => setNozzleTypeId(e.target.value)}>
+                    <option value="">Select a nozzle type…</option>
+                    {bogaertsNozzleTypes.filter((n) => n.active).map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.name}
+                        {n.spray_tip_code ? ` (${n.spray_tip_code})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </label>
+
+              <label>
+                Pressure (PSI)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  placeholder="e.g. 126"
+                  value={pressurePsi}
+                  onChange={(e) => setPressurePsi(e.target.value)}
+                />
+              </label>
+            </div>
+
+            <p style={{ fontSize: "0.78em", color: "var(--text-muted)", marginTop: "0.6rem" }}>
+              Nozzle flow calibration is not yet configured in GrowLink — active nozzles, nozzle
+              type, and pressure are recorded here for the robot setup and job record, but are
+              not used to validate or calculate flow in this version.
+            </p>
           </div>
 
-          <p style={{ fontSize: "0.78em", color: "var(--text-muted)", marginTop: "0.75rem" }}>
-            Nozzle flow calibration is not yet configured in GrowLink — active nozzles, nozzle
-            type, and pressure are recorded here for the robot setup and job record, but are
-            not used to validate or calculate flow in this version.
-          </p>
-        </div>
-      ) : null}
+          {/* ── Bogaerts Mixing ────────────────────────────────── */}
+          <div className="coming-soon-card pest-planner-compact-card">
+            <h2>Mixing</h2>
 
-      {/* ── Bogaerts Mixing ────────────────────────────────── */}
-      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
-        <div className="coming-soon-card">
-          <h2>Mixing</h2>
-
-          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.75rem" }}>
-            {(["tote", "robot"] as const).map((method) => (
-              <button
-                key={method}
-                type="button"
-                onClick={() => setMixingMethod(method)}
-                style={{
-                  padding: "0.3rem 0.85rem",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border)",
-                  background: mixingMethod === method ? "var(--brand)" : "var(--surface)",
-                  color: mixingMethod === method ? "#fff" : "var(--text)",
-                  fontWeight: mixingMethod === method ? 600 : 400,
-                  cursor: "pointer",
-                  fontSize: "0.85em"
-                }}
-              >
-                {method === "tote" ? "Tote Mix" : "Robot Mix"}
-              </button>
-            ))}
-          </div>
-          <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.4rem 0 0" }}>
-            {mixingMethod === "tote"
-              ? "Mixed in a separate tote, then used to fill robot tanks."
-              : "Mixed directly in the robot's onboard tank."}
-          </p>
-
-          <div style={{ marginTop: "0.85rem" }}>
-            <p style={{ fontWeight: 600, fontSize: "0.9em", margin: "0 0 0.4rem" }}>Batch Size</p>
-            <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-              {(["1000", "600", "300", "custom"] as const).map((preset) => (
+            <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.6rem" }}>
+              {(["tote", "robot"] as const).map((method) => (
                 <button
-                  key={preset}
+                  key={method}
                   type="button"
-                  onClick={() => setBatchSizePreset(preset)}
+                  onClick={() => setMixingMethod(method)}
                   style={{
                     padding: "0.3rem 0.85rem",
                     borderRadius: "8px",
                     border: "1px solid var(--border)",
-                    background: batchSizePreset === preset ? "var(--brand)" : "var(--surface)",
-                    color: batchSizePreset === preset ? "#fff" : "var(--text)",
-                    fontWeight: batchSizePreset === preset ? 600 : 400,
+                    background: mixingMethod === method ? "var(--brand)" : "var(--surface)",
+                    color: mixingMethod === method ? "#fff" : "var(--text)",
+                    fontWeight: mixingMethod === method ? 600 : 400,
                     cursor: "pointer",
                     fontSize: "0.85em"
                   }}
                 >
-                  {preset === "custom" ? "Custom" : `${preset} L`}
+                  {method === "tote" ? "Tote Mix" : "Robot Mix"}
                 </button>
               ))}
             </div>
-            {batchSizePreset === "custom" ? (
-              <label style={{ display: "block", marginTop: "0.5rem", maxWidth: "200px" }}>
-                Custom batch size (L)
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  placeholder="e.g. 450"
-                  value={customBatchSizeL}
-                  onChange={(e) => setCustomBatchSizeL(e.target.value)}
-                />
-              </label>
-            ) : null}
-          </div>
-
-          <div style={{ marginTop: "0.85rem" }}>
-            <p style={{ fontWeight: 600, fontSize: "0.9em", margin: "0 0 0.4rem" }}>
-              Robots in Use <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional — for reference only)</span>
+            <p style={{ fontSize: "0.78em", color: "var(--text-muted)", margin: "0.35rem 0 0" }}>
+              {mixingMethod === "tote"
+                ? "Mixed in a separate tote, then used to fill robot tanks."
+                : "Mixed directly in the robot's onboard tank."}
             </p>
-            {bogaertsRobots.filter((r) => r.active).length === 0 ? (
-              <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
-                No Bogaerts robots configured. Add them in Pest Control Setup.
-              </p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                {bogaertsRobots.filter((r) => r.active).map((r) => (
-                  <label key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.88em", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedRobotIds.includes(r.id)}
-                      onChange={() => toggleRobot(r.id)}
-                    />
-                    {r.name} ({r.tank_volume_liters} L)
-                  </label>
+
+            <div style={{ marginTop: "0.7rem" }}>
+              <p style={{ fontWeight: 600, fontSize: "0.9em", margin: "0 0 0.35rem" }}>Batch Size</p>
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                {(["1000", "600", "300", "custom"] as const).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setBatchSizePreset(preset)}
+                    style={{
+                      padding: "0.3rem 0.85rem",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border)",
+                      background: batchSizePreset === preset ? "var(--brand)" : "var(--surface)",
+                      color: batchSizePreset === preset ? "#fff" : "var(--text)",
+                      fontWeight: batchSizePreset === preset ? 600 : 400,
+                      cursor: "pointer",
+                      fontSize: "0.85em"
+                    }}
+                  >
+                    {preset === "custom" ? "Custom" : `${preset} L`}
+                  </button>
                 ))}
               </div>
-            )}
-            {selectedRobots.length > 0 ? (
-              <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-                {selectedRobots.length} robot{selectedRobots.length !== 1 ? "s" : ""} × onboard tank
-                {" = "}
-                <strong>{roundTo(totalOnboardCapacityL, 0)} L</strong> total onboard capacity
-                {resolvedBatchSizeL > 0 && Math.abs(resolvedBatchSizeL - totalOnboardCapacityL) < 0.001
-                  ? ` — this batch size is one complete fill of ${selectedRobots.length === 1 ? "this robot" : "both robots"}.`
-                  : ""}
+              {batchSizePreset === "custom" ? (
+                <label style={{ display: "block", marginTop: "0.5rem", maxWidth: "200px" }}>
+                  Custom batch size (L)
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 450"
+                    value={customBatchSizeL}
+                    onChange={(e) => setCustomBatchSizeL(e.target.value)}
+                  />
+                </label>
+              ) : null}
+            </div>
+
+            <div style={{ marginTop: "0.7rem" }}>
+              <p style={{ fontWeight: 600, fontSize: "0.9em", margin: "0 0 0.35rem" }}>
+                Robots in Use <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional — for reference only)</span>
               </p>
+              {bogaertsRobots.filter((r) => r.active).length === 0 ? (
+                <p style={{ fontSize: "0.85em", color: "var(--text-muted)" }}>
+                  No Bogaerts robots configured. Add them in Pest Control Setup.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                  {bogaertsRobots.filter((r) => r.active).map((r) => (
+                    <label key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.88em", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedRobotIds.includes(r.id)}
+                        onChange={() => toggleRobot(r.id)}
+                      />
+                      {r.name} ({r.tank_volume_liters} L)
+                    </label>
+                  ))}
+                </div>
+              )}
+              {selectedRobots.length > 0 ? (
+                <p style={{ fontSize: "0.82em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                  {selectedRobots.length} robot{selectedRobots.length !== 1 ? "s" : ""} × onboard tank
+                  {" = "}
+                  <strong>{roundTo(totalOnboardCapacityL, 0)} L</strong> total onboard capacity
+                  {resolvedBatchSizeL > 0 && Math.abs(resolvedBatchSizeL - totalOnboardCapacityL) < 0.001
+                    ? ` — this batch size is one complete fill of ${selectedRobots.length === 1 ? "this robot" : "both robots"}.`
+                    : ""}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Bogaerts results: JOB TOTAL / MIXING INSTRUCTIONS — side by side ── */}
+      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
+        <div className="pest-planner-card-grid-2">
+          <div className="coming-soon-card pest-planner-compact-card">
+            <h2>Job Total</h2>
+            {totalM2 <= 0 ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                Select a target area to calculate job totals.
+              </p>
+            ) : (
+              <div className="greenhouse-group-stats" style={{ marginTop: "0.55rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Area (m²)</span>
+                  <span className="greenhouse-stat-value">{roundTo(totalM2, 2).toLocaleString()}</span>
+                </div>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Area (ha)</span>
+                  <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_HECTARES, 4)}</span>
+                </div>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Area (acres)</span>
+                  <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_ACRES, 4)}</span>
+                </div>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Area (ft²)</span>
+                  <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}</span>
+                </div>
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Total chemical required</span>
+                  <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                    {chemicalNeededResult
+                      ? `${roundTo(chemicalNeededResult.ml, 0).toLocaleString()} ${chemicalNeededResult.unit} (${roundTo(chemicalNeededResult.L, 3)} ${chemicalNeededResult.unitLarge})`
+                      : "Enter a chemical rate above."}
+                  </span>
+                </div>
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Total solution required</span>
+                  <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                    {totalSolutionL != null
+                      ? `${roundTo(totalSolutionL, 1).toLocaleString()} L`
+                      : "Enter a Target Spray Volume above."}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="coming-soon-card pest-planner-compact-card">
+            <h2>Mixing Instructions</h2>
+            {!chemicalNeededResult || totalSolutionL == null || totalSolutionL <= 0 ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                Enter a chemical rate and Target Spray Volume to calculate the mixing plan.
+              </p>
+            ) : resolvedBatchSizeL <= 0 ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                Select or enter a batch size to calculate the mixing plan.
+              </p>
+            ) : bogaertsMixPlan ? (
+              <div className="greenhouse-group-stats" style={{ marginTop: "0.55rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Batch size</span>
+                  <span className="greenhouse-stat-value">{roundTo(resolvedBatchSizeL, 1)} L</span>
+                </div>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Concentration</span>
+                  <span className="greenhouse-stat-value">
+                    {roundTo(bogaertsMixPlan.chemPerLiterMl, 3)} {chemicalNeededResult.isDry ? "g/L" : "ml/L"}
+                  </span>
+                </div>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Full batches</span>
+                  <span className="greenhouse-stat-value">{bogaertsMixPlan.fullBatchCount}</span>
+                </div>
+                <div className="greenhouse-stat-item">
+                  <span className="greenhouse-stat-label">Chemical per full batch</span>
+                  <span className="greenhouse-stat-value">
+                    {roundTo(bogaertsMixPlan.chemPerFullBatchMl, 1)} {chemicalNeededResult.isDry ? "g" : "ml"}
+                  </span>
+                </div>
+                {!bogaertsMixPlan.isLastFull ? (
+                  <>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Final batch</span>
+                      <span className="greenhouse-stat-value">{roundTo(bogaertsMixPlan.finalBatchVolumeL, 1)} L</span>
+                    </div>
+                    <div className="greenhouse-stat-item">
+                      <span className="greenhouse-stat-label">Chemical for final batch</span>
+                      <span className="greenhouse-stat-value">
+                        {roundTo(bogaertsMixPlan.chemForFinalBatchMl, 1)} {chemicalNeededResult.isDry ? "g" : "ml"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                    <span className="greenhouse-stat-label">Final batch</span>
+                    <span className="greenhouse-stat-value">Divides evenly — every batch is a full {roundTo(resolvedBatchSizeL, 1)} L batch.</span>
+                  </div>
+                )}
+                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
+                  <span className="greenhouse-stat-label">Total batches</span>
+                  <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
+                    {bogaertsMixPlan.totalBatchCount}
+                  </span>
+                </div>
+              </div>
             ) : null}
           </div>
         </div>
       ) : null}
 
-      {/* ── Bogaerts results: JOB TOTAL / MIXING INSTRUCTIONS / ROBOT SETUP ── */}
+      {/* ── Bogaerts Robot Setup — small standalone summary, not full-width ── */}
       {applicationType === "spray" && sprayMethod === "bogaerts" ? (
-        <div className="coming-soon-card">
-          <h2>Job Total</h2>
-          {totalM2 <= 0 ? (
-            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-              Select a target area to calculate job totals.
-            </p>
-          ) : (
-            <div className="greenhouse-group-stats" style={{ marginTop: "0.65rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Area (m²)</span>
-                <span className="greenhouse-stat-value">{roundTo(totalM2, 2).toLocaleString()}</span>
-              </div>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Area (ha)</span>
-                <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_HECTARES, 4)}</span>
-              </div>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Area (acres)</span>
-                <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_ACRES, 4)}</span>
-              </div>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Area (ft²)</span>
-                <span className="greenhouse-stat-value">{roundTo(totalM2 * M2_TO_FT2, 1).toLocaleString()}</span>
-              </div>
-              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
-                <span className="greenhouse-stat-label">Total chemical required</span>
-                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
-                  {chemicalNeededResult
-                    ? `${roundTo(chemicalNeededResult.ml, 0).toLocaleString()} ${chemicalNeededResult.unit} (${roundTo(chemicalNeededResult.L, 3)} ${chemicalNeededResult.unitLarge})`
-                    : "Enter a chemical rate above."}
-                </span>
-              </div>
-              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
-                <span className="greenhouse-stat-label">Total solution required</span>
-                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
-                  {totalSolutionL != null
-                    ? `${roundTo(totalSolutionL, 1).toLocaleString()} L`
-                    : "Enter a Target Spray Volume above."}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
-        <div className="coming-soon-card">
-          <h2>Mixing Instructions</h2>
-          {!chemicalNeededResult || totalSolutionL == null || totalSolutionL <= 0 ? (
-            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-              Enter a chemical rate and Target Spray Volume to calculate the mixing plan.
-            </p>
-          ) : resolvedBatchSizeL <= 0 ? (
-            <p style={{ fontSize: "0.85em", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-              Select or enter a batch size to calculate the mixing plan.
-            </p>
-          ) : bogaertsMixPlan ? (
-            <div className="greenhouse-group-stats" style={{ marginTop: "0.65rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Batch size</span>
-                <span className="greenhouse-stat-value">{roundTo(resolvedBatchSizeL, 1)} L</span>
-              </div>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Concentration</span>
-                <span className="greenhouse-stat-value">
-                  {roundTo(bogaertsMixPlan.chemPerLiterMl, 3)} {chemicalNeededResult.isDry ? "g/L" : "ml/L"}
-                </span>
-              </div>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Full batches</span>
-                <span className="greenhouse-stat-value">{bogaertsMixPlan.fullBatchCount}</span>
-              </div>
-              <div className="greenhouse-stat-item">
-                <span className="greenhouse-stat-label">Chemical per full batch</span>
-                <span className="greenhouse-stat-value">
-                  {roundTo(bogaertsMixPlan.chemPerFullBatchMl, 1)} {chemicalNeededResult.isDry ? "g" : "ml"}
-                </span>
-              </div>
-              {!bogaertsMixPlan.isLastFull ? (
-                <>
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Final batch</span>
-                    <span className="greenhouse-stat-value">{roundTo(bogaertsMixPlan.finalBatchVolumeL, 1)} L</span>
-                  </div>
-                  <div className="greenhouse-stat-item">
-                    <span className="greenhouse-stat-label">Chemical for final batch</span>
-                    <span className="greenhouse-stat-value">
-                      {roundTo(bogaertsMixPlan.chemForFinalBatchMl, 1)} {chemicalNeededResult.isDry ? "g" : "ml"}
-                    </span>
-                  </div>
-                </>
-              ) : (
-                <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
-                  <span className="greenhouse-stat-label">Final batch</span>
-                  <span className="greenhouse-stat-value">Divides evenly — every batch is a full {roundTo(resolvedBatchSizeL, 1)} L batch.</span>
-                </div>
-              )}
-              <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
-                <span className="greenhouse-stat-label">Total batches</span>
-                <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
-                  {bogaertsMixPlan.totalBatchCount}
-                </span>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {applicationType === "spray" && sprayMethod === "bogaerts" ? (
-        <div className="coming-soon-card">
+        <div className="coming-soon-card pest-planner-compact-card pest-planner-narrow-card">
           <h2>Bogaerts Robot Setup</h2>
-          <div className="greenhouse-group-stats" style={{ marginTop: "0.65rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          <div className="greenhouse-group-stats" style={{ marginTop: "0.55rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <div className="greenhouse-stat-item" style={{ gridColumn: "1 / -1" }}>
               <span className="greenhouse-stat-label">Application Volume</span>
               <span className="greenhouse-stat-value" style={{ fontSize: "1.1rem", color: "var(--brand)" }}>
-                {targetVolumeLHa ? `${targetVolumeLHa} L/ha` : "—"}
+                {targetVolumeValue
+                  ? `${targetVolumeValue} ${targetVolumeUnit === "imp_gal_per_acre" ? "imp gal/acre" : "L/acre"}`
+                  : "—"}
               </span>
+              {targetVolumeUnit === "imp_gal_per_acre" && targetVolumeLPerAcre != null ? (
+                <span style={{ fontSize: "0.78em", color: "var(--text-muted)" }}>
+                  ({roundTo(targetVolumeLPerAcre, 2).toLocaleString()} L/acre)
+                </span>
+              ) : null}
             </div>
             <div className="greenhouse-stat-item">
               <span className="greenhouse-stat-label">Pressure</span>
               <span className="greenhouse-stat-value">
-                {pressureBar
-                  ? `${pressureBar} bar${pressurePsi != null ? ` / ~${roundTo(pressurePsi, 0)} psi` : ""}`
-                  : "—"}
+                {pressurePsi ? `${pressurePsi} PSI` : "—"}
               </span>
             </div>
             <div className="greenhouse-stat-item">
@@ -2475,6 +2546,11 @@ export function PestPlannerPage() {
             {todoSavedMessage ? (
               <p style={{ fontSize: "0.85em", color: "var(--brand)", margin: 0 }}>
                 {todoSavedMessage}
+              </p>
+            ) : null}
+            {createJobBlockedReason ? (
+              <p style={{ fontSize: "0.85em", color: "var(--text-muted)", margin: 0 }}>
+                {createJobBlockedReason}
               </p>
             ) : null}
           </div>
