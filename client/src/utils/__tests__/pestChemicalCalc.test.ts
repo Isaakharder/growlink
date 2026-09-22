@@ -1,6 +1,16 @@
-// Run with tsx's test integration (tsx lives in server/node_modules; the
-// client package has no test runner configured):
-//   cd server && node_modules/.bin/tsx --test ../client/src/utils/__tests__/pestChemicalCalc.test.ts
+// Deliberately node:test, not Vitest — run via:
+//   npm run test:node   (from client/)
+// or directly:
+//   npx tsx --test src/utils/__tests__/pestChemicalCalc.test.ts
+// (tsx's own CLI, not `node --require tsx/cjs` — client/package.json is
+// "type": "module", so relative imports need real ESM resolution, which
+// only tsx's CLI loader hook provides here; the CJS require-hook server's
+// own node:test files use doesn't apply to this package).
+// client/vitest.config.ts excludes this file by exact path so `npm test`
+// (Vitest) never tries to collect it — node:test's `test()`/`describe()`
+// registration isn't something Vitest's collector recognizes, which is
+// what previously surfaced as a "No test suite found" collection error
+// rather than these tests actually running or failing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
