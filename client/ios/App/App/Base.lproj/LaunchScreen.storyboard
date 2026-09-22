@@ -11,34 +11,47 @@
         <scene sceneID="EHf-IW-A2E">
             <objects>
                 <viewController id="01J-lp-oVM" sceneMemberID="viewController">
-                    <!-- Plain #f7f9f8 root view (GrowLink Mobile's established page-background
-                         token — same value as capacitor.config.ts's backgroundColor,
-                         plugins.SplashScreen.backgroundColor, plugins.StatusBar.backgroundColor,
-                         body.native-shell in index.css, and SceneDelegate.swift's window
-                         fallback) with a single centered image view showing the Linked Leaf
-                         icon (the exact same asset as AppIcon.appiconset — see
-                         Assets.xcassets/Splash.imageset), constrained to 50% of the view's
-                         width with a 1:1 aspect ratio (contentMode="scaleAspectFit", so it
-                         can never stretch or crop) and centered both axes. This same
-                         storyboard is what both the OS-level launch screen AND
-                         @capacitor/splash-screen's own overlay render (see
-                         SplashScreen.swift's buildViews(), which instantiates this exact
-                         file) — one asset, one layout, so there is nothing for the two
-                         stages to visibly disagree about. -->
+                    <!-- Root view filled edge-to-edge with #03795E — the exact GrowLink
+                         green AppIcon-512@2x.png's own background is painted with (sampled
+                         directly from that file's corner/edge pixels: RGB(3,121,94)). This
+                         is deliberately NOT #f7f9f8 (GrowLink Mobile's general native
+                         page-background token, used everywhere else — see
+                         capacitor.config.ts's top-level backgroundColor and
+                         plugins.StatusBar.backgroundColor, body.native-shell in index.css,
+                         SceneDelegate.swift's window fallback): the splash's one job is to
+                         look like the AppIcon's own artwork filling the whole screen, not a
+                         shrunken icon tile sitting on an unrelated colour, so it needs the
+                         icon's own background colour, exactly.
+                         The single centered image view shows Splash.imageset — NOT a copy
+                         of the AppIcon PNG, but a dedicated, separately-generated asset
+                         containing ONLY the white chain-link-and-plant mark with genuine
+                         alpha transparency where AppIcon's green used to be (chroma-keyed
+                         out of the AppIcon artwork, AppIcon itself never touched/altered).
+                         Constrained to 50% of the view's width with a 172:175 (height:width)
+                         aspect ratio — the mark's own cropped pixel dimensions (700x688),
+                         not a square 1:1, since the isolated mark's bounding box isn't
+                         perfectly square — via contentMode="scaleAspectFit" so it can never
+                         stretch or crop, centered on both axes. This same storyboard is what
+                         both the OS-level launch screen AND @capacitor/splash-screen's own
+                         overlay render (see SplashScreen.swift's buildViews(), which
+                         instantiates this exact file) — one asset, one layout, so there is
+                         nothing for the two stages to visibly disagree about, and no square
+                         icon tile, border, shadow, or colour mismatch is possible behind the
+                         artwork: the fill IS the background, all the way to the edges. -->
                     <view key="view" contentMode="scaleToFill" id="Ydg-fD-yQX">
                         <rect key="frame" x="0.0" y="0.0" width="375" height="667"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
                             <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="Splash" translatesAutoresizingMaskIntoConstraints="NO" id="snD-IY-ifK">
-                                <rect key="frame" x="93.5" y="308.5" width="188" height="188"/>
+                                <rect key="frame" x="93.5" y="313.5" width="188" height="185"/>
                             </imageView>
                         </subviews>
-                        <color key="backgroundColor" red="0.96862745098039223" green="0.97647058823529409" blue="0.97254901960784324" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <color key="backgroundColor" red="0.011764705882352941" green="0.4745098039215686" blue="0.3686274509803922" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
                             <constraint firstItem="snD-IY-ifK" firstAttribute="centerX" secondItem="Ydg-fD-yQX" secondAttribute="centerX" id="L2h-eS-cx1"/>
                             <constraint firstItem="snD-IY-ifK" firstAttribute="centerY" secondItem="Ydg-fD-yQX" secondAttribute="centerY" id="R7q-3k-cy2"/>
                             <constraint firstItem="snD-IY-ifK" firstAttribute="width" secondItem="Ydg-fD-yQX" secondAttribute="width" multiplier="0.5" id="W9x-vB-wd3"/>
-                            <constraint firstItem="snD-IY-ifK" firstAttribute="height" secondItem="snD-IY-ifK" secondAttribute="width" multiplier="1:1" id="H4m-tN-ht4"/>
+                            <constraint firstItem="snD-IY-ifK" firstAttribute="height" secondItem="snD-IY-ifK" secondAttribute="width" multiplier="172:175" id="H4m-tN-ht4"/>
                         </constraints>
                     </view>
                 </viewController>
@@ -48,6 +61,6 @@
         </scene>
     </scenes>
     <resources>
-        <image name="Splash" width="1024" height="1024"/>
+        <image name="Splash" width="700" height="688"/>
     </resources>
 </document>

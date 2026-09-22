@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +11,13 @@ import { describe, expect, it } from "vitest";
 // stray deep link (or a future edit) to accidentally reach.
 function readSource(relativePath: string): string {
   return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+}
+
+// For binary assets (PNGs) — reading as utf8 would corrupt the bytes, which
+// matters here because these are read for their raw IHDR header fields and
+// SHA-256 checksums, not as text.
+function readBinarySource(relativePath: string): Buffer {
+  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)));
 }
 
 // Explanatory comments in these files legitimately mention the exact
@@ -303,32 +311,39 @@ describe("iOS overscroll/background fix — every layer uses the SAME GrowLink M
     expect(css).not.toMatch(/overscroll-behavior\s*:\s*none/);
   });
 
-  it("plugins.SplashScreen.backgroundColor also uses the SAME token — reconciled from a pre-existing #f8fbf9 mismatch for the TestFlight prep pass, no second near-identical colour left anywhere native", () => {
+  it("plugins.SplashScreen.backgroundColor deliberately uses the AppIcon's own green (#03795E), NOT the general #f7f9f8 token — the splash fills the screen with the icon's own background colour behind its isolated mark, a genuine, intentional exception to \"every layer uses the same token\"", () => {
     const config = stripJsComments(readSource("../../../capacitor.config.ts"));
     const splashBlock = config.match(/SplashScreen:\s*\{([^}]*)\}/);
     expect(splashBlock).not.toBeNull();
-    expect(splashBlock![1]).toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
+    expect(splashBlock![1]).toMatch(/backgroundColor:\s*["']#03795E["']/);
+    expect(splashBlock![1]).not.toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
     expect(config).not.toMatch(/#f8fbf9/i);
   });
 });
 
-describe("iOS launch/splash screen — Linked Leaf artwork, centered at 50% width, ~1s minimum cold-launch duration", () => {
-  // Regression coverage for the splash-screen release task: the OLD
-  // LaunchScreen.storyboard used a placeholder image AS the root view
-  // itself (contentMode="scaleAspectFill", filling/cropping the screen,
-  // with an adaptive systemBackgroundColor that renders white/black
-  // depending on system appearance). The NEW design is a plain view with
-  // an explicit #f7f9f8 background and a single centered, non-cropped
-  // (scaleAspectFit) image constrained to exactly 50% of the view's
-  // width with a pinned 1:1 aspect ratio.
-  const MOBILE_BG_HEX = "#f7f9f8";
+describe("iOS launch/splash screen — isolated Linked Leaf mark on the AppIcon's own green, full-screen, centered at 50% width, ~1s minimum cold-launch duration", () => {
+  // Regression coverage, second pass. The first pass (an earlier commit on
+  // this same branch) replaced the old placeholder with a centered copy of
+  // the FULL square AppIcon on the general #f7f9f8 page-background token —
+  // which read as a shrunken Home Screen icon tile floating on the wrong
+  // colour, not a full-screen brand moment. This pass fixes that: the
+  // launch screen's root view is now filled edge-to-edge with the AppIcon's
+  // OWN green (#03795E, sampled from AppIcon-512@2x.png itself), and the
+  // image view shows a dedicated, separately-generated Splash.imageset
+  // asset containing ONLY the white chain-link-and-plant mark with genuine
+  // alpha transparency where AppIcon's green background used to be — never
+  // a copy of the full AppIcon PNG. AppIcon-512@2x.png itself is never
+  // touched by this isolation process (see the checksum-pinning test
+  // below).
+  const APPICON_GREEN_HEX = "#03795E";
 
-  it("LaunchScreen.storyboard's root view uses the exact #f7f9f8 RGB, not an adaptive systemColor (which would render black in Dark Mode)", () => {
+  it("LaunchScreen.storyboard's root view is filled with the exact AppIcon green (#03795E), not the general #f7f9f8 token and not an adaptive systemColor (which would render black in Dark Mode)", () => {
     const storyboard = readSource("../../../ios/App/App/Base.lproj/LaunchScreen.storyboard");
     expect(storyboard).toMatch(
-      /<color key="backgroundColor" red="0\.96862745098039223" green="0\.97647058823529409" blue="0\.97254901960784324" alpha="1" colorSpace="custom" customColorSpace="sRGB"\/>/
+      /<color key="backgroundColor" red="0\.011764705882352941" green="0\.4745098039215686" blue="0\.3686274509803922" alpha="1" colorSpace="custom" customColorSpace="sRGB"\/>/
     );
     expect(storyboard).not.toMatch(/systemColor="systemBackgroundColor"/);
+    expect(storyboard).not.toMatch(/0\.96862745098039223/); // the old #f7f9f8 red channel — must be fully gone, not just superseded
   });
 
   it("LaunchScreen.storyboard's image view uses scaleAspectFit (never stretches or crops) and is centered on both axes", () => {
@@ -338,10 +353,15 @@ describe("iOS launch/splash screen — Linked Leaf artwork, centered at 50% widt
     expect(storyboard).toMatch(/firstAttribute="centerY"[^\/]*secondAttribute="centerY"/);
   });
 
-  it("LaunchScreen.storyboard constrains the image to 50% of the view's width with a pinned 1:1 (square) aspect ratio", () => {
+  it("LaunchScreen.storyboard constrains the image to 50% of the view's width with the isolated mark's real (non-square) 172:175 aspect ratio, matching its 700x688 cropped pixel dimensions", () => {
     const storyboard = readSource("../../../ios/App/App/Base.lproj/LaunchScreen.storyboard");
     expect(storyboard).toMatch(/firstAttribute="width"[^\/]*secondAttribute="width" multiplier="0\.5"/);
-    expect(storyboard).toMatch(/firstAttribute="height"[^\/]*secondAttribute="width" multiplier="1:1"/);
+    expect(storyboard).toMatch(/firstAttribute="height"[^\/]*secondAttribute="width" multiplier="172:175"/);
+    const resourceImage = storyboard.match(/<image name="Splash" width="(\d+)" height="(\d+)"\/>/);
+    expect(resourceImage).not.toBeNull();
+    const [, width, height] = resourceImage!;
+    expect(width).toBe("700");
+    expect(height).toBe("688");
   });
 
   it("LaunchScreen.storyboard has no spinner, label, or animation element — just the one image view", () => {
@@ -360,12 +380,74 @@ describe("iOS launch/splash screen — Linked Leaf artwork, centered at 50% widt
     );
   });
 
-  it("capacitor.config.ts's SplashScreen plugin block sets showSpinner: false explicitly", () => {
+  it("capacitor.config.ts's SplashScreen plugin block sets showSpinner: false and backgroundColor to the AppIcon green, explicitly", () => {
     const config = stripJsComments(readSource("../../../capacitor.config.ts"));
     const splashBlock = config.match(/SplashScreen:\s*\{([^}]*)\}/);
     expect(splashBlock).not.toBeNull();
     expect(splashBlock![1]).toMatch(/showSpinner:\s*false/);
-    expect(splashBlock![1]).toMatch(new RegExp(`backgroundColor:\\s*["']${MOBILE_BG_HEX}["']`));
+    expect(splashBlock![1]).toMatch(new RegExp(`backgroundColor:\\s*["']${APPICON_GREEN_HEX}["']`));
+  });
+
+  // PNG structural checks below read each file's raw bytes (not text) and
+  // parse the IHDR chunk directly — the first chunk after the fixed 8-byte
+  // PNG signature is always length(4)+"IHDR"+width(4)+height(4)+bitDepth(1)
+  // +colorType(1)+... per the PNG spec, so this is a stable, dependency-free
+  // way to distinguish an opaque (colour type 2, truecolour/RGB) PNG from
+  // one with a real alpha channel (colour type 6, truecolour+alpha/RGBA)
+  // without needing an image-decoding library in the test suite.
+  function readPngIhdr(relativePath: string): { width: number; height: number; bitDepth: number; colorType: number } {
+    const buf = readBinarySource(relativePath);
+    const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(buf.subarray(0, 8).equals(signature)).toBe(true);
+    expect(buf.subarray(12, 16).toString("ascii")).toBe("IHDR");
+    return {
+      width: buf.readUInt32BE(16),
+      height: buf.readUInt32BE(20),
+      bitDepth: buf.readUInt8(24),
+      colorType: buf.readUInt8(25)
+    };
+  }
+
+  const PNG_COLOR_TYPE_RGB = 2;
+  const PNG_COLOR_TYPE_RGBA = 6;
+
+  it("AppIcon-512@2x.png is still an opaque 1024x1024 RGB PNG (colour type 2, no alpha channel) — the Home Screen icon must never gain transparency", () => {
+    const ihdr = readPngIhdr("../../../ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png");
+    expect(ihdr.width).toBe(1024);
+    expect(ihdr.height).toBe(1024);
+    expect(ihdr.colorType).toBe(PNG_COLOR_TYPE_RGB);
+  });
+
+  it("AppIcon-512@2x.png's checksum is unchanged from before the splash-isolation pass — the isolation process reads this file but must never write to it", () => {
+    const buf = readBinarySource("../../../ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png");
+    const hash = createHash("sha256").update(buf).digest("hex");
+    expect(hash).toBe("8d90e43ca43f8fca753e21f40bf58faf445cfe3d3d9800310010a1d34011d593");
+  });
+
+  it("all three Splash.imageset PNGs are genuinely transparent RGBA (colour type 6, WITH an alpha channel) — distinct from AppIcon's opaque RGB, and identical to each other (universal idiom reuses one image for every scale slot, matching this project's existing AppIcon/Splash convention)", () => {
+    const paths = [
+      "../../../ios/App/App/Assets.xcassets/Splash.imageset/splash-2732x2732.png",
+      "../../../ios/App/App/Assets.xcassets/Splash.imageset/splash-2732x2732-1.png",
+      "../../../ios/App/App/Assets.xcassets/Splash.imageset/splash-2732x2732-2.png"
+    ];
+    for (const path of paths) {
+      const ihdr = readPngIhdr(path);
+      expect(ihdr.width).toBe(700);
+      expect(ihdr.height).toBe(688);
+      expect(ihdr.colorType).toBe(PNG_COLOR_TYPE_RGBA);
+    }
+    const hashes = paths.map((path) => createHash("sha256").update(readBinarySource(path)).digest("hex"));
+    expect(new Set(hashes).size).toBe(1);
+  });
+
+  it("Splash.imageset's PNGs are NOT byte-identical to AppIcon-512@2x.png — the earlier convention of reusing the full icon file for the splash is deliberately gone; the splash is now its own isolated asset", () => {
+    const splashHash = createHash("sha256")
+      .update(readBinarySource("../../../ios/App/App/Assets.xcassets/Splash.imageset/splash-2732x2732.png"))
+      .digest("hex");
+    const appIconHash = createHash("sha256")
+      .update(readBinarySource("../../../ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png"))
+      .digest("hex");
+    expect(splashHash).not.toBe(appIconHash);
   });
 
   it("native/bootstrap.ts enforces a ~1000ms minimum splash-visible floor before calling SplashScreen.hide(), so a fast cold launch doesn't blink the splash away instantly", () => {

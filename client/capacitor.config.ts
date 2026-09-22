@@ -59,20 +59,26 @@ const config: CapacitorConfig = {
       // before Mobile Home is ready — and a fast one still shows the
       // splash for approximately one second, not a near-instant blink.
       launchAutoHide: false,
-      // #f7f9f8 — the same GrowLink Mobile page-background token used
-      // everywhere else natively (top-level backgroundColor above,
-      // plugins.StatusBar.backgroundColor below, body.native-shell in
-      // src/index.css, SceneDelegate.swift's window fallback). Was
-      // #f8fbf9 — a slightly different value, noted as a pre-existing
-      // inconsistency back when the overscroll fix first established
-      // #f7f9f8 as the token; reconciled here so every native surface
-      // uses the exact same colour, not two visually-near-identical ones.
-      // Redundant with (but must match) LaunchScreen.storyboard's own
-      // root-view background — @capacitor/splash-screen's showSplash()
-      // (SplashScreen.swift) instantiates that SAME storyboard for its
-      // own overlay, then overwrites its view's backgroundColor with
-      // this config value, so the two are really one asset either way.
-      backgroundColor: "#f7f9f8",
+      // #03795E — the exact GrowLink green the AppIcon's own background
+      // is painted with (sampled and averaged directly from
+      // AppIcon-512@2x.png's corner/edge pixels: RGB(3,121,94)).
+      // Deliberately NOT the general #f7f9f8 Mobile page-background
+      // token used everywhere else natively (top-level backgroundColor
+      // above, plugins.StatusBar.backgroundColor below,
+      // body.native-shell in src/index.css, SceneDelegate.swift's
+      // window fallback) — the splash screen is the one native surface
+      // that intentionally uses the icon's own green instead, since the
+      // Splash.imageset artwork it displays (see Assets.xcassets/Splash.imageset)
+      // is now a genuinely transparent PNG containing ONLY the white
+      // chain-link-and-plant mark, isolated from the AppIcon by chroma-
+      // keying out its green background — that mark needs an opaque
+      // green fill behind it to render correctly, exactly matching the
+      // AppIcon's own background so the splash reads as "the icon's
+      // mark, full-screen" rather than a shrunken icon tile floating on
+      // an unrelated colour. Must stay reconciled with
+      // LaunchScreen.storyboard's own root-view background — see that
+      // file's own comment for why the two can never visibly diverge.
+      backgroundColor: "#03795E",
       // False already by the plugin's own Swift-side default
       // (SplashScreenConfig.swift) — set explicitly so "no spinner" is a
       // stated requirement here, not an assumption about an unread
