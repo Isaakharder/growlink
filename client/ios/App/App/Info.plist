@@ -34,6 +34,8 @@
 	     own export-compliance documentation puts it, not a workaround. -->
 	<key>NSCameraUsageDescription</key>
 	<string>GrowLink Mobile uses the camera to scan an equipment QR code, so you can quickly open that equipment's record without searching for it by name.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>GrowLink Mobile may access your photo library when you choose an image or QR code to use in the app.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
