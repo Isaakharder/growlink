@@ -3908,6 +3908,84 @@ body.keyboard-open .mobile-bottom-nav {
   font-size: 0.9rem;
 }
 
+/* Public support page (/support) — reuses the login shell/card look. */
+.support-card {
+  width: min(560px, 100%);
+}
+
+.support-intro {
+  margin: 0 0 1.25rem;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.support-section {
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.support-section h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+}
+
+.support-contact-name {
+  margin: 0 0 0.75rem;
+  font-weight: 700;
+}
+
+.support-contact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.support-contact-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  min-height: 44px;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--brand);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.support-contact-link:hover {
+  background: var(--brand-soft);
+}
+
+.support-contact-link:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.support-contact-label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.support-contact-value {
+  font-size: 1rem;
+}
+
+.support-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
 @media (max-width: 960px) {
   .sidebar {
     position: fixed;

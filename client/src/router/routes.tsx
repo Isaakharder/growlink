@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter, Navigate, type RouteObject } from "react-router-dom";
 import { AppLayout } from "../components/layout/AppLayout";
 import { MobileLayout } from "../components/layout/MobileLayout";
 import { LazyRoute } from "../components/LazyRoute";
@@ -35,6 +35,7 @@ import { AcceptInvitePage } from "../pages/AcceptInvitePage";
 import { NoAccessPage } from "../pages/NoAccessPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { LoginPage } from "../pages/LoginPage";
+import { SupportPage } from "../pages/SupportPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
 import { FoodSafetyPage } from "../pages/FoodSafetyPage";
 import { FoodSafetyLocationsPage } from "../pages/FoodSafetyLocationsPage";
@@ -159,7 +160,9 @@ export const mobileRouteChildren = [
   }
 ];
 
-export const appRouter = createBrowserRouter([
+// Kept as a plain array (rather than only as the createBrowserRouter(...) call below) so tests can
+// feed the identical config into createMemoryRouter — same pattern as nativeRoutes.tsx.
+export const appRouteConfig: RouteObject[] = [
   {
     path: "/login",
     element: <LoginPage />
@@ -171,6 +174,12 @@ export const appRouter = createBrowserRouter([
   {
     path: "/invite/accept",
     element: <AcceptInvitePage />
+  },
+  {
+    // Public (no sign-in): the App Store "Support URL". Deliberately a top-level route, outside the
+    // RequireAuth tree below, exactly like /login.
+    path: "/support",
+    element: <SupportPage />
   },
   {
     path: "/",
@@ -408,4 +417,6 @@ export const appRouter = createBrowserRouter([
       }
     ]
   }
-]);
+];
+
+export const appRouter = createBrowserRouter(appRouteConfig);
