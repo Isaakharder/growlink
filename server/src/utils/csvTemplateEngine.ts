@@ -447,6 +447,81 @@ function buildGroupKey(
 
 const RECONCILIATION_EPSILON = 0.01;
 
+export type GroupAverageFruitWeight = {
+  averageFruitWeightG: number | null;
+  basis: { kg: number; pieces: number } | null;
+  /** Set when a mapped PCS/AVG column holds one repeated lot-level value instead of per-row values. */
+  lotTotalColumn: { field: "piece_count" | "average_fruit_weight_g"; value: number; rowCount: number } | null;
+};
+
+function isValidPositive(value: number | null): value is number {
+  return value !== null && Number.isFinite(value) && value > 0;
+}
+
+/** The single repeated value when every entry is identical, else null. */
+function repeatedValue(values: number[]): number | null {
+  if (values.length < 2) return null;
+  return values.every((v) => v === values[0]) ? values[0] : null;
+}
+
+/**
+ * Canonical group AFW — same rule as the pinned FlowMaster CSV parser
+ * (flowMasterCsvParser.ts): total included kg x 1000 / total included
+ * pieces, where a row's pieces come from its PCS when > 0, otherwise from
+ * kg x 1000 / AVG. Equivalent to a PCS-weighted mean of the row AFWs,
+ * never a plain or kg-weighted mean of AVG cells.
+ *
+ * Returns a null AFW rather than a misleading one when:
+ * - any included row with weight has neither a valid PCS nor a valid AVG
+ *   (the AFW would silently describe only part of the imported kg), or
+ * - the PCS/AVG actually used holds the same value on every included row
+ *   while the row weights differ. That is a lot-total column — e.g. the
+ *   SECOND WEIGHT/AVG/PCS group of a FlowMaster export — and summing it per
+ *   row multiplies the lot's piece count by the number of size rows.
+ */
+export function computeGroupAverageFruitWeight(includedRows: NormalizedRow[]): GroupAverageFruitWeight {
+  const weighted = includedRows.filter((r) => isValidPositive(r.sizeWeightKg));
+  if (weighted.length === 0) return { averageFruitWeightG: null, basis: null, lotTotalColumn: null };
+
+  const weightsDiffer = repeatedValue(weighted.map((r) => r.sizeWeightKg as number)) === null;
+
+  const pcsRows = weighted.filter((r) => isValidPositive(r.pieceCount));
+  const repeatedPcs = weightsDiffer ? repeatedValue(pcsRows.map((r) => r.pieceCount as number)) : null;
+  if (repeatedPcs !== null) {
+    return {
+      averageFruitWeightG: null,
+      basis: null,
+      lotTotalColumn: { field: "piece_count", value: repeatedPcs, rowCount: pcsRows.length }
+    };
+  }
+
+  const avgFallbackRows = weighted.filter((r) => !isValidPositive(r.pieceCount) && isValidPositive(r.averageFruitWeightG));
+  const repeatedAvg = weightsDiffer ? repeatedValue(avgFallbackRows.map((r) => r.averageFruitWeightG as number)) : null;
+  if (repeatedAvg !== null) {
+    return {
+      averageFruitWeightG: null,
+      basis: null,
+      lotTotalColumn: { field: "average_fruit_weight_g", value: repeatedAvg, rowCount: avgFallbackRows.length }
+    };
+  }
+
+  let kg = 0;
+  let pieces = 0;
+  for (const row of weighted) {
+    const rowKg = row.sizeWeightKg as number;
+    if (isValidPositive(row.pieceCount)) {
+      pieces += row.pieceCount;
+    } else if (isValidPositive(row.averageFruitWeightG)) {
+      pieces += (rowKg * 1000) / row.averageFruitWeightG;
+    } else {
+      return { averageFruitWeightG: null, basis: null, lotTotalColumn: null };
+    }
+    kg += rowKg;
+  }
+
+  return { averageFruitWeightG: (kg * 1000) / pieces, basis: { kg, pieces }, lotTotalColumn: null };
+}
+
 export function normalizeCsvWithTemplate(
   grid: string[][],
   template: TemplateConfig,
@@ -618,15 +693,8 @@ export function normalizeCsvWithTemplate(
     const includedRows = group.rows.filter((r) => r.action === "included");
     const pieceCount = includedRows.reduce((sum, r) => sum + (r.pieceCount ?? 0), 0);
 
-    let afwNumerator = 0;
-    let afwDenominator = 0;
-    for (const row of includedRows) {
-      if (row.averageFruitWeightG !== null && row.sizeWeightKg !== null && row.sizeWeightKg > 0) {
-        afwNumerator += row.averageFruitWeightG * row.sizeWeightKg;
-        afwDenominator += row.sizeWeightKg;
-      }
-    }
-    const averageFruitWeightG = afwDenominator > 0 ? afwNumerator / afwDenominator : null;
+    const afw = computeGroupAverageFruitWeight(includedRows);
+    const averageFruitWeightG = afw.averageFruitWeightG;
 
     const unresolvedSizeLabels = Array.from(
       new Set(
@@ -649,6 +717,7 @@ export function normalizeCsvWithTemplate(
       wasteKg: Math.round(group.wasteKg * 100) / 100,
       pieceCount,
       averageFruitWeightG,
+      averageFruitWeightBasis: afw.basis,
       totalLotWeightKg: group.totalLotWeightKg,
       reconciliation,
       rows: group.rows
@@ -773,6 +842,19 @@ export function validateNormalizedPreview(
         });
         break;
       }
+    }
+
+    // Same hazard for the fruit-weight columns: a FlowMaster export repeats
+    // WEIGHT/AVG/PCS as a per-size group then a lot-total group. Mapping the
+    // lot-total PCS/AVG makes every size row carry the whole lot's value.
+    const lotTotalColumn = computeGroupAverageFruitWeight(group.rows.filter((r) => r.action === "included")).lotTotalColumn;
+    if (lotTotalColumn) {
+      const label = lotTotalColumn.field === "piece_count" ? "Piece Count" : "Average Fruit Weight g";
+      issues.push({
+        code: "possible_lot_total_fruit_column",
+        message: `The column mapped to ${label} has the same value (${lotTotalColumn.value}) on all ${lotTotalColumn.rowCount} included rows of ${group.groupKey} — this looks like a lot total (e.g. the second WEIGHT/AVG/PCS group), not a per-size value. Map the ${label} column from the same group as Size Weight kg.`,
+        groupKey: group.groupKey
+      });
     }
   }
 

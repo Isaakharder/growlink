@@ -13,6 +13,9 @@ import {
   coversAllDataRows,
   inferIgnoreRules,
   plainLanguageIgnoreRule,
+  describeHeaderOccurrences,
+  findDuplicateGroupMismatches,
+  ordinal,
   type MappingType,
   type CellCoord,
   type CellKey,
@@ -20,6 +23,7 @@ import {
   type SelectionModifier,
   type InferredIgnoreRule
 } from "./csvVisualMapping";
+import { CsvSourcePicker, formatSourceUploadedAt, type RecentSourceFile } from "./CsvSourcePicker";
 
 // ---------------------------------------------------------------------------
 // Types mirroring server/src/utils/csvTemplateTypes.ts (kept independent —
@@ -146,6 +150,7 @@ type NormalizedGroup = {
   wasteKg: number;
   pieceCount: number;
   averageFruitWeightG: number | null;
+  averageFruitWeightBasis?: { kg: number; pieces: number } | null;
   totalLotWeightKg: number | null;
   reconciliation: {
     rawRowWeightKg: number;
@@ -303,6 +308,7 @@ const TEMPLATE_FIELD_LABELS: Partial<Record<MappedField, string>> = {
 type SourceFileGridResponse = {
   sourceFileId: string;
   filename: string;
+  uploadedAt?: string;
   grid: string[][];
   rowCount: number;
   columnCount: number;
@@ -311,6 +317,9 @@ type SourceFileGridResponse = {
 };
 
 type YieldSizeOption = { id: string; name: string };
+
+/** Which file the builder's grid came from — shown above the grid so the source stays visible while mapping. */
+type SourceMeta = { filename: string; uploadedAt: string | null; origin: "upload" | "retained" };
 
 const PARSE_GRID_URL = "/api/csv-templates/parse-grid";
 const PREVIEW_URL = "/api/csv-templates/preview";
@@ -382,6 +391,7 @@ type PersistedBuilderState = {
   packDateFormat: DateFormat;
   templateName: string;
   closeMatchChoice: "pending" | "use" | "build";
+  sourceMeta?: SourceMeta | null;
   savedAt: number;
 };
 
@@ -472,6 +482,10 @@ export function CsvTemplateBuilderTab() {
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editingTemplateName, setEditingTemplateName] = useState<string | null>(null);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const [sourceMeta, setSourceMeta] = useState<SourceMeta | null>(null);
+  const [sourcePreviewCollapsed, setSourcePreviewCollapsed] = useState(false);
+  const [testSourceName, setTestSourceName] = useState<string | null>(null);
+  const sourceSectionRef = useRef<HTMLDivElement | null>(null);
   const testFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Visual mapping tool state ──────────────────────────────────────────
@@ -547,11 +561,12 @@ export function CsvTemplateBuilderTab() {
         packDateFormat,
         templateName,
         closeMatchChoice,
+        sourceMeta,
         savedAt: Date.now()
       });
     }, 800);
     return () => clearTimeout(timeout);
-  }, [parsed, isBuildingDraft, draft, columnAssignments, rowIgnoreSelections, packDateFormat, templateName, closeMatchChoice]);
+  }, [parsed, isBuildingDraft, draft, columnAssignments, rowIgnoreSelections, packDateFormat, templateName, closeMatchChoice, sourceMeta]);
 
   // Live countdown for the shared rate-limit notice.
   useEffect(() => {
@@ -667,6 +682,7 @@ export function CsvTemplateBuilderTab() {
       setPackDateFormat(persisted.packDateFormat);
       setTemplateName(persisted.templateName);
       setCloseMatchChoice(persisted.closeMatchChoice);
+      setSourceMeta(persisted.sourceMeta ?? null);
       setRestoredNotice(true);
     }
     // Both fetchers are useCallback([]) — stable for the component's lifetime.
@@ -708,6 +724,7 @@ export function CsvTemplateBuilderTab() {
       setTemplateName(body.filename.replace(/\.csv$/i, ""));
       setDraft((current) => ({ ...emptyDraft(), delimiter: body.delimiter, headerRowIndex: 0, dataStartRowIndex: 1, valueMappings: current.valueMappings, rules: current.rules }));
       resetVisualState();
+      setSourceMeta({ filename: body.filename, uploadedAt: body.uploadedAt ?? item.uploadedAt, origin: "retained" });
       setParsed({
         sourceFileId: body.sourceFileId,
         grid: body.grid,
@@ -751,6 +768,7 @@ export function CsvTemplateBuilderTab() {
       setActiveTemplateId(templateId);
       setCloseMatchChoice("use");
       setTemplateName(body.filename.replace(/\.csv$/i, ""));
+      setSourceMeta({ filename: body.filename, uploadedAt: body.uploadedAt ?? item.uploadedAt, origin: "retained" });
       setParsed({
         sourceFileId: body.sourceFileId,
         grid: body.grid,
@@ -934,10 +952,11 @@ export function CsvTemplateBuilderTab() {
     }
   }
 
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
+  // Shared by both source paths (a fresh upload, or a retained source this
+  // organization already uploaded): clears the previous file's state, loads
+  // the new grid, then either loads the template being edited on top of it
+  // or auto-previews an exact template match.
+  async function loadSourceIntoBuilder(filename: string, fetchSource: () => Promise<{ parsed: ParseGridResponse; meta: SourceMeta }>) {
     const wasEditing = editingTemplateId;
 
     setUploadError(null);
@@ -948,19 +967,13 @@ export function CsvTemplateBuilderTab() {
     setCloseMatchChoice("pending");
     setDraft(emptyDraft());
     resetVisualState();
-    setTemplateName(wasEditing && editingTemplateName ? editingTemplateName : file.name.replace(/\.csv$/i, ""));
-
-    const formData = new FormData();
-    formData.append("file", file);
+    setSourceMeta(null);
+    setTemplateName(wasEditing && editingTemplateName ? editingTemplateName : filename.replace(/\.csv$/i, ""));
 
     try {
-      const res = await apiFetch(PARSE_GRID_URL, { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { message?: string } | null;
-        throw new Error(body?.message ?? `Upload failed (${res.status})`);
-      }
-      const body = (await res.json()) as ParseGridResponse;
+      const { parsed: body, meta } = await fetchSource();
       setParsed(body);
+      setSourceMeta(meta);
       setDraft((current) => ({ ...current, delimiter: body.delimiter }));
 
       if (wasEditing) {
@@ -970,11 +983,53 @@ export function CsvTemplateBuilderTab() {
         await fetchPreviewForTemplate(body.sourceFileId, body.match.templateId);
       }
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Failed to upload CSV file.");
+      setUploadError(err instanceof Error ? err.message : "Failed to load the CSV file.");
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  }
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    await loadSourceIntoBuilder(file.name, async () => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await apiFetch(PARSE_GRID_URL, { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Upload failed (${res.status})`);
+      }
+      return { parsed: (await res.json()) as ParseGridResponse, meta: { filename: file.name, uploadedAt: new Date().toISOString(), origin: "upload" } };
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  // Reuses a CSV this organization already uploaded — its original text is
+  // retained server-side, so the grid (duplicate headers and column
+  // positions included) is exactly the one that was imported.
+  async function handleUseRetainedSource(source: RecentSourceFile) {
+    await loadSourceIntoBuilder(source.filename, async () => {
+      const res = await apiFetch(sourceFileGridUrl(source.id));
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to load source file (${res.status})`);
+      }
+      const body = (await res.json()) as SourceFileGridResponse;
+      return {
+        parsed: {
+          sourceFileId: body.sourceFileId,
+          grid: body.grid,
+          rowCount: body.rowCount,
+          columnCount: body.columnCount,
+          delimiter: body.delimiter,
+          encoding: "utf-8",
+          match: body.match
+        },
+        meta: { filename: body.filename, uploadedAt: body.uploadedAt ?? source.uploadedAt, origin: "retained" }
+      };
+    });
   }
 
   // Reverse-projects a saved template's column mappings into the visual
@@ -1516,6 +1571,7 @@ export function CsvTemplateBuilderTab() {
     setEditingTemplateId(null);
     setEditingTemplateName(null);
     setUploadError(null);
+    setSourceMeta(null);
   }
 
   async function handleSaveTemplate() {
@@ -1628,7 +1684,7 @@ export function CsvTemplateBuilderTab() {
     setEditingTemplateId(template.id);
     setEditingTemplateName(template.name);
     setTemplateActionError(null);
-    fileInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    sourceSectionRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
   }
 
   async function handleDuplicateTemplate(template: TemplateSummary) {
@@ -1695,31 +1751,33 @@ export function CsvTemplateBuilderTab() {
     }
   }
 
+  // Opens the test dialog, where the user picks the source: an upload or a
+  // retained source this organization already sent.
   function handleTestClick(template: TemplateSummary) {
     setTestingTemplate(template);
     setTestResult(null);
     setTestError(null);
-    testFileInputRef.current?.click();
+    setTestSourceName(null);
   }
 
-  async function handleTestFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file || !testingTemplate) return;
+  function closeTestDialog() {
+    setTestingTemplate(null);
+    setTestResult(null);
+    setTestError(null);
+    setTestSourceName(null);
+  }
+
+  async function runTemplateTest(filename: string, resolveSourceFileId: () => Promise<string>) {
+    if (!testingTemplate) return;
     setTestingBusy(true);
     setTestError(null);
     setTestResult(null);
-    const formData = new FormData();
-    formData.append("file", file);
+    setTestSourceName(filename);
     try {
-      const parseRes = await apiFetch(PARSE_GRID_URL, { method: "POST", body: formData });
-      if (!parseRes.ok) {
-        const body = (await parseRes.json().catch(() => null)) as { message?: string } | null;
-        throw new Error(body?.message ?? `Upload failed (${parseRes.status})`);
-      }
-      const parsedFile = (await parseRes.json()) as ParseGridResponse;
+      const sourceFileId = await resolveSourceFileId();
       const previewRes = await apiFetch(PREVIEW_URL, {
         method: "POST",
-        body: JSON.stringify({ sourceFileId: parsedFile.sourceFileId, templateId: testingTemplate.id })
+        body: JSON.stringify({ sourceFileId, templateId: testingTemplate.id })
       });
       if (!previewRes.ok) {
         const body = (await previewRes.json().catch(() => null)) as { message?: string } | null;
@@ -1730,8 +1788,23 @@ export function CsvTemplateBuilderTab() {
       setTestError(err instanceof Error ? err.message : "Failed to test this file against the template.");
     } finally {
       setTestingBusy(false);
-      if (testFileInputRef.current) testFileInputRef.current.value = "";
     }
+  }
+
+  async function handleTestFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    await runTemplateTest(file.name, async () => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const parseRes = await apiFetch(PARSE_GRID_URL, { method: "POST", body: formData });
+      if (!parseRes.ok) {
+        const body = (await parseRes.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Upload failed (${parseRes.status})`);
+      }
+      return ((await parseRes.json()) as ParseGridResponse).sourceFileId;
+    });
+    if (testFileInputRef.current) testFileInputRef.current.value = "";
   }
 
   const totalSourceKg = useMemo(() => {
@@ -1743,6 +1816,16 @@ export function CsvTemplateBuilderTab() {
     if (!preview) return 0;
     return preview.preview.groups.reduce((sum, g) => sum + g.reconciliation.recognizedSizeKg, 0);
   }, [preview]);
+
+  const headerOccurrences = useMemo(
+    () => (parsed ? describeHeaderOccurrences(parsed.grid[draft.headerRowIndex] ?? []) : []),
+    [parsed, draft.headerRowIndex]
+  );
+
+  const duplicateGroupWarnings = useMemo(
+    () => (parsed ? findDuplicateGroupMismatches(parsed.grid[draft.headerRowIndex] ?? [], columnAssignments) : []),
+    [parsed, draft.headerRowIndex, columnAssignments]
+  );
 
   const hasDoubleCountWarning = useMemo(
     () => (preview?.preview.validationIssues ?? []).some((i) => i.code === "possible_duplicate_weight_source"),
@@ -1848,17 +1931,37 @@ export function CsvTemplateBuilderTab() {
         onRemove={(item) => setRemoveConfirmTarget({ kind: "pending", item })}
       />
 
-      <h3>{editingTemplateId ? `Editing "${editingTemplateName}"` : "Upload a new file"}</h3>
-      {editingTemplateId && (
-        <p>
-          Upload a CSV matching this template&rsquo;s layout to load its current mappings for editing.{" "}
-          <button type="button" onClick={() => { setEditingTemplateId(null); setEditingTemplateName(null); }}>
-            Cancel editing
-          </button>
-        </p>
-      )}
-      <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={uploading} />
-      {uploading && <p>Parsing file&hellip;</p>}
+      <div ref={sourceSectionRef} className="csv-template-source-section">
+        <h3>{editingTemplateId ? `Editing "${editingTemplateName}"` : "Load a CSV file"}</h3>
+        {editingTemplateId ? (
+          <p>
+            Choose a CSV with this template&rsquo;s layout to load its current mappings for editing. A file GrowLink
+            already received works &mdash; you don&rsquo;t need the original on this computer.{" "}
+            <button type="button" onClick={() => { setEditingTemplateId(null); setEditingTemplateName(null); }}>
+              Cancel editing
+            </button>
+          </p>
+        ) : (
+          <p>Upload a CSV from this computer, or reuse one GrowLink already received.</p>
+        )}
+        <CsvSourcePicker
+          key={editingTemplateId ?? "new"}
+          templateId={editingTemplateId}
+          busy={uploading}
+          onUpload={() => fileInputRef.current?.click()}
+          onSelect={handleUseRetainedSource}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleFileChange}
+          disabled={uploading}
+          style={{ display: "none" }}
+          data-testid="csv-template-upload-input"
+        />
+      </div>
+      {uploading && <p>Loading file&hellip;</p>}
       {uploadError && <p className="form-error">{uploadError}</p>}
 
       {parsed && (
@@ -1892,175 +1995,238 @@ export function CsvTemplateBuilderTab() {
       )}
 
       {isBuildingDraft && parsed && (
-        <>
-          <MappingLegend activeTool={activeTool} onSelectTool={setActiveTool} />
-
-          <div className="csv-template-toolbar">
-            <span className="csv-template-active-tool" style={swatchStyle(activeTool)}>
-              Assigning: {MAPPING_TYPE_LABELS[activeTool]} — select cells or columns.
-            </span>
-            {activeTool === "packed_date" && (
-              <label className="csv-template-inline-picker">
-                Date format:
-                <select value={packDateFormat} onChange={(e) => setPackDateFormat(e.target.value as DateFormat)}>
-                  {DATE_FORMATS.map((f) => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <span className="csv-template-toolbar-spacer" />
-            <button type="button" onClick={handleUndo} disabled={past.length === 0}>Undo</button>
-            <button type="button" onClick={handleRedo} disabled={future.length === 0}>Redo</button>
-            <button type="button" onClick={clearSelection} disabled={selection.size === 0}>Clear Selection</button>
-            <button type="button" className="danger" onClick={requestClearAllMappings} disabled={columnAssignments.size === 0 && rowIgnoreSelections.size === 0}>
-              Clear All Mappings
-            </button>
-          </div>
-          {rowClickHint && <p className="form-error">{rowClickHint}</p>}
-          {ignoreHint && <p className="form-error">{ignoreHint}</p>}
-
-          <div className="csv-template-grid-wrapper" onMouseLeave={() => { isDraggingRef.current = false; }}>
-            <table className="varieties-table csv-template-grid">
-              <thead>
-                <tr>
-                  <th />
-                  {parsed.grid[0]?.map((_, colIndex) => {
-                    const assignment = columnAssignments.get(colIndex);
-                    return (
-                      <th
-                        key={colIndex}
-                        onClick={(e) => handleColumnHeaderClick(colIndex, e)}
-                        style={assignment ? headerSwatchStyle(assignment) : undefined}
-                        title="Click to assign the whole column; Ctrl/Cmd-click to add to a multi-column selection"
-                      >
-                        <div>{columnLetter(colIndex)}</div>
-                        {assignment && <div className="csv-template-column-badge">{MAPPING_TYPE_LABELS[assignment]}</div>}
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {parsed.grid.slice(0, 500).map((row, rowIndex) => {
-                  const isIgnoredRow = rowIgnoreSelections.has(rowIndex);
-                  return (
-                    <tr
-                      key={rowIndex}
-                      className={rowIndex === draft.headerRowIndex ? "csv-template-header-row" : undefined}
-                      style={isIgnoredRow ? rowIgnoreStyle() : undefined}
-                    >
-                      <td
-                        className="csv-template-row-controls"
-                      >
-                        <span
-                          className="csv-template-row-number"
-                          onClick={(e) => handleRowNumberClick(rowIndex, e)}
-                          title='Click to exclude this row; only applies when "Ignore" is the active tool'
-                        >
-                          {rowIndex + 1}
-                        </span>
-                        <button type="button" onClick={() => setDraft((c) => ({ ...c, headerRowIndex: rowIndex }))} title="Set as header row">
-                          H
-                        </button>
-                        <button type="button" onClick={() => setDraft((c) => ({ ...c, dataStartRowIndex: rowIndex }))} title="Set as first data row">
-                          D
-                        </button>
-                      </td>
-                      {row.map((cell, colIndex) => {
-                        const isFixed = fixedCellKeys.has(`${rowIndex}:${colIndex}`);
-                        const key = cellKey(rowIndex, colIndex);
-                        const isSelected = selection.has(key);
-                        const isFlashed = flashCells.has(key);
+        <div className="csv-template-editor-layout">
+          <section
+            className={`csv-source-preview${sourcePreviewCollapsed ? " is-collapsed" : ""}`}
+            aria-label="Source File Preview"
+          >
+            <div className="csv-source-preview-header">
+              <button
+                type="button"
+                className="csv-source-preview-toggle"
+                aria-expanded={!sourcePreviewCollapsed}
+                aria-controls="csv-source-preview-body"
+                onClick={() => setSourcePreviewCollapsed((v) => !v)}
+              >
+                {sourcePreviewCollapsed ? "Show" : "Hide"} Source File Preview
+              </button>
+              <p className="csv-source-preview-meta">
+                <strong>{sourceMeta?.filename ?? "CSV file"}</strong>
+                {sourceMeta?.uploadedAt && <> &middot; uploaded {formatSourceUploadedAt(sourceMeta.uploadedAt)}</>}
+                {sourceMeta?.origin === "retained" && <> &middot; retained copy</>}
+                <> &middot; {parsed.rowCount} rows &times; {parsed.columnCount} columns &middot; header row {draft.headerRowIndex + 1}</>
+              </p>
+            </div>
+            <div id="csv-source-preview-body" className="csv-source-preview-body">
+              <div className="csv-template-grid-wrapper" onMouseLeave={() => { isDraggingRef.current = false; }}>
+                <table className="varieties-table csv-template-grid">
+                  <thead>
+                    <tr>
+                      <th />
+                      {parsed.grid[0]?.map((_, colIndex) => {
                         const assignment = columnAssignments.get(colIndex);
-                        const isDataRow = dataRowIndexes.includes(rowIndex);
+                        const header = headerOccurrences[colIndex];
                         return (
-                          <td
+                          <th
                             key={colIndex}
-                            className={[
-                              isFixed ? "csv-template-fixed-cell" : "",
-                              isSelected ? "csv-template-cell-selected" : "",
-                              isFlashed ? "csv-template-cell-flash" : ""
-                            ].filter(Boolean).join(" ") || undefined}
-                            style={isDataRow && assignment ? cellSwatchStyle(assignment) : undefined}
-                            onMouseDown={isDataRow ? (e) => handleCellMouseDown(rowIndex, colIndex, e) : undefined}
-                            onMouseEnter={isDataRow ? (e) => handleCellMouseEnter(rowIndex, colIndex, e) : undefined}
-                            onMouseUp={isDataRow ? (e) => handleCellMouseUp(rowIndex, colIndex, e) : undefined}
-                            onDoubleClick={() => {
-                              const field = window.prompt(
-                                `Use cell (row ${rowIndex + 1}, ${columnLetter(colIndex)}) as a fixed value for which field? (${MAPPED_FIELDS.join(", ")})`,
-                                "variety"
-                              ) as MappedField | null;
-                              if (field && MAPPED_FIELDS.includes(field)) toggleFixedCell(rowIndex, colIndex, field);
-                            }}
-                            title={isDataRow ? "Click, drag, Ctrl/Cmd-click, or Shift-click to assign. Double-click to use as a fixed value." : undefined}
+                            onClick={(e) => handleColumnHeaderClick(colIndex, e)}
+                            style={assignment ? headerSwatchStyle(assignment) : undefined}
+                            className={assignment === activeTool ? "csv-template-col-active" : undefined}
+                            title="Click to assign the whole column; Ctrl/Cmd-click to add to a multi-column selection"
                           >
-                            {cell}
-                          </td>
+                            <div>{columnLetter(colIndex)}</div>
+                            {header && (
+                              <div className="csv-template-column-header-text">
+                                {header.text || "(blank)"}
+                                {header.total > 1 && <span className="csv-template-column-occurrence"> {ordinal(header.occurrence)} of {header.total}</span>}
+                              </div>
+                            )}
+                            {assignment && <div className="csv-template-column-badge">{MAPPING_TYPE_LABELS[assignment]}</div>}
+                          </th>
                         );
                       })}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="recent-entries-footer">
-            Showing {Math.min(parsed.grid.length, 500)} of {parsed.rowCount} rows. Double-click any cell to use it as a
-            fixed value instead of a whole column (for report-style files where a value like variety or date appears
-            once above the table).
-          </p>
+                  </thead>
+                  <tbody>
+                    {parsed.grid.slice(0, 500).map((row, rowIndex) => {
+                      const isIgnoredRow = rowIgnoreSelections.has(rowIndex);
+                      return (
+                        <tr
+                          key={rowIndex}
+                          className={rowIndex === draft.headerRowIndex ? "csv-template-header-row" : undefined}
+                          style={isIgnoredRow ? rowIgnoreStyle() : undefined}
+                        >
+                          <td
+                            className="csv-template-row-controls"
+                          >
+                            <span
+                              className="csv-template-row-number"
+                              onClick={(e) => handleRowNumberClick(rowIndex, e)}
+                              title='Click to exclude this row; only applies when "Ignore" is the active tool'
+                            >
+                              {rowIndex + 1}
+                            </span>
+                            <button type="button" onClick={() => setDraft((c) => ({ ...c, headerRowIndex: rowIndex }))} title="Set as header row">
+                              H
+                            </button>
+                            <button type="button" onClick={() => setDraft((c) => ({ ...c, dataStartRowIndex: rowIndex }))} title="Set as first data row">
+                              D
+                            </button>
+                          </td>
+                          {row.map((cell, colIndex) => {
+                            const isFixed = fixedCellKeys.has(`${rowIndex}:${colIndex}`);
+                            const key = cellKey(rowIndex, colIndex);
+                            const isSelected = selection.has(key);
+                            const isFlashed = flashCells.has(key);
+                            const assignment = columnAssignments.get(colIndex);
+                            const isDataRow = dataRowIndexes.includes(rowIndex);
+                            return (
+                              <td
+                                key={colIndex}
+                                className={[
+                                  isFixed ? "csv-template-fixed-cell" : "",
+                                  isSelected ? "csv-template-cell-selected" : "",
+                                  assignment !== undefined && assignment === activeTool ? "csv-template-col-active" : "",
+                                  isFlashed ? "csv-template-cell-flash" : ""
+                                ].filter(Boolean).join(" ") || undefined}
+                                style={isDataRow && assignment ? cellSwatchStyle(assignment) : undefined}
+                                onMouseDown={isDataRow ? (e) => handleCellMouseDown(rowIndex, colIndex, e) : undefined}
+                                onMouseEnter={isDataRow ? (e) => handleCellMouseEnter(rowIndex, colIndex, e) : undefined}
+                                onMouseUp={isDataRow ? (e) => handleCellMouseUp(rowIndex, colIndex, e) : undefined}
+                                onDoubleClick={() => {
+                                  const field = window.prompt(
+                                    `Use cell (row ${rowIndex + 1}, ${columnLetter(colIndex)}) as a fixed value for which field? (${MAPPED_FIELDS.join(", ")})`,
+                                    "variety"
+                                  ) as MappedField | null;
+                                  if (field && MAPPED_FIELDS.includes(field)) toggleFixedCell(rowIndex, colIndex, field);
+                                }}
+                                title={isDataRow ? "Click, drag, Ctrl/Cmd-click, or Shift-click to assign. Double-click to use as a fixed value." : undefined}
+                              >
+                                {cell}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="recent-entries-footer">
+                Showing {Math.min(parsed.grid.length, 500)} of {parsed.rowCount} rows. Double-click any cell to use it as a
+                fixed value instead of a whole column (for report-style files where a value like variety or date appears
+                once above the table).
+              </p>
+            </div>
+          </section>
 
-          {visualIgnoreInference.rules.length > 0 && (
-            <div className="csv-template-rules-preview">
-              <h3>Rules that will be saved</h3>
-              <ul>
-                {visualIgnoreInference.rules.map((r) => (
-                  <li key={`${r.columnIndex}-${r.value}`}>{plainLanguageIgnoreRule(r)}</li>
+          <div className="csv-template-editor-controls">
+            <MappingLegend activeTool={activeTool} onSelectTool={setActiveTool} />
+
+            <div className="csv-template-toolbar">
+              <span className="csv-template-active-tool" style={swatchStyle(activeTool)}>
+                Assigning: {MAPPING_TYPE_LABELS[activeTool]} — select cells or columns.
+              </span>
+              {activeTool === "packed_date" && (
+                <label className="csv-template-inline-picker">
+                  Date format:
+                  <select value={packDateFormat} onChange={(e) => setPackDateFormat(e.target.value as DateFormat)}>
+                    {DATE_FORMATS.map((f) => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <span className="csv-template-toolbar-spacer" />
+              <button type="button" onClick={handleUndo} disabled={past.length === 0}>Undo</button>
+              <button type="button" onClick={handleRedo} disabled={future.length === 0}>Redo</button>
+              <button type="button" onClick={clearSelection} disabled={selection.size === 0}>Clear Selection</button>
+              <button type="button" className="danger" onClick={requestClearAllMappings} disabled={columnAssignments.size === 0 && rowIgnoreSelections.size === 0}>
+                Clear All Mappings
+              </button>
+            </div>
+            {rowClickHint && <p className="form-error">{rowClickHint}</p>}
+            {ignoreHint && <p className="form-error">{ignoreHint}</p>}
+
+            {columnAssignments.size > 0 && (
+              <div className="csv-template-column-map">
+                <h4>Mapped columns</h4>
+                <ul>
+                  {Array.from(columnAssignments.entries())
+                    .sort((a, b) => a[0] - b[0])
+                    .map(([col, field]) => {
+                      const header = headerOccurrences[col];
+                      return (
+                        <li key={col} className={field === activeTool ? "is-active" : undefined}>
+                          <span className="csv-template-column-map-field" style={swatchStyle(field)}>{MAPPING_TYPE_LABELS[field]}</span>{" "}
+                          &rarr; column {columnLetter(col)}
+                          {header?.text ? ` \u201c${header.text}\u201d` : ""}
+                          {header && header.total > 1 ? ` (${ordinal(header.occurrence)} of ${header.total})` : ""}
+                        </li>
+                      );
+                    })}
+                </ul>
+              </div>
+            )}
+            {duplicateGroupWarnings.length > 0 && (
+              <ul className="form-error csv-template-issue-list" role="alert">
+                {duplicateGroupWarnings.map((message) => (
+                  <li key={message}>{message}</li>
                 ))}
               </ul>
+            )}
+
+            {visualIgnoreInference.rules.length > 0 && (
+              <div className="csv-template-rules-preview">
+                <h3>Rules that will be saved</h3>
+                <ul>
+                  {visualIgnoreInference.rules.map((r) => (
+                    <li key={`${r.columnIndex}-${r.value}`}>{plainLanguageIgnoreRule(r)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {visualIgnoreInference.unresolvedRows.length > 0 && (
+              <p className="form-error">
+                {visualIgnoreInference.unresolvedRows.length} ignored row(s) don&rsquo;t match a consistent value pattern in
+                any column, so they can&rsquo;t be safely reproduced on a future export. Row order can change between
+                exports — pick a column/value to match on instead of relying on position.
+              </p>
+            )}
+
+            {(uniqueValues.sizeLabels.length > 0 || uniqueValues.marketGrades.length > 0) && (
+              <ValueMappingPanel
+                sizeLabels={uniqueValues.sizeLabels}
+                marketGrades={uniqueValues.marketGrades}
+                valueMappings={draft.valueMappings}
+                yieldSizes={yieldSizes}
+                onChange={upsertValueMapping}
+              />
+            )}
+
+            <div className="csv-template-advanced-toggle">
+              <button type="button" onClick={() => setShowAdvanced((v) => !v)}>
+                {showAdvanced ? "Hide" : "Show"} Advanced: Conditional Row Rules
+              </button>
             </div>
-          )}
-          {visualIgnoreInference.unresolvedRows.length > 0 && (
-            <p className="form-error">
-              {visualIgnoreInference.unresolvedRows.length} ignored row(s) don&rsquo;t match a consistent value pattern in
-              any column, so they can&rsquo;t be safely reproduced on a future export. Row order can change between
-              exports — pick a column/value to match on instead of relying on position.
-            </p>
-          )}
+            {showAdvanced && (
+              <RuleEditor rules={draft.rules} yieldSizes={yieldSizes} onAdd={addRule} onUpdate={updateRule} onRemove={removeRule} />
+            )}
 
-          {(uniqueValues.sizeLabels.length > 0 || uniqueValues.marketGrades.length > 0) && (
-            <ValueMappingPanel
-              sizeLabels={uniqueValues.sizeLabels}
-              marketGrades={uniqueValues.marketGrades}
-              valueMappings={draft.valueMappings}
-              yieldSizes={yieldSizes}
-              onChange={upsertValueMapping}
-            />
-          )}
-
-          <div className="csv-template-advanced-toggle">
-            <button type="button" onClick={() => setShowAdvanced((v) => !v)}>
-              {showAdvanced ? "Hide" : "Show"} Advanced: Conditional Row Rules
-            </button>
+            <div className="csv-template-save-row">
+              <input
+                type="text"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="Template name (e.g. FlowMaster CSV Export)"
+              />
+              <button type="button" className="cases-entry-open-button" onClick={handleSaveClick} disabled={saving || !templateName.trim()}>
+                {saving ? "Saving..." : editingTemplateId ? "Save new version" : "Save as template"}
+              </button>
+              {saveStatus && <span className="form-error">{saveStatus}</span>}
+            </div>
           </div>
-          {showAdvanced && (
-            <RuleEditor rules={draft.rules} yieldSizes={yieldSizes} onAdd={addRule} onUpdate={updateRule} onRemove={removeRule} />
-          )}
-
-          <div className="csv-template-save-row">
-            <input
-              type="text"
-              value={templateName}
-              onChange={(e) => setTemplateName(e.target.value)}
-              placeholder="Template name (e.g. FlowMaster CSV Export)"
-            />
-            <button type="button" className="cases-entry-open-button" onClick={handleSaveClick} disabled={saving || !templateName.trim()}>
-              {saving ? "Saving..." : editingTemplateId ? "Save new version" : "Save as template"}
-            </button>
-            {saveStatus && <span className="form-error">{saveStatus}</span>}
-          </div>
-        </>
+        </div>
       )}
 
       {previewLoading && <p>Building preview&hellip;</p>}
@@ -2122,11 +2288,18 @@ export function CsvTemplateBuilderTab() {
         </div>
       )}
 
-      {(testingTemplate && (testingBusy || testResult || testError)) && (
+      {testingTemplate && (
         <div className="modal-overlay">
-          <div className="variety-modal csv-template-modal csv-template-mappings-modal">
+          <div className="variety-modal csv-template-modal csv-template-mappings-modal" role="dialog" aria-label={`Test ${testingTemplate.name}`}>
             <h3>Test &ldquo;{testingTemplate.name}&rdquo; with a CSV</h3>
-            {testingBusy && <p>Uploading and building a preview&hellip;</p>}
+            <CsvSourcePicker
+              templateId={testingTemplate.id}
+              busy={testingBusy}
+              onUpload={() => testFileInputRef.current?.click()}
+              onSelect={(source) => runTemplateTest(source.filename, async () => source.id)}
+            />
+            {testSourceName && <p className="csv-source-preview-meta">Source: <strong>{testSourceName}</strong></p>}
+            {testingBusy && <p>Building a preview&hellip;</p>}
             {testError && <p className="form-error">{testError}</p>}
             {testResult && (
               <>
@@ -2158,13 +2331,14 @@ export function CsvTemplateBuilderTab() {
                     <p>
                       Recognized: {group.reconciliation.recognizedSizeKg.toFixed(2)} kg &middot; Ignored:{" "}
                       {group.reconciliation.ignoredKg.toFixed(2)} kg &middot; Unresolved: {group.reconciliation.unresolvedKg.toFixed(2)} kg
+                      &middot; AFW {group.averageFruitWeightG !== null ? `${group.averageFruitWeightG.toFixed(1)} g` : "—"}
                     </p>
                   </div>
                 ))}
               </>
             )}
             <div className="csv-template-modal-actions">
-              <button type="button" onClick={() => { setTestingTemplate(null); setTestResult(null); setTestError(null); }}>Close</button>
+              <button type="button" onClick={closeTestDialog}>Close</button>
             </div>
           </div>
         </div>
