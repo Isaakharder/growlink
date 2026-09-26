@@ -1,4 +1,4 @@
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { apiFetch } from "../lib/api";
@@ -1961,7 +1961,7 @@ export function CsvTemplateBuilderTab() {
                 : "The grid is unaffected — your mappings are unchanged."}
           </p>
           {rateLimitCountdown === 0 && (
-            <button type="button" onClick={() => setRateLimitNotice(null)}>Dismiss</button>
+            <button type="button" className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm" onClick={() => setRateLimitNotice(null)}>Dismiss</button>
           )}
         </div>
       )}
@@ -1969,14 +1969,14 @@ export function CsvTemplateBuilderTab() {
       {restoredNotice && (
         <div className="form-success csv-template-restored-notice">
           <p>Restored your in-progress mapping from your last session.</p>
-          <button type="button" onClick={() => setRestoredNotice(false)}>Dismiss</button>
+          <button type="button" className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm" onClick={() => setRestoredNotice(false)}>Dismiss</button>
         </div>
       )}
 
       {saveSuccessMessage && (
         <div className="form-success csv-template-restored-notice">
           <p>&#10003; {saveSuccessMessage}</p>
-          <button type="button" onClick={() => setSaveSuccessMessage(null)}>Dismiss</button>
+          <button type="button" className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm" onClick={() => setSaveSuccessMessage(null)}>Dismiss</button>
         </div>
       )}
 
@@ -1999,7 +1999,22 @@ export function CsvTemplateBuilderTab() {
         onReprocessAll={() => void requestReprocess("all")}
         onReprocessCard={(card) => void requestReprocess("card", card.sources.map((s) => s.pendingImportId))}
         onDismissReprocessSummary={() => setReprocessSummary(null)}
-      />
+        unmatchedCount={pendingItems.length}
+      >
+        <PendingCsvImportsSection
+          items={pendingItems}
+          resumingPendingId={resumingPendingId}
+          importingKey={importingKey}
+          importStatus={importStatus}
+          templates={templates}
+          onSetUpTemplate={handleSetUpTemplateFromPending}
+          onReprocessWithTemplate={handleReprocessPendingWithTemplate}
+          onImportGroup={handleImportPendingGroup}
+          removingPendingId={removingPendingId}
+          removeErrors={removeErrors}
+          onRemove={(item) => setRemoveConfirmTarget({ kind: "pending", item })}
+        />
+      </WeeklyPendingCardsSection>
 
       {reprocessConfirm && (
         <div className="modal-overlay">
@@ -2065,35 +2080,35 @@ export function CsvTemplateBuilderTab() {
         />
       )}
 
-      <PendingCsvImportsSection
-        items={pendingItems}
-        loading={pendingLoading}
-        error={pendingError}
-        resumingPendingId={resumingPendingId}
-        importingKey={importingKey}
-        importStatus={importStatus}
-        templates={templates}
-        onSetUpTemplate={handleSetUpTemplateFromPending}
-        onReprocessWithTemplate={handleReprocessPendingWithTemplate}
-        onImportGroup={handleImportPendingGroup}
-        onRefresh={fetchPendingItems}
-        removingPendingId={removingPendingId}
-        removeErrors={removeErrors}
-        onRemove={(item) => setRemoveConfirmTarget({ kind: "pending", item })}
-      />
 
-      <div ref={sourceSectionRef} className="csv-template-source-section">
-        <h3>{editingTemplateId ? `Editing "${editingTemplateName}"` : "Load a CSV file"}</h3>
+      <section
+        ref={sourceSectionRef}
+        className="csv-template-source-section csv-tb-section csv-tb-section--load"
+        aria-labelledby="csv-tb-load-heading"
+      >
+        <div className="csv-tb-section-header">
+          <h3 id="csv-tb-load-heading" className="csv-tb-section-title">
+            {editingTemplateId ? `Editing "${editingTemplateName}"` : "Load a CSV file"}
+          </h3>
+          {editingTemplateId && (
+            <div className="csv-tb-section-actions">
+              <button
+                type="button"
+                className="csv-tb-btn csv-tb-btn--quiet"
+                onClick={() => { setEditingTemplateId(null); setEditingTemplateName(null); }}
+              >
+                Cancel editing
+              </button>
+            </div>
+          )}
+        </div>
         {editingTemplateId ? (
-          <p>
+          <p className="csv-tb-section-description">
             Choose a CSV with this template&rsquo;s layout to load its current mappings for editing. A file GrowLink
-            already received works &mdash; you don&rsquo;t need the original on this computer.{" "}
-            <button type="button" onClick={() => { setEditingTemplateId(null); setEditingTemplateName(null); }}>
-              Cancel editing
-            </button>
+            already received works &mdash; you don&rsquo;t need the original on this computer.
           </p>
         ) : (
-          <p>Upload a CSV from this computer, or reuse one GrowLink already received.</p>
+          <p className="csv-tb-section-description">Upload a CSV from this computer, or reuse one GrowLink already received.</p>
         )}
         <CsvSourcePicker
           key={editingTemplateId ?? "new"}
@@ -2109,11 +2124,16 @@ export function CsvTemplateBuilderTab() {
           onChange={handleFileChange}
           disabled={uploading}
           style={{ display: "none" }}
+          aria-label="CSV file to upload"
           data-testid="csv-template-upload-input"
         />
-      </div>
-      {uploading && <p>Loading file&hellip;</p>}
-      {uploadError && <p className="form-error">{uploadError}</p>}
+        {uploading && (
+          <p className="csv-tb-inline-status" role="status">
+            Loading file&hellip;
+          </p>
+        )}
+        {uploadError && <p className="form-error">{uploadError}</p>}
+      </section>
 
       {parsed && (
         <div className="csv-template-summary">
@@ -2976,7 +2996,9 @@ function WeeklyPendingCardsSection({
   reprocessError,
   onReprocessAll,
   onReprocessCard,
-  onDismissReprocessSummary
+  onDismissReprocessSummary,
+  unmatchedCount,
+  children
 }: {
   cards: WeeklyCard[];
   loading: boolean;
@@ -2996,24 +3018,46 @@ function WeeklyPendingCardsSection({
   onReprocessAll: () => void;
   onReprocessCard: (card: WeeklyCard) => void;
   onDismissReprocessSummary: () => void;
+  /** Pending files that matched no template — listed by `children`, inside this same section. */
+  unmatchedCount: number;
+  children?: ReactNode;
 }) {
   const reprocessFailures = reprocessSummary?.results.filter((r) => r.outcome === "failed") ?? [];
+  const pendingFileCount = cards.reduce((sum, c) => sum + c.sources.length, 0) + unmatchedCount;
+  const nothingPending = pendingFileCount === 0;
   return (
-    <div className="csv-template-pending-section">
-      <div className="csv-template-pending-header">
-        <h3>Pending CSV Imports</h3>
-        <button type="button" onClick={onRefresh} disabled={loading}>
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-        <button
-          type="button"
-          onClick={onReprocessAll}
-          disabled={reprocessing}
-          title="Re-run every pending file's retained original CSV through your current templates. Nothing is imported."
-        >
-          {reprocessing ? "Reprocessing\u2026" : "Reprocess all pending files"}
-        </button>
+    <section className="csv-template-pending-section csv-tb-section" aria-labelledby="csv-tb-pending-heading">
+      <div className="csv-tb-section-header">
+        <h3 id="csv-tb-pending-heading" className="csv-tb-section-title">
+          Pending CSV Imports
+        </h3>
+        {!nothingPending && (
+          <span className="csv-tb-count">
+            {pendingFileCount} pending file{pendingFileCount === 1 ? "" : "s"}
+          </span>
+        )}
+        <div className="csv-tb-section-actions">
+          <button type="button" className="csv-tb-btn" onClick={onRefresh} disabled={loading} aria-busy={loading || undefined}>
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+          <button
+            type="button"
+            className="csv-tb-btn csv-tb-btn--primary"
+            onClick={onReprocessAll}
+            disabled={reprocessing || nothingPending}
+            aria-busy={reprocessing || undefined}
+            aria-describedby={nothingPending ? "csv-tb-reprocess-hint" : undefined}
+            title="Re-run every pending file's retained original CSV through your current templates. Nothing is imported."
+          >
+            {reprocessing ? "Reprocessing\u2026" : "Reprocess all pending files"}
+          </button>
+        </div>
       </div>
+      {nothingPending && !loading && (
+        <p id="csv-tb-reprocess-hint" className="csv-tb-section-hint">
+          Reprocessing becomes available when there are pending files.
+        </p>
+      )}
 
       {reprocessError && <p className="form-error">{reprocessError}</p>}
       {reprocessSummary && (
@@ -3028,12 +3072,27 @@ function WeeklyPendingCardsSection({
               ))}
             </ul>
           )}
-          <button type="button" onClick={onDismissReprocessSummary}>Dismiss</button>
+          <button type="button" className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm" onClick={onDismissReprocessSummary}>
+            Dismiss
+          </button>
         </div>
       )}
 
       {error && <p className="form-error">{error}</p>}
-      {!loading && cards.length === 0 && !error && <p>No pending CSV imports right now.</p>}
+      {loading && nothingPending && !error && (
+        <div className="csv-tb-empty csv-tb-empty--neutral" role="status">
+          <p className="csv-tb-empty-body">Loading pending imports&hellip;</p>
+        </div>
+      )}
+      {!loading && nothingPending && !error && (
+        <div className="csv-tb-empty" role="status">
+          <CheckCircleIcon />
+          <div>
+            <p className="csv-tb-empty-title">You&rsquo;re all caught up</p>
+            <p className="csv-tb-empty-body">No pending CSV imports right now.</p>
+          </div>
+        </div>
+      )}
 
       {cards.map((card) => (
         <WeeklyCardView
@@ -3051,7 +3110,18 @@ function WeeklyPendingCardsSection({
           onReprocessCard={onReprocessCard}
         />
       ))}
-    </div>
+
+      {children}
+    </section>
+  );
+}
+
+function CheckCircleIcon() {
+  return (
+    <svg className="csv-tb-empty-icon" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="10" fill="currentColor" opacity="0.14" />
+      <path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -3206,19 +3276,27 @@ function WeeklyCardView({
 
         <div className="csv-weekly-actions">
           {card.unresolvedLabelGroups.length > 0 && (
-            <button type="button" className="cases-entry-open-button" onClick={() => onOpenResolveLabels(card)}>
+            <button type="button" className="csv-tb-btn csv-tb-btn--outline" onClick={() => onOpenResolveLabels(card)}>
               Resolve labels ({card.unresolvedLabelGroups.length})
             </button>
           )}
           <button
             type="button"
+            className="csv-tb-btn"
             onClick={() => onReprocessCard(card)}
             disabled={reprocessing}
+            aria-busy={reprocessing || undefined}
             title="Reprocesses every source file on this card together, so its combined totals stay consistent. Nothing is imported."
           >
             {reprocessing ? "Reprocessing\u2026" : `Reprocess card (${card.sources.length} file${card.sources.length === 1 ? "" : "s"})`}
           </button>
-          <button type="button" className="cases-entry-open-button" disabled={!card.canImport || importing} onClick={() => onImportCard(card)}>
+          <button
+            type="button"
+            className="csv-tb-btn csv-tb-btn--primary"
+            disabled={!card.canImport || importing}
+            aria-busy={importing || undefined}
+            onClick={() => onImportCard(card)}
+          >
             {importing ? "Importing..." : "Import"}
           </button>
         </div>
@@ -3236,7 +3314,7 @@ function WeeklyCardView({
               </span>
               <button
                 type="button"
-                className="pdf-source-reading-remove-button"
+                className="csv-tb-btn csv-tb-btn--danger csv-tb-btn--sm"
                 disabled={removingPendingId === source.pendingImportId}
                 onClick={() => onRemoveSource(source)}
               >
@@ -3659,10 +3737,9 @@ function ResolveLabelsModal({
   );
 }
 
+/** Pending files that matched no template. Rendered inside the one Pending CSV Imports section (which owns Refresh, loading, errors and the empty state), so it has no header of its own. */
 function PendingCsvImportsSection({
   items,
-  loading,
-  error,
   resumingPendingId,
   importingKey,
   importStatus,
@@ -3670,14 +3747,11 @@ function PendingCsvImportsSection({
   onSetUpTemplate,
   onReprocessWithTemplate,
   onImportGroup,
-  onRefresh,
   removingPendingId,
   removeErrors,
   onRemove
 }: {
   items: PendingCsvItem[];
-  loading: boolean;
-  error: string | null;
   resumingPendingId: string | null;
   importingKey: string | null;
   importStatus: Record<string, string>;
@@ -3685,22 +3759,16 @@ function PendingCsvImportsSection({
   onSetUpTemplate: (item: PendingCsvItem) => void;
   onReprocessWithTemplate: (item: PendingCsvItem, templateId: string) => void;
   onImportGroup: (item: PendingCsvItem, group: NormalizedGroup) => void;
-  onRefresh: () => void;
   removingPendingId: string | null;
   removeErrors: Record<string, string>;
   onRemove: (item: PendingCsvItem) => void;
 }) {
+  if (items.length === 0) return null;
   return (
-    <div className="csv-template-pending-section">
-      <div className="csv-template-pending-header">
-        <h3>Pending CSV Imports</h3>
-        <button type="button" onClick={onRefresh} disabled={loading}>
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
-
-      {error && <p className="form-error">{error}</p>}
-      {!loading && items.length === 0 && !error && <p>No pending CSV imports right now.</p>}
+    <div className="csv-tb-subsection">
+      <h4 className="csv-tb-subsection-title">
+        Files that need a template <span className="csv-tb-count">{items.length}</span>
+      </h4>
 
       {items.map((item) => (
         <div key={item.id} className="csv-template-pending-card">
@@ -3711,7 +3779,7 @@ function PendingCsvImportsSection({
             </span>
             <button
               type="button"
-              className="pdf-source-reading-remove-button"
+              className="csv-tb-btn csv-tb-btn--danger csv-tb-btn--sm"
               disabled={removingPendingId === item.id}
               onClick={() => onRemove(item)}
             >
@@ -3729,19 +3797,21 @@ function PendingCsvImportsSection({
                   ? "This file's layout closely resembles a saved template, but doesn't match exactly. Review and confirm before importing."
                   : "No saved template matches this file's layout yet."}
               </p>
-              <div className="csv-template-saved-actions">
+              <div className="csv-template-saved-actions csv-tb-toolbar">
                 <button
                   type="button"
-                  className="cases-entry-open-button"
+                  className="csv-tb-btn csv-tb-btn--primary"
                   disabled={resumingPendingId === item.id || !item.sourceFileId}
+                  aria-busy={resumingPendingId === item.id || undefined}
                   onClick={() => onSetUpTemplate(item)}
                 >
                   {resumingPendingId === item.id ? "Loading..." : "Set up CSV Template"}
                 </button>
                 {templates.length > 0 && item.sourceFileId && (
-                  <label>
+                  <label className="csv-tb-select-label">
                     Reprocess with saved template:{" "}
                     <select
+                      className="csv-tb-select"
                       defaultValue=""
                       disabled={resumingPendingId === item.id}
                       onChange={(e) => {
@@ -3793,8 +3863,9 @@ function PendingCsvImportsSection({
                     )}
                     <button
                       type="button"
-                      className="cases-entry-open-button"
+                      className="csv-tb-btn csv-tb-btn--primary"
                       disabled={!canImportGroup || importingKey === group.groupKey}
+                      aria-busy={importingKey === group.groupKey || undefined}
                       onClick={() => onImportGroup(item, group)}
                     >
                       {importingKey === group.groupKey ? "Importing..." : "Import"}
@@ -3959,53 +4030,106 @@ function SavedTemplatesSection({
   onDeleteRequest: (t: TemplateSummary) => void;
 }) {
   return (
-    <div className="csv-template-pending-section csv-template-saved-section">
-      <div className="csv-template-pending-header">
-        <h3>Saved CSV Templates</h3>
-        <button type="button" onClick={onRefresh} disabled={loading}>
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+    <section className="csv-template-pending-section csv-template-saved-section csv-tb-section" aria-labelledby="csv-tb-saved-heading">
+      <div className="csv-tb-section-header">
+        <h3 id="csv-tb-saved-heading" className="csv-tb-section-title">
+          Saved CSV Templates
+        </h3>
+        {templates.length > 0 && (
+          <span className="csv-tb-count">
+            {templates.length} template{templates.length === 1 ? "" : "s"}
+          </span>
+        )}
+        <div className="csv-tb-section-actions">
+          <button type="button" className="csv-tb-btn" onClick={onRefresh} disabled={loading} aria-busy={loading || undefined}>
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {error && <p className="form-error">{error}</p>}
       {actionError && <p className="form-error">{actionError}</p>}
-      {!loading && templates.length === 0 && !error && <p>No saved templates yet — build one above and it will appear here.</p>}
+      {!loading && templates.length === 0 && !error && (
+        <div className="csv-tb-empty csv-tb-empty--neutral" role="status">
+          <div>
+            <p className="csv-tb-empty-title">No saved templates yet</p>
+            <p className="csv-tb-empty-body">Build one above and it will appear here.</p>
+          </div>
+        </div>
+      )}
 
       {templates.map((t) => (
-        <div key={t.id} className={`csv-template-pending-card${t.id === highlightedId ? " csv-template-cell-flash" : ""}`}>
-          <div className="csv-template-pending-card-header">
-            <strong>{t.name}</strong>
-            <span style={templateBadgeStyle(t.isActive)}>{t.isActive ? "Active" : "Disabled"}</span>
+        <article
+          key={t.id}
+          className={`csv-tb-template-card${t.isActive ? "" : " is-disabled"}${t.id === highlightedId ? " csv-template-cell-flash" : ""}`}
+          aria-labelledby={`csv-tb-template-${t.id}`}
+        >
+          <div className="csv-tb-template-head">
+            <h4 id={`csv-tb-template-${t.id}`} className="csv-tb-template-name">
+              {t.name}
+            </h4>
+            <span className={`csv-tb-badge ${t.isActive ? "csv-tb-badge--active" : "csv-tb-badge--disabled"}`}>
+              <span className="csv-tb-badge-dot" aria-hidden="true" />
+              {t.isActive ? "Active" : "Disabled"}
+            </span>
           </div>
-          <p>
+          <p className="csv-tb-template-summary">
             Version {t.version} &middot; {t.layoutSummary}
           </p>
-          <p>
+          <p className="csv-tb-template-summary">
             {t.mappedFieldsCount} mapped field{t.mappedFieldsCount === 1 ? "" : "s"} &middot; {t.rulesCount} rule{t.rulesCount === 1 ? "" : "s"} &middot;{" "}
             {t.valueMappingsCount} value mapping{t.valueMappingsCount === 1 ? "" : "s"}
           </p>
-          <p className="recent-entries-footer">
-            Created {formatUploadedAt(t.createdAt)} by {t.createdByName} &middot; Updated {formatUploadedAt(t.updatedAt)} by {t.updatedByName}
+          <p className="csv-tb-template-meta">
+            <span>Created {formatUploadedAt(t.createdAt)} by {t.createdByName}</span>
+            <span>Updated {formatUploadedAt(t.updatedAt)} by {t.updatedByName}</span>
           </p>
-          <div className="csv-template-saved-actions">
-            <button type="button" onClick={() => onView(t)}>View mappings</button>
-            <button type="button" onClick={() => onTest(t)} disabled={testingBusy && testingTemplateId === t.id}>
+          <div className="csv-tb-toolbar" role="group" aria-label={`Actions for ${t.name}`}>
+            <button type="button" className="csv-tb-btn" onClick={() => onView(t)}>View mappings</button>
+            <button
+              type="button"
+              className="csv-tb-btn"
+              onClick={() => onTest(t)}
+              disabled={testingBusy && testingTemplateId === t.id}
+              aria-busy={(testingBusy && testingTemplateId === t.id) || undefined}
+            >
               {testingBusy && testingTemplateId === t.id ? "Testing..." : "Test with a CSV"}
             </button>
-            <button type="button" onClick={() => onEdit(t)}>Edit</button>
-            <button type="button" onClick={() => onDuplicate(t)} disabled={duplicatingId === t.id}>
+            <button type="button" className="csv-tb-btn" onClick={() => onEdit(t)}>Edit</button>
+            <button
+              type="button"
+              className="csv-tb-btn csv-tb-btn--quiet"
+              onClick={() => onDuplicate(t)}
+              disabled={duplicatingId === t.id}
+              aria-busy={duplicatingId === t.id || undefined}
+            >
               {duplicatingId === t.id ? "Duplicating..." : "Duplicate"}
             </button>
-            <button type="button" onClick={() => onToggleActive(t)} disabled={togglingId === t.id}>
-              {togglingId === t.id ? "Updating..." : t.isActive ? "Disable" : "Enable"}
-            </button>
-            <button type="button" className="danger" onClick={() => onDeleteRequest(t)} disabled={deletingId === t.id}>
-              {deletingId === t.id ? "Deleting..." : "Delete"}
-            </button>
+            <span className="csv-tb-toolbar-divider" aria-hidden="true" />
+            <span className="csv-tb-toolbar-group">
+              <button
+                type="button"
+                className={`csv-tb-btn ${t.isActive ? "csv-tb-btn--warning" : "csv-tb-btn--outline"}`}
+                onClick={() => onToggleActive(t)}
+                disabled={togglingId === t.id}
+                aria-busy={togglingId === t.id || undefined}
+              >
+                {togglingId === t.id ? "Updating..." : t.isActive ? "Disable" : "Enable"}
+              </button>
+              <button
+                type="button"
+                className="csv-tb-btn csv-tb-btn--danger danger"
+                onClick={() => onDeleteRequest(t)}
+                disabled={deletingId === t.id}
+                aria-busy={deletingId === t.id || undefined}
+              >
+                {deletingId === t.id ? "Deleting..." : "Delete"}
+              </button>
+            </span>
           </div>
-        </div>
+        </article>
       ))}
-    </div>
+    </section>
   );
 }
 
