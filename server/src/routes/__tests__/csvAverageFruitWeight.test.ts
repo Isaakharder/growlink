@@ -243,9 +243,10 @@ test("appending a second import into the same entry merges AFW by pieces, not by
   assert.ok(Math.abs((afterSecond ?? 0) - expected) < 1e-9);
 });
 
-test("append merge keeps the existing AFW when the incoming group has none, and ignores an existing entry without one", () => {
+test("append merge keeps the existing AFW only when the incoming group adds no kg, and never saves a partial AFW", () => {
   assert.equal(mergeAppendAverageFruitWeight(100, 180, null), 180);
-  assert.equal(mergeAppendAverageFruitWeight(100, null, { kg: 15, pieces: 100 }), 150);
+  // The existing 100 kg has no AFW, so 150 g would describe only the incoming 15 kg.
+  assert.equal(mergeAppendAverageFruitWeight(100, null, { kg: 15, pieces: 100 }), null);
   assert.equal(mergeAppendAverageFruitWeight(0, null, null), null);
 });
 

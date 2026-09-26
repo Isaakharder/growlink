@@ -7283,6 +7283,10 @@ textarea.cleaning-checklist-response-input {
   margin: 0.5rem 0;
 }
 
+.csv-template-warning-list {
+  color: #a24b12;
+}
+
 .csv-template-pending-section {
   margin-bottom: 1.5rem;
   padding-bottom: 1.25rem;

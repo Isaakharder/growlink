@@ -175,9 +175,21 @@ type NormalizedGroup = {
   rows: NormalizedRow[];
 };
 
-type ValidationIssue = { code: string; message: string; groupKey?: string; rowIndex?: number };
+type ValidationIssue = {
+  code: string;
+  message: string;
+  groupKey?: string;
+  rowIndex?: number;
+  severity?: "blocking" | "warning";
+  /** What the issue prevents: the whole import, only the AFW, or nothing. */
+  impact?: "import" | "afw" | "none";
+  field?: string;
+  columnLabel?: string;
+  rowIndexes?: number[];
+  sourceFilename?: string;
+};
 
-type NormalizedPreview = { groups: NormalizedGroup[]; validationIssues: ValidationIssue[]; canImport: boolean };
+type NormalizedPreview = { groups: NormalizedGroup[]; validationIssues: ValidationIssue[]; warnings?: ValidationIssue[]; canImport: boolean };
 
 type PreviewResponse = { preview: NormalizedPreview; templateId: string | null; templateVersion: number | null; layoutMismatch: boolean };
 
@@ -225,6 +237,7 @@ type WeeklyCardSourceDetail = {
   reconciliationOk: boolean;
   unresolvedLabels: string[];
   blockingIssues: ValidationIssue[];
+  warnings?: ValidationIssue[];
 };
 
 type WeeklyCard = {
@@ -251,6 +264,7 @@ type WeeklyCard = {
   unresolvedLabelGroups: UnresolvedLabelGroup[];
   canImport: boolean;
   blockingIssues: ValidationIssue[];
+  warnings?: ValidationIssue[];
   sources: WeeklyCardSourceDetail[];
 };
 
@@ -2450,6 +2464,7 @@ export function CsvTemplateBuilderTab() {
                     ))}
                   </ul>
                 )}
+                <IssueWarningList warnings={testResult.preview.warnings} />
                 {testResult.preview.groups.length === 0 && <p>No data rows were found.</p>}
                 {testResult.preview.groups.map((group) => (
                   <div key={group.groupKey} className="csv-template-preview-group">
@@ -2915,11 +2930,26 @@ function formatTemplateBadge(name: string): string {
 
 const WEEKLY_CARD_LOTS_PREVIEW_COUNT = 5;
 
-// Presentation-only: several sources can independently surface the exact
-// same issue text (e.g. "row 7" happens to be the unresolved row in every
-// source file) — collapse identical messages into one line with a source
-// count rather than repeating the same sentence N times. The underlying
-// issues array (used for canImport / blocking behavior) is never altered.
+// Presentation-only: collapse identical messages into one line with a
+// count rather than repeating the same sentence N times. The count is of
+// messages, not sources — engine issues carry their filename, and one file
+// can repeat a message. The underlying issues array (used for canImport /
+// blocking behavior) is never altered.
+/** Non-blocking notes on how missing source values were handled — shown, but never gate an import. */
+function IssueWarningList({ warnings }: { warnings: ValidationIssue[] | undefined }) {
+  if (!warnings || warnings.length === 0) return null;
+  return (
+    <ul className="csv-template-warning-list csv-template-issue-list">
+      {dedupeIssueMessages(warnings).map(([message, count], i) => (
+        <li key={i}>
+          {message}
+          {count > 1 ? ` (\u00d7${count})` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function dedupeIssueMessages(issues: ValidationIssue[]): Array<[string, number]> {
   const counts = new Map<string, number>();
   for (const issue of issues) {
@@ -3124,11 +3154,13 @@ function WeeklyCardView({
           {dedupeIssueMessages(card.blockingIssues).map(([message, count], i) => (
             <li key={i}>
               {message}
-              {count > 1 ? ` (${count} sources)` : ""}
+              {count > 1 ? ` (\u00d7${count})` : ""}
             </li>
           ))}
         </ul>
       )}
+
+      <IssueWarningList warnings={card.warnings} />
 
       {card.unresolvedLabelGroups.length > 0 && (
         <ul className="csv-weekly-unresolved-list">
@@ -3229,6 +3261,14 @@ function WeeklyCardView({
                 .join(", ") || "none"}
             </p>
             {source.unresolvedLabels.length > 0 && <p className="form-error">Unresolved labels: {source.unresolvedLabels.join(", ")}</p>}
+            {source.blockingIssues.length > 0 && (
+              <ul className="form-error csv-template-issue-list">
+                {dedupeIssueMessages(source.blockingIssues).map(([message], i) => (
+                  <li key={i}>{message}</li>
+                ))}
+              </ul>
+            )}
+            <IssueWarningList warnings={source.warnings} />
           </div>
         ))}
       </details>
@@ -3798,6 +3838,7 @@ function PreviewPanel({
           ))}
         </ul>
       )}
+      <IssueWarningList warnings={preview.warnings} />
 
       {preview.groups.map((group) => {
         const groupIssues = preview.validationIssues.filter((i) => !i.groupKey || i.groupKey === group.groupKey);

@@ -1850,17 +1850,28 @@ async function ensureYieldSizeId(organizationId: string, name: string, knownIds:
  * AFW for a yield entry after appending one more group to it, by the same
  * canonical rule as the engine (total kg x 1000 / total pieces). The
  * existing entry stores only its kg and AFW, so its pieces are recovered as
- * kg x 1000 / AFW — exact for entries this path wrote. A side without an AFW
- * is left out, matching pdfImport.ts's append merge.
+ * kg x 1000 / AFW — exact for entries this path wrote.
+ *
+ * A side that has kg but no AFW makes the merged AFW null: an AFW taken
+ * from only the other side would describe part of the entry's kg as if it
+ * were all of it. A side with no kg at all (e.g. a lot that recorded no
+ * fruit) has nothing to describe and is left out.
  */
 export function mergeAppendAverageFruitWeight(
   existingKg: number,
   existingAverageFruitWeightG: number | null,
-  incoming: { kg: number; pieces: number } | null
+  incoming: { kg: number; pieces: number } | null,
+  incomingKg: number = incoming?.kg ?? 0
 ): number | null {
-  const existingHasAfw = existingAverageFruitWeightG !== null && existingAverageFruitWeightG > 0 && existingKg > 0;
-  if (!incoming || incoming.pieces <= 0) return existingHasAfw ? existingAverageFruitWeightG : null;
-  if (!existingHasAfw) return (incoming.kg * 1000) / incoming.pieces;
+  const EPS = 0.005;
+  const existingHasKg = existingKg > EPS;
+  const existingHasAfw = existingAverageFruitWeightG !== null && existingAverageFruitWeightG > 0 && existingHasKg;
+  if (!incoming || incoming.pieces <= 0) {
+    if (incomingKg > EPS) return null;
+    return existingHasAfw ? existingAverageFruitWeightG : null;
+  }
+  if (!existingHasKg) return (incoming.kg * 1000) / incoming.pieces;
+  if (!existingHasAfw) return null;
   const existingPieces = (existingKg * 1000) / existingAverageFruitWeightG;
   return ((existingKg + incoming.kg) * 1000) / (existingPieces + incoming.pieces);
 }
@@ -1981,7 +1992,8 @@ export async function importCsvTemplateGroup(
           average_fruit_weight_g: mergeAppendAverageFruitWeight(
             existingKg,
             existingEntry.average_fruit_weight_g as number | null,
-            freshGroup.averageFruitWeightBasis
+            freshGroup.averageFruitWeightBasis,
+            Object.values(sizeKgById).reduce((sum, v) => sum + v, 0)
           ),
           ...mergedTotals,
           updated_at: new Date().toISOString()

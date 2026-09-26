@@ -58,6 +58,7 @@ export type WeeklyCardSourceDetail = {
   reconciliationOk: boolean;
   unresolvedLabels: string[];
   blockingIssues: ValidationIssue[];
+  warnings: ValidationIssue[];
 };
 
 export type WeeklyCard = {
@@ -85,6 +86,8 @@ export type WeeklyCard = {
   unresolvedLabelGroups: UnresolvedLabelGroup[];
   canImport: boolean;
   blockingIssues: ValidationIssue[];
+  /** Non-blocking notes (e.g. AFW calculated from pieces, or left blank), each naming its source file. */
+  warnings: ValidationIssue[];
   sources: WeeklyCardSourceDetail[];
 };
 
@@ -98,8 +101,22 @@ function resolveVariety(
   return { key: `raw:${trimmed.toLowerCase() || "unknown"}`, id: null, name: trimmed || "Unknown variety", areaM2: null };
 }
 
-function groupBlockingIssues(preview: NormalizedPreview, group: NormalizedGroup): ValidationIssue[] {
-  return preview.validationIssues.filter((i) => !i.groupKey || i.groupKey === group.groupKey);
+/** Tags an issue with the retained file it came from — a card spans several files, so a message without one can't be acted on. */
+function withSourceFilename(issue: ValidationIssue, sourceFilename: string): ValidationIssue {
+  if (issue.sourceFilename) return issue;
+  return { ...issue, sourceFilename, message: `${sourceFilename}: ${issue.message}` };
+}
+
+function groupBlockingIssues(preview: NormalizedPreview, group: NormalizedGroup, sourceFilename: string): ValidationIssue[] {
+  return preview.validationIssues
+    .filter((i) => !i.groupKey || i.groupKey === group.groupKey)
+    .map((i) => withSourceFilename(i, sourceFilename));
+}
+
+function groupWarnings(preview: NormalizedPreview, group: NormalizedGroup, sourceFilename: string): ValidationIssue[] {
+  return (preview.warnings ?? [])
+    .filter((i) => !i.groupKey || i.groupKey === group.groupKey)
+    .map((i) => withSourceFilename(i, sourceFilename));
 }
 
 function unresolvedRowsOf(group: NormalizedGroup): Array<{ rawValue: string; kg: number; pieces: number }> {
@@ -134,6 +151,8 @@ export function buildWeeklyCards(
     afwPieces: number;
     /** False once any contributing group with mapped kg has no valid AFW basis — the card then shows no AFW rather than one covering only part of its kg. */
     afwComplete: boolean;
+    /** Files whose mapped kg has no AFW basis — named in the card's warning when its AFW is left blank. */
+    afwMissingSources: Set<string>;
     ignoredKg: number;
     distributedKg: number;
     unresolvedKg: number;
@@ -145,6 +164,7 @@ export function buildWeeklyCards(
     hasLayoutMismatch: boolean;
     unresolvedLabelGroups: Map<string, UnresolvedLabelGroup>;
     blockingIssues: ValidationIssue[];
+    warnings: ValidationIssue[];
     sources: Map<string, WeeklyCardSourceDetail>;
   };
 
@@ -167,6 +187,7 @@ export function buildWeeklyCards(
           afwKg: 0,
           afwPieces: 0,
           afwComplete: true,
+          afwMissingSources: new Set(),
           ignoredKg: 0,
           distributedKg: 0,
           unresolvedKg: 0,
@@ -178,12 +199,14 @@ export function buildWeeklyCards(
           hasLayoutMismatch: false,
           unresolvedLabelGroups: new Map(),
           blockingIssues: [],
+          warnings: [],
           sources: new Map()
         };
         buckets.set(cardKey, bucket);
       }
 
-      const groupIssues = groupBlockingIssues(entry.preview, group);
+      const groupIssues = groupBlockingIssues(entry.preview, group, entry.sourceFilename);
+      const warningsForGroup = groupWarnings(entry.preview, group, entry.sourceFilename);
 
       bucket.mappedKg += group.reconciliation.recognizedSizeKg;
       if (group.averageFruitWeightBasis) {
@@ -191,6 +214,7 @@ export function buildWeeklyCards(
         bucket.afwPieces += group.averageFruitWeightBasis.pieces;
       } else if (group.reconciliation.recognizedSizeKg > 0) {
         bucket.afwComplete = false;
+        bucket.afwMissingSources.add(entry.sourceFilename);
       }
       bucket.ignoredKg += group.reconciliation.ignoredKg;
       bucket.distributedKg += group.reconciliation.distributedKg;
@@ -212,6 +236,7 @@ export function buildWeeklyCards(
       bucket.templateNameVersions.add(`${entry.templateName ?? "Unknown"}::${entry.templateVersion ?? "?"}`);
       if (entry.layoutMismatch) bucket.hasLayoutMismatch = true;
       bucket.blockingIssues.push(...groupIssues);
+      bucket.warnings.push(...warningsForGroup);
 
       for (const row of unresolvedRowsOf(group)) {
         const labelKey = row.rawValue.toLowerCase();
@@ -259,7 +284,8 @@ export function buildWeeklyCards(
           averageFruitWeightBasis: group.averageFruitWeightBasis,
           reconciliationOk: !group.reconciliation.unexplainedDifference,
           unresolvedLabels: unresolvedLabelsForGroup,
-          blockingIssues: groupIssues
+          blockingIssues: groupIssues,
+          warnings: warningsForGroup
         });
       } else {
         // Same source contributed a second group to the SAME card (e.g. two
@@ -280,6 +306,7 @@ export function buildWeeklyCards(
           if (!existingSource.unresolvedLabels.includes(label)) existingSource.unresolvedLabels.push(label);
         }
         existingSource.blockingIssues.push(...groupIssues);
+        existingSource.warnings.push(...warningsForGroup);
       }
     }
   }
@@ -295,6 +322,18 @@ export function buildWeeklyCards(
       : distinctTemplates.length > 1
         ? "mixed"
         : "exact";
+
+    const warnings = [...bucket.warnings];
+    if (!bucket.afwComplete) {
+      // Never a weekly AFW from only the files that have one: it would
+      // silently describe part of the week's kg as if it were all of it.
+      warnings.push({
+        code: "afw_not_calculable",
+        severity: "warning",
+        impact: "afw",
+        message: `Weekly AFW is left blank: ${Array.from(bucket.afwMissingSources).join(", ")} ${bucket.afwMissingSources.size === 1 ? "has" : "have"} kg without a calculable AFW, so no AFW covers all of this week's kg. Kg and sizes can still be imported.`
+      });
+    }
 
     cards.push({
       cardKey,
@@ -321,6 +360,7 @@ export function buildWeeklyCards(
       unresolvedLabelGroups: Array.from(bucket.unresolvedLabelGroups.values()),
       canImport: bucket.blockingIssues.length === 0,
       blockingIssues: bucket.blockingIssues,
+      warnings,
       sources: Array.from(bucket.sources.values())
     });
   }
