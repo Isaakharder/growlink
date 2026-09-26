@@ -54,6 +54,7 @@ export type WeeklyCardSourceDetail = {
   mappedKg: number;
   sizeKg: Record<string, number>;
   averageFruitWeightG: number | null;
+  averageFruitWeightBasis: { kg: number; pieces: number } | null;
   reconciliationOk: boolean;
   unresolvedLabels: string[];
   blockingIssues: ValidationIssue[];
@@ -101,17 +102,6 @@ function groupBlockingIssues(preview: NormalizedPreview, group: NormalizedGroup)
   return preview.validationIssues.filter((i) => !i.groupKey || i.groupKey === group.groupKey);
 }
 
-function includedTotals(group: NormalizedGroup): { kg: number; pieces: number } {
-  let kg = 0;
-  let pieces = 0;
-  for (const row of group.rows) {
-    if (row.action !== "included") continue;
-    kg += row.sizeWeightKg ?? 0;
-    pieces += row.pieceCount ?? 0;
-  }
-  return { kg, pieces };
-}
-
 function unresolvedRowsOf(group: NormalizedGroup): Array<{ rawValue: string; kg: number; pieces: number }> {
   const out: Array<{ rawValue: string; kg: number; pieces: number }> = [];
   for (const row of group.rows) {
@@ -140,8 +130,10 @@ export function buildWeeklyCards(
     isoYear: number | null;
     isoWeek: number | null;
     mappedKg: number;
-    includedKg: number;
-    includedPieces: number;
+    afwKg: number;
+    afwPieces: number;
+    /** False once any contributing group with mapped kg has no valid AFW basis — the card then shows no AFW rather than one covering only part of its kg. */
+    afwComplete: boolean;
     ignoredKg: number;
     distributedKg: number;
     unresolvedKg: number;
@@ -172,8 +164,9 @@ export function buildWeeklyCards(
           isoYear: group.isoYear,
           isoWeek: group.isoWeek,
           mappedKg: 0,
-          includedKg: 0,
-          includedPieces: 0,
+          afwKg: 0,
+          afwPieces: 0,
+          afwComplete: true,
           ignoredKg: 0,
           distributedKg: 0,
           unresolvedKg: 0,
@@ -191,11 +184,14 @@ export function buildWeeklyCards(
       }
 
       const groupIssues = groupBlockingIssues(entry.preview, group);
-      const included = includedTotals(group);
 
       bucket.mappedKg += group.reconciliation.recognizedSizeKg;
-      bucket.includedKg += included.kg;
-      bucket.includedPieces += included.pieces;
+      if (group.averageFruitWeightBasis) {
+        bucket.afwKg += group.averageFruitWeightBasis.kg;
+        bucket.afwPieces += group.averageFruitWeightBasis.pieces;
+      } else if (group.reconciliation.recognizedSizeKg > 0) {
+        bucket.afwComplete = false;
+      }
       bucket.ignoredKg += group.reconciliation.ignoredKg;
       bucket.distributedKg += group.reconciliation.distributedKg;
       bucket.unresolvedKg += group.reconciliation.unresolvedKg;
@@ -260,6 +256,7 @@ export function buildWeeklyCards(
           mappedKg: group.reconciliation.recognizedSizeKg,
           sizeKg: { ...group.sizeKg },
           averageFruitWeightG: group.averageFruitWeightG,
+          averageFruitWeightBasis: group.averageFruitWeightBasis,
           reconciliationOk: !group.reconciliation.unexplainedDifference,
           unresolvedLabels: unresolvedLabelsForGroup,
           blockingIssues: groupIssues
@@ -268,6 +265,13 @@ export function buildWeeklyCards(
         // Same source contributed a second group to the SAME card (e.g. two
         // lots for this variety/week in one file) — merge into one source row.
         existingSource.mappedKg += group.reconciliation.recognizedSizeKg;
+        if (group.averageFruitWeightBasis || group.reconciliation.recognizedSizeKg > 0) {
+          const prior = existingSource.averageFruitWeightBasis;
+          const next = group.averageFruitWeightBasis;
+          const basis = prior && next ? { kg: prior.kg + next.kg, pieces: prior.pieces + next.pieces } : null;
+          existingSource.averageFruitWeightBasis = basis;
+          existingSource.averageFruitWeightG = basis ? (basis.kg * 1000) / basis.pieces : null;
+        }
         for (const [sizeName, kg] of Object.entries(group.sizeKg)) {
           existingSource.sizeKg[sizeName] = (existingSource.sizeKg[sizeName] ?? 0) + kg;
         }
@@ -304,7 +308,7 @@ export function buildWeeklyCards(
       sourceFileCount: bucket.sources.size,
       templateNames: distinctTemplates,
       matchStatus,
-      combinedAverageFruitWeightG: bucket.includedPieces > 0 ? (bucket.includedKg * 1000) / bucket.includedPieces : null,
+      combinedAverageFruitWeightG: bucket.afwComplete && bucket.afwPieces > 0 ? (bucket.afwKg * 1000) / bucket.afwPieces : null,
       ignoredKg: Math.round(bucket.ignoredKg * 100) / 100,
       distributedKg: Math.round(bucket.distributedKg * 100) / 100,
       unresolvedKg: Math.round(bucket.unresolvedKg * 100) / 100,

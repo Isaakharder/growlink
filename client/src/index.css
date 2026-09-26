@@ -8763,3 +8763,130 @@ textarea.cleaning-checklist-response-input {
   padding: 0.55rem 1.1rem;
   cursor: pointer;
 }
+
+/* CSV Template Builder — source picker and Source File Preview.
+   Desktop: the source grid and the mapping controls sit side by side.
+   Narrow screens: the preview stacks above the controls and can be
+   collapsed; collapsing only hides it, so mapping state is untouched. */
+.csv-source-picker {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.csv-source-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.csv-source-picker-list {
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+
+.csv-source-picker-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.csv-template-editor-layout {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  align-items: start;
+}
+
+.csv-source-preview {
+  position: sticky;
+  top: 0.5rem;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem 0.25rem;
+  background: var(--surface);
+}
+
+.csv-source-preview-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.csv-source-preview-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.csv-source-preview-toggle {
+  display: none;
+}
+
+.csv-template-editor-controls {
+  min-width: 0;
+}
+
+.csv-template-editor-controls .csv-template-toolbar {
+  flex-wrap: wrap;
+}
+
+.csv-template-column-header-text {
+  font-weight: 600;
+  font-size: 0.74rem;
+}
+
+.csv-template-column-occurrence {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.csv-template-grid .csv-template-col-active {
+  box-shadow: inset 2px 0 0 var(--brand), inset -2px 0 0 var(--brand);
+}
+
+.csv-template-grid th.csv-template-col-active {
+  box-shadow: inset 2px 0 0 var(--brand), inset -2px 0 0 var(--brand), inset 0 2px 0 var(--brand);
+}
+
+.csv-template-column-map ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.csv-template-column-map li {
+  padding: 0.2rem 0;
+}
+
+.csv-template-column-map li.is-active {
+  font-weight: 600;
+}
+
+.csv-template-column-map-field {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 1100px) {
+  .csv-template-editor-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .csv-source-preview {
+    position: static;
+  }
+
+  .csv-source-preview-toggle {
+    display: inline-block;
+  }
+
+  .csv-source-preview.is-collapsed .csv-source-preview-body {
+    display: none;
+  }
+}

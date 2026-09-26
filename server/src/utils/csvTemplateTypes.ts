@@ -205,6 +205,13 @@ export type NormalizedGroup = {
   wasteKg: number;
   pieceCount: number;
   averageFruitWeightG: number | null;
+  /**
+   * The exact kg and piece totals averageFruitWeightG was derived from
+   * (averageFruitWeightG === basis.kg * 1000 / basis.pieces). Null whenever
+   * averageFruitWeightG is null. Anything combining groups (weekly cards,
+   * append-merges) must sum these, never average the AFWs themselves.
+   */
+  averageFruitWeightBasis: { kg: number; pieces: number } | null;
   totalLotWeightKg: number | null;
   reconciliation: RowGroupReconciliation;
   rows: NormalizedRow[];
@@ -221,7 +228,8 @@ export type ValidationIssueCode =
   | "subtotal_and_components_both_included"
   | "layout_mismatch"
   | "unexplained_reconciliation_difference"
-  | "possible_duplicate_weight_source";
+  | "possible_duplicate_weight_source"
+  | "possible_lot_total_fruit_column";
 
 export type ValidationIssue = {
   code: ValidationIssueCode;

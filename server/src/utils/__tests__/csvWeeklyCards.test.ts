@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildWeeklyCards, type PendingSourceEntry, type VarietyMatch } from "../csvWeeklyCards";
+import { computeGroupAverageFruitWeight } from "../csvTemplateEngine";
 import type { NormalizedGroup, NormalizedRow, NormalizedPreview, ValidationIssue } from "../csvTemplateTypes";
 
 const ORG_ID = "org-1";
@@ -24,6 +25,8 @@ function row(overrides: Partial<NormalizedRow> = {}): NormalizedRow {
 function group(overrides: Partial<NormalizedGroup> = {}): NormalizedGroup {
   const rows = overrides.rows ?? [row()];
   const sizeKg = overrides.sizeKg ?? { SM: 10 };
+  // AFW and its basis come from the real engine rule, exactly as a preview's would.
+  const afw = computeGroupAverageFruitWeight(rows.filter((r) => r.action === "included"));
   return {
     groupKey: "group-1",
     varietyRaw: "Cadalora",
@@ -36,7 +39,8 @@ function group(overrides: Partial<NormalizedGroup> = {}): NormalizedGroup {
     unresolvedSizeLabels: [],
     wasteKg: 0,
     pieceCount: 100,
-    averageFruitWeightG: 100,
+    averageFruitWeightG: afw.averageFruitWeightG,
+    averageFruitWeightBasis: afw.basis,
     totalLotWeightKg: null,
     reconciliation: {
       rawRowWeightKg: 10,

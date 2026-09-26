@@ -215,3 +215,75 @@ export function plainLanguageIgnoreRule(rule: InferredIgnoreRule): string {
   const subject = rule.mappedField && rule.mappedField !== "ignore" ? MAPPING_TYPE_LABELS[rule.mappedField] : rule.columnLabel;
   return `When ${subject} is "${rule.value}," ignore this row.`;
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate header positions
+// ---------------------------------------------------------------------------
+
+export type HeaderOccurrence = {
+  /** Trimmed header text ("" for a blank header cell). */
+  text: string;
+  /** 1-based position among the columns sharing this exact header text. */
+  occurrence: number;
+  /** How many columns share this header text. */
+  total: number;
+};
+
+/** Per column, which occurrence of its header text it is — e.g. FlowMaster's second "PCS" is { occurrence: 2, total: 2 }. */
+export function describeHeaderOccurrences(headerRow: string[]): HeaderOccurrence[] {
+  const normalized = headerRow.map((h) => normalize(h ?? ""));
+  const totals = new Map<string, number>();
+  for (const key of normalized) totals.set(key, (totals.get(key) ?? 0) + 1);
+
+  const seen = new Map<string, number>();
+  return headerRow.map((h, i) => {
+    const key = normalized[i];
+    const occurrence = (seen.get(key) ?? 0) + 1;
+    seen.set(key, occurrence);
+    return { text: (h ?? "").trim(), occurrence, total: totals.get(key) ?? 1 };
+  });
+}
+
+export function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  const suffix = n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th";
+  return `${n}${suffix}`;
+}
+
+const FRUIT_FIELDS: MappingType[] = ["average_fruit_weight_g", "piece_count"];
+
+/**
+ * Positional rule for files that repeat a WEIGHT/AVG/PCS header group (a
+ * FlowMaster export has a per-size group then a lot-total group): Average
+ * Fruit Weight and Piece Count must come from the same occurrence of their
+ * repeated header as Size Weight kg does. Returns one message per field
+ * that was taken from a different group; empty when the headers aren't
+ * repeated or the mapping is consistent.
+ */
+export function findDuplicateGroupMismatches(headerRow: string[], assignments: ColumnAssignments): string[] {
+  const occurrences = describeHeaderOccurrences(headerRow);
+  const columnFor = (field: MappingType): number | undefined => {
+    const matches = [...assignments.entries()].filter(([, f]) => f === field).map(([c]) => c);
+    return matches.length > 0 ? Math.min(...matches) : undefined;
+  };
+
+  const weightColumn = columnFor("size_weight_kg");
+  if (weightColumn === undefined) return [];
+  const weight = occurrences[weightColumn];
+  if (!weight || weight.total < 2) return [];
+
+  const messages: string[] = [];
+  for (const field of FRUIT_FIELDS) {
+    const column = columnFor(field);
+    if (column === undefined) continue;
+    const info = occurrences[column];
+    if (!info || info.total < 2 || info.occurrence === weight.occurrence) continue;
+    messages.push(
+      `${MAPPING_TYPE_LABELS[field]} uses the ${ordinal(info.occurrence)} "${info.text}" column, but Size Weight kg uses the ` +
+        `${ordinal(weight.occurrence)} "${weight.text}" column. Map it from the same repeated group as Size Weight kg — ` +
+        `a later group usually holds lot totals, which gives a wrong average fruit weight.`
+    );
+  }
+  return messages;
+}

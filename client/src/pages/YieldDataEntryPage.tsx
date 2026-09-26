@@ -1,10 +1,18 @@
-import { useState } from "react";
+import { lazy, useState } from "react";
 import { KgEntriesTab } from "./KgEntriesTab";
 import { CasesEntryTab } from "./CasesEntryTab";
 import { PackHistoryTab } from "./PackHistoryTab";
 import { WasteImportsTab } from "./WasteImportsTab";
 import { ProjectedTab } from "./ProjectedTab";
-import { CsvTemplateBuilderTab } from "./CsvTemplateBuilderTab";
+import { LazyRoute } from "../components/LazyRoute";
+
+// The CSV Template Builder is a large, admin-oriented tool only opened from
+// its own tab — lazy-loaded (same pattern as routes.tsx's Maintenance
+// pages) so its code stays out of the bundle every user downloads, which
+// was within a few KB of the PWA's 2 MiB precache limit.
+const CsvTemplateBuilderTab = lazy(() =>
+  import("./CsvTemplateBuilderTab").then((m) => ({ default: m.CsvTemplateBuilderTab }))
+);
 
 type TabType = "kg" | "cases" | "packHistory" | "waste" | "projected" | "csvTemplates";
 
@@ -89,7 +97,9 @@ export function YieldDataEntryPage() {
 
       {activeTab === "csvTemplates" ? (
         <div className="tab-content">
-          <CsvTemplateBuilderTab />
+          <LazyRoute>
+            <CsvTemplateBuilderTab />
+          </LazyRoute>
         </div>
       ) : null}
     </section>

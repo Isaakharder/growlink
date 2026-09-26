@@ -172,18 +172,11 @@ test("FlowMaster-shaped fixture: AFW is calculated from included kg and pieces, 
   const preview = normalizeCsvWithTemplate(fmGrid(), fmTemplate(), ctx(FM_SIZE_ID_TO_NAME));
   const group = preview.groups[0];
 
-  // kg-weighted average of AVG (col 9) over every "included" row only.
-  const includedRows = group.rows.filter((r) => r.action === "included");
-  let numerator = 0;
-  let denominator = 0;
-  for (const r of includedRows) {
-    if (r.averageFruitWeightG !== null && r.sizeWeightKg !== null && r.sizeWeightKg > 0) {
-      numerator += r.averageFruitWeightG * r.sizeWeightKg;
-      denominator += r.sizeWeightKg;
-    }
-  }
-  const expected = numerator / denominator;
-  assert.ok(Math.abs((group.averageFruitWeightG ?? 0) - expected) < 1e-9);
+  // Total included kg x 1000 / total included PCS (col 10) — the pinned
+  // FlowMaster parser's rule — over SM-XXL only: 9982.768 kg / 58126 pcs.
+  // (The 24ct row is included via distribute but has 0 kg / 0 pcs.)
+  assert.deepEqual(group.averageFruitWeightBasis, { kg: 34.123 + 468.121 + 1380.906 + 3257.101 + 4489.312 + 353.205, pieces: 58126 });
+  assert.ok(Math.abs((group.averageFruitWeightG ?? 0) - (9982.768 * 1000) / 58126) < 1e-6);
 });
 
 test("FlowMaster-shaped fixture: distributing the 24ct row (0 kg) across all sizes never errors and adds zero everywhere", () => {

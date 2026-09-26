@@ -200,8 +200,11 @@ export async function loadAlreadyImportedLotNumbers(organizationId: string): Pro
   return new Set((data ?? []).map((r) => r.lot_number as string));
 }
 
-export async function loadCurrentActiveTemplates(organizationId: string): Promise<TemplateRow[]> {
-  const { data, error } = await supabase
+/** The Supabase client, injectable on the source-file read paths so their organization scoping can be tested without a live database. */
+export type DbClient = typeof supabase;
+
+export async function loadCurrentActiveTemplates(organizationId: string, db: DbClient = supabase): Promise<TemplateRow[]> {
+  const { data, error } = await db
     .from("csv_mapping_templates")
     .select("*")
     .eq("organization_id", organizationId)
@@ -435,27 +438,29 @@ export async function previewManualCsvUpload(
  */
 export async function getSourceFileGridAndMatch(
   organizationId: string,
-  sourceFileId: string
-): Promise<ParseAndMatchResult & { filename: string }> {
-  const { data: sourceFile, error } = await supabase
+  sourceFileId: string,
+  db: DbClient = supabase
+): Promise<ParseAndMatchResult & { filename: string; uploadedAt: string }> {
+  const { data: sourceFile, error } = await db
     .from("csv_import_source_files")
-    .select("filename, delimiter")
+    .select("filename, delimiter, uploaded_at")
     .eq("id", sourceFileId)
     .eq("organization_id", organizationId)
     .maybeSingle();
   if (error) throw error;
   if (!sourceFile) throw new TemplateNotFoundError("Source file not found.");
 
-  const grid = await loadSourceFileGrid(organizationId, sourceFileId, sourceFile.delimiter as string);
+  const grid = await loadSourceFileGrid(organizationId, sourceFileId, sourceFile.delimiter as string, db);
 
   const candidateFingerprint = computeFingerprint(grid.rows, grid.delimiter, 0);
   const candidateHash = computeFingerprintHash(candidateFingerprint);
-  const savedTemplates = await loadCurrentActiveTemplates(organizationId);
+  const savedTemplates = await loadCurrentActiveTemplates(organizationId, db);
   const match = matchFingerprint(candidateFingerprint, candidateHash, toFingerprintCandidates(savedTemplates));
 
   return {
     sourceFileId,
     filename: sourceFile.filename as string,
+    uploadedAt: sourceFile.uploaded_at as string,
     grid: grid.rows,
     rowCount: grid.rowCount,
     columnCount: grid.columnCount,
@@ -470,6 +475,158 @@ export async function getSourceFileGridAndMatch(
       similarity: match.similarity ?? null
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Recent retained sources — lets the Template Builder edit or test a
+// mapping against a CSV this organization already uploaded (its preserved
+// raw text in csv_import_source_files) instead of requiring the file again.
+// Every query is organization-filtered; a source id is only ever resolved
+// together with the caller's organization.
+// ---------------------------------------------------------------------------
+
+export const RECENT_SOURCE_DEFAULT_LIMIT = 25;
+export const RECENT_SOURCE_MAX_LIMIT = 100;
+
+export type RecentSourceStatus = "imported" | "pending" | "needs_template" | "not_queued";
+
+export type RecentSourceFile = {
+  id: string;
+  filename: string;
+  uploadedAt: string;
+  rowCount: number;
+  columnCount: number;
+  status: RecentSourceStatus;
+  templateId: string | null;
+  templateName: string | null;
+  templateVersion: number | null;
+  /** Only set when a templateId was requested: whether this file's layout fingerprint-matches that exact template version. */
+  compatible: boolean | null;
+};
+
+type RecentSourceRow = {
+  id: string;
+  filename: string;
+  uploaded_at: string;
+  row_count: number;
+  column_count: number;
+  raw_text?: string;
+};
+
+export async function listRecentSourceFiles(
+  organizationId: string,
+  options: { templateId?: string | null; limit?: number } = {},
+  db: DbClient = supabase
+): Promise<RecentSourceFile[]> {
+  const limit = Math.min(Math.max(Math.trunc(options.limit ?? RECENT_SOURCE_DEFAULT_LIMIT), 1), RECENT_SOURCE_MAX_LIMIT);
+
+  let compatibilityTemplate: TemplateRow | null = null;
+  if (options.templateId) {
+    const { data, error } = await db
+      .from("csv_mapping_templates")
+      .select("*")
+      .eq("id", options.templateId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new TemplateNotFoundError("Template not found.");
+    compatibilityTemplate = data as TemplateRow;
+  }
+
+  // raw_text is only needed (and only fetched) to check compatibility.
+  const columns = compatibilityTemplate
+    ? "id, filename, uploaded_at, row_count, column_count, raw_text"
+    : "id, filename, uploaded_at, row_count, column_count";
+  const { data: files, error: filesErr } = await db
+    .from("csv_import_source_files")
+    .select(columns)
+    .eq("organization_id", organizationId)
+    .order("uploaded_at", { ascending: false })
+    .limit(limit);
+  if (filesErr) throw filesErr;
+
+  const rows = (files ?? []) as unknown as RecentSourceRow[];
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+
+  const [{ data: runs, error: runsErr }, { data: pending, error: pendingErr }] = await Promise.all([
+    db
+      .from("yield_import_runs")
+      .select("source_file_id, csv_mapping_template_id")
+      .eq("organization_id", organizationId)
+      .in("source_file_id", ids),
+    db
+      .from("agent_pending_imports")
+      .select("source_file_id, csv_mapping_template_id, needs_template")
+      .eq("organization_id", organizationId)
+      .in("source_file_id", ids)
+  ]);
+  if (runsErr) throw runsErr;
+  if (pendingErr) throw pendingErr;
+
+  const runBySource = new Map<string, { templateId: string | null }>();
+  for (const r of runs ?? []) {
+    runBySource.set(r.source_file_id as string, { templateId: (r.csv_mapping_template_id as string | null) ?? null });
+  }
+  const pendingBySource = new Map<string, { templateId: string | null; needsTemplate: boolean }>();
+  for (const p of pending ?? []) {
+    pendingBySource.set(p.source_file_id as string, {
+      templateId: (p.csv_mapping_template_id as string | null) ?? null,
+      needsTemplate: p.needs_template === true
+    });
+  }
+
+  const templateIds = Array.from(
+    new Set([...runBySource.values(), ...pendingBySource.values()].map((v) => v.templateId).filter((id): id is string => !!id))
+  );
+  const templateById = new Map<string, { name: string; version: number }>();
+  if (templateIds.length > 0) {
+    const { data: templateRows, error: templatesErr } = await db
+      .from("csv_mapping_templates")
+      .select("id, name, version")
+      .eq("organization_id", organizationId)
+      .in("id", templateIds);
+    if (templatesErr) throw templatesErr;
+    for (const t of templateRows ?? []) {
+      templateById.set(t.id as string, { name: t.name as string, version: t.version as number });
+    }
+  }
+
+  return rows.map((row) => {
+    // A pending row is the source's current state; an import run is what it
+    // became. A file with neither was a test upload or a removed pending row.
+    const pendingInfo = pendingBySource.get(row.id);
+    const runInfo = runBySource.get(row.id);
+    const status: RecentSourceStatus = pendingInfo
+      ? pendingInfo.needsTemplate
+        ? "needs_template"
+        : "pending"
+      : runInfo
+        ? "imported"
+        : "not_queued";
+    const templateId = pendingInfo?.templateId ?? runInfo?.templateId ?? null;
+    const template = templateId ? templateById.get(templateId) : undefined;
+
+    let compatible: boolean | null = null;
+    if (compatibilityTemplate && typeof row.raw_text === "string") {
+      const grid = parseCsvGrid(row.raw_text, compatibilityTemplate.delimiter);
+      const fingerprint = computeFingerprint(grid.rows, compatibilityTemplate.delimiter, compatibilityTemplate.header_row_index);
+      compatible = computeFingerprintHash(fingerprint) === compatibilityTemplate.fingerprint_hash;
+    }
+
+    return {
+      id: row.id,
+      filename: row.filename,
+      uploadedAt: row.uploaded_at,
+      rowCount: row.row_count,
+      columnCount: row.column_count,
+      status,
+      templateId,
+      templateName: template?.name ?? null,
+      templateVersion: template?.version ?? null,
+      compatible
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -904,8 +1061,8 @@ export function parsePreviewBody(input: unknown): PreviewInput {
   };
 }
 
-async function loadSourceFileGrid(organizationId: string, sourceFileId: string, delimiter?: string) {
-  const { data, error } = await supabase
+async function loadSourceFileGrid(organizationId: string, sourceFileId: string, delimiter?: string, db: DbClient = supabase) {
+  const { data, error } = await db
     .from("csv_import_source_files")
     .select("raw_text")
     .eq("id", sourceFileId)
@@ -1374,6 +1531,11 @@ function groupsMatch(fresh: NormalizedGroup, approved: NormalizedGroup): boolean
   if (fresh.isoYear !== approved.isoYear || fresh.isoWeek !== approved.isoWeek) return false;
   if (fresh.lotNumber !== approved.lotNumber) return false;
   if (Math.abs(fresh.reconciliation.recognizedSizeKg - approved.reconciliation.recognizedSizeKg) > EPS) return false;
+  // The AFW the user approved must be the AFW that gets saved.
+  const freshAfw = fresh.averageFruitWeightG ?? null;
+  const approvedAfw = approved.averageFruitWeightG ?? null;
+  if ((freshAfw === null) !== (approvedAfw === null)) return false;
+  if (freshAfw !== null && approvedAfw !== null && Math.abs(freshAfw - approvedAfw) > EPS) return false;
 
   const freshKeys = Object.keys(fresh.sizeKg).sort();
   const approvedKeys = Object.keys(approved.sizeKg).sort();
@@ -1423,6 +1585,25 @@ async function ensureYieldSizeId(organizationId: string, name: string, knownIds:
 
   knownIds.set(name.trim().toLowerCase(), created.id as string);
   return created.id as string;
+}
+
+/**
+ * AFW for a yield entry after appending one more group to it, by the same
+ * canonical rule as the engine (total kg x 1000 / total pieces). The
+ * existing entry stores only its kg and AFW, so its pieces are recovered as
+ * kg x 1000 / AFW — exact for entries this path wrote. A side without an AFW
+ * is left out, matching pdfImport.ts's append merge.
+ */
+export function mergeAppendAverageFruitWeight(
+  existingKg: number,
+  existingAverageFruitWeightG: number | null,
+  incoming: { kg: number; pieces: number } | null
+): number | null {
+  const existingHasAfw = existingAverageFruitWeightG !== null && existingAverageFruitWeightG > 0 && existingKg > 0;
+  if (!incoming || incoming.pieces <= 0) return existingHasAfw ? existingAverageFruitWeightG : null;
+  if (!existingHasAfw) return (incoming.kg * 1000) / incoming.pieces;
+  const existingPieces = (existingKg * 1000) / existingAverageFruitWeightG;
+  return ((existingKg + incoming.kg) * 1000) / (existingPieces + incoming.pieces);
 }
 
 function calculateGroupTotals(sizeKgById: Record<string, number>, variety: { area_m2: number; case_kg: number }) {
@@ -1514,7 +1695,7 @@ export async function importCsvTemplateGroup(
 
     const { data: existingEntry, error: existingErr } = await supabase
       .from("yield_entries")
-      .select("id, size_kg")
+      .select("id, size_kg, average_fruit_weight_g")
       .eq("organization_id", organizationId)
       .eq("variety_id", varietyMatch.id)
       .eq("year", freshGroup.isoYear)
@@ -1532,12 +1713,17 @@ export async function importCsvTemplateGroup(
         mergedSizeKg[id] = (mergedSizeKg[id] ?? 0) + kg;
       }
       const mergedTotals = calculateGroupTotals(mergedSizeKg, varietyForCalc);
+      const existingKg = Object.values((existingEntry.size_kg as Record<string, number>) ?? {}).reduce((sum, v) => sum + v, 0);
 
       const { data: updated, error: updateErr } = await supabase
         .from("yield_entries")
         .update({
           size_kg: mergedSizeKg,
-          average_fruit_weight_g: freshGroup.averageFruitWeightG,
+          average_fruit_weight_g: mergeAppendAverageFruitWeight(
+            existingKg,
+            existingEntry.average_fruit_weight_g as number | null,
+            freshGroup.averageFruitWeightBasis
+          ),
           ...mergedTotals,
           updated_at: new Date().toISOString()
         })
@@ -2203,6 +2389,18 @@ csvMappingTemplatesRouter.post("/csv-templates/preview", canView, async (req, re
   }
 });
 
+csvMappingTemplatesRouter.get("/csv-templates/source-files", canView, async (req, res) => {
+  try {
+    const templateId = typeof req.query.templateId === "string" && req.query.templateId ? req.query.templateId : null;
+    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const limit = limitRaw !== undefined && Number.isFinite(limitRaw) ? limitRaw : undefined;
+    const files = await listRecentSourceFiles(req.organizationId, { templateId, limit });
+    return res.json({ files });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load recent source files.", "csv-templates source-files list error:");
+  }
+});
+
 // Lets the Template Builder UI resume an already-uploaded source file (e.g.
 // from a pending review row's "Set up CSV template" action) without
 // requiring the raw bytes to be uploaded again.
@@ -2245,4 +2443,4 @@ csvMappingTemplatesRouter.post("/csv-templates/import", canEdit, async (req, res
   }
 });
 
-export { csvMappingTemplatesRouter };
+export { csvMappingTemplatesRouter, groupsMatch as _internal_groupsMatch };
