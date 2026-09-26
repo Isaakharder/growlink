@@ -101,6 +101,31 @@ const LINE_COLORS = [
   "#65a30d"
 ];
 
+const CHART_TOOLTIP_STYLE = {
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  boxShadow: "0 8px 24px rgba(31, 42, 46, 0.12)",
+  fontSize: 13,
+  padding: "0.5rem 0.75rem"
+};
+const CHART_TOOLTIP_LABEL_STYLE = { color: "var(--text)", fontWeight: 600, marginBottom: 4 };
+const CHART_LEGEND_STYLE = { fontSize: 13, paddingTop: 8 };
+
+const prefersReducedMotion =
+  typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Placeholder rows shaped like a table, so the card keeps its size while data loads. */
+function TableSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div className="ya-table-skeleton" aria-hidden="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <span key={i} className="ya-skeleton ya-skeleton--row" />
+      ))}
+    </div>
+  );
+}
+
 const COLOR_ORDER: VarietyColor[] = ["red", "orange", "yellow", "green"];
 const DEFAULT_KG_PER_CASE = 11;
 
@@ -367,6 +392,8 @@ export function YieldAnalyticsPage() {
   const [toWeek, setToWeek] = useState<number>(getCurrentWeek(currentYear));
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportPreviewType, setExportPreviewType] = useState<ExportPreviewType | null>(null);
+  /** Bumped by the error panel's Retry to re-run the same load. */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -457,7 +484,7 @@ export function YieldAnalyticsPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   const { points: chartPoints, varietyIds } = useMemo(
     () => buildChartData(entries),
@@ -1002,163 +1029,272 @@ export function YieldAnalyticsPage() {
     });
   }, [summary, colorCaseEntries, varietyMeta]);
 
+  const averageRow = filteredVarietySummary.averageRow;
+  const hasSummaryRows = filteredVarietySummary.rows.length > 0;
+  const activeFilterLabel = `${selectedYear} · ${varietySummaryWeekLabel}`;
+  const hasEstimatedKgPerCase = reconciliationRows.some((row) => row.isKgPerCaseEstimated);
+
   return (
-    <section className="page-shell yield-analytics-page">
-      <header>
+    <section className="page-shell yield-analytics-page ya-page">
+      <header className="ya-page-header">
         <h1>Yield Analytics</h1>
-        <p>Per-variety yield totals and size percentage breakdown.</p>
+        <p>Per-variety yield totals, size mix and trends over time.</p>
       </header>
 
-      <div className="coming-soon-card">
-        <div className="yield-analytics-summary-header">
-          <h2>Variety Summary</h2>
+      {error ? (
+        <div className="ya-alert" role="alert">
+          <div>
+            <p className="ya-alert-title">Yield analytics couldn&rsquo;t be loaded</p>
+            <p className="ya-alert-body">{error}</p>
+          </div>
+          <button type="button" className="csv-tb-btn csv-tb-btn--outline" onClick={() => setReloadKey((key) => key + 1)} disabled={loading}>
+            {loading ? "Retrying\u2026" : "Retry"}
+          </button>
+        </div>
+      ) : null}
 
-          <div className="yield-analytics-summary-toolbar">
-            <label className="yield-analytics-filter-label">
-            Year
-            <select
-              value={selectedYear}
-              onChange={(event) => {
-                const nextYear = Number(event.target.value);
-                setSelectedYear(nextYear);
-                setSelectedWeek((current) => Math.min(Math.max(current, 1), 53));
-                setFromWeek((current) => Math.min(Math.max(current, 1), 53));
-                setToWeek((current) => Math.min(Math.max(current, 1), 53));
-                setIsExportMenuOpen(false);
-              }}
-            >
-              {yearOptions.map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-            </select>
-            </label>
+      <section className="ya-card ya-filters" aria-labelledby="ya-filters-heading">
+        <div className="ya-filters-head">
+          <h2 id="ya-filters-heading" className="ya-filters-title">
+            Filters
+          </h2>
+          <span className="ya-active-filter">
+            <span className="ya-visually-hidden">Showing </span>
+            {activeFilterLabel}
+          </span>
+          <p className="ya-filters-note">Applies to the summary metrics and Variety Summary.</p>
+        </div>
 
-            <label className="yield-analytics-filter-label">
-            Filter mode
-            <select
-              value={weekFilterMode}
-              onChange={(event) => {
-                const mode = event.target.value as WeekFilterMode;
-                setWeekFilterMode(mode);
-                setIsExportMenuOpen(false);
-              }}
-            >
-              <option value="full-year">Full Year</option>
-              <option value="single-week">Single Week</option>
-              <option value="week-range">Week Range</option>
-            </select>
-            </label>
-
-            {weekFilterMode === "single-week" ? (
-              <label className="yield-analytics-filter-label">
-              Week
+        <div className="ya-filters-row">
+          <div className="ya-filter-fields">
+            <label className="ya-field">
+              <span className="ya-field-label">Year</span>
               <select
-                value={selectedWeek}
+                className="ya-select"
+                value={selectedYear}
                 onChange={(event) => {
-                  setSelectedWeek(Number(event.target.value));
+                  const nextYear = Number(event.target.value);
+                  setSelectedYear(nextYear);
+                  setSelectedWeek((current) => Math.min(Math.max(current, 1), 53));
+                  setFromWeek((current) => Math.min(Math.max(current, 1), 53));
+                  setToWeek((current) => Math.min(Math.max(current, 1), 53));
                   setIsExportMenuOpen(false);
                 }}
               >
-                {weekOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                {yearOptions.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
                   </option>
                 ))}
               </select>
+            </label>
+
+            <label className="ya-field">
+              <span className="ya-field-label">Filter mode</span>
+              <select
+                className="ya-select"
+                value={weekFilterMode}
+                onChange={(event) => {
+                  const mode = event.target.value as WeekFilterMode;
+                  setWeekFilterMode(mode);
+                  setIsExportMenuOpen(false);
+                }}
+              >
+                <option value="full-year">Full Year</option>
+                <option value="single-week">Single Week</option>
+                <option value="week-range">Week Range</option>
+              </select>
+            </label>
+
+            {weekFilterMode === "single-week" ? (
+              <label className="ya-field ya-field--wide">
+                <span className="ya-field-label">Week</span>
+                <select
+                  className="ya-select"
+                  value={selectedWeek}
+                  onChange={(event) => {
+                    setSelectedWeek(Number(event.target.value));
+                    setIsExportMenuOpen(false);
+                  }}
+                >
+                  {weekOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </label>
             ) : null}
 
             {weekFilterMode === "week-range" ? (
               <>
-                <label className="yield-analytics-filter-label">
-                From Week
-                <select
-                  value={fromWeek}
-                  onChange={(event) => {
-                    setFromWeek(Number(event.target.value));
-                    setIsExportMenuOpen(false);
-                  }}
-                >
-                  {weekOptions.map((option) => (
-                    <option key={`from-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                <label className="ya-field ya-field--wide">
+                  <span className="ya-field-label">From Week</span>
+                  <select
+                    className="ya-select"
+                    value={fromWeek}
+                    onChange={(event) => {
+                      setFromWeek(Number(event.target.value));
+                      setIsExportMenuOpen(false);
+                    }}
+                  >
+                    {weekOptions.map((option) => (
+                      <option key={`from-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
 
-                <label className="yield-analytics-filter-label">
-                To Week
-                <select
-                  value={toWeek}
-                  onChange={(event) => {
-                    setToWeek(Number(event.target.value));
-                    setIsExportMenuOpen(false);
-                  }}
-                >
-                  {weekOptions.map((option) => (
-                    <option key={`to-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                <label className="ya-field ya-field--wide">
+                  <span className="ya-field-label">To Week</span>
+                  <select
+                    className="ya-select"
+                    value={toWeek}
+                    onChange={(event) => {
+                      setToWeek(Number(event.target.value));
+                      setIsExportMenuOpen(false);
+                    }}
+                  >
+                    {weekOptions.map((option) => (
+                      <option key={`to-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </>
             ) : null}
+          </div>
 
-            <div className="yield-analytics-export-menu">
-              <button
-                type="button"
-                className="yield-analytics-export-button"
-                onClick={() => setIsExportMenuOpen((open) => !open)}
-              >
-                Export
-              </button>
+          <div className="yield-analytics-export-menu ya-export">
+            <button
+              type="button"
+              className="csv-tb-btn csv-tb-btn--outline ya-export-button"
+              aria-expanded={isExportMenuOpen}
+              onClick={() => setIsExportMenuOpen((open) => !open)}
+            >
+              <svg className="csv-tb-btn-icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+                <path d="M10 3.5V13M6 9l4 4 4-4M4 13.5v2a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Export
+            </button>
 
-              {isExportMenuOpen ? (
-                <div className="yield-analytics-export-dropdown">
-                  <button type="button" onClick={() => openExportPreview("pdf")}>
-                    Export PDF
-                  </button>
-                  <button type="button" onClick={() => openExportPreview("csv")}>
-                    Export CSV
-                  </button>
-                </div>
-              ) : null}
-            </div>
+            {isExportMenuOpen ? (
+              <div className="ya-export-menu">
+                <button type="button" className="ya-export-item" onClick={() => openExportPreview("pdf")}>
+                  Export PDF
+                </button>
+                <button type="button" className="ya-export-item" onClick={() => openExportPreview("csv")}>
+                  Export CSV
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
+      </section>
 
-        {loading ? <p>Loading...</p> : null}
+      {loading ? (
+        <p className="ya-visually-hidden" role="status">
+          Loading yield analytics&hellip;
+        </p>
+      ) : null}
 
-        {error ? <p className="form-error">{error}</p> : null}
+      {loading ? (
+        <div className="ya-kpi-grid" aria-hidden="true">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="ya-kpi ya-kpi--skeleton">
+              <span className="ya-skeleton ya-skeleton--label" />
+              <span className="ya-skeleton ya-skeleton--value" />
+            </div>
+          ))}
+        </div>
+      ) : null}
 
-        {!loading && !error && filteredVarietySummary.rows.length === 0 ? (
-          <p>No yield entries found for the selected filters.</p>
+      {!loading && !error && averageRow ? (
+        <section className="ya-kpi-grid" aria-label="Summary metrics">
+          <div className="ya-kpi ya-kpi--primary">
+            <p className="ya-kpi-label">Total kg</p>
+            <p className="ya-kpi-value">
+              {roundTo(averageRow.total_kg, 2).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              <span className="ya-kpi-unit"> kg</span>
+            </p>
+            <p className="ya-kpi-context">
+              {filteredVarietySummary.rows.length} variet{filteredVarietySummary.rows.length === 1 ? "y" : "ies"}
+            </p>
+          </div>
+          <div className="ya-kpi">
+            <p className="ya-kpi-label">Entries</p>
+            <p className="ya-kpi-value">{averageRow.entries_count}</p>
+            <p className="ya-kpi-context">{activeFilterLabel}</p>
+          </div>
+          <div className="ya-kpi">
+            <p className="ya-kpi-label">Average fruit weight</p>
+            <p className="ya-kpi-value">
+              {formatAvgFruitWeight(averageRow.avg_fruit_weight_g)}
+              {averageRow.avg_fruit_weight_g !== null ? <span className="ya-kpi-unit"> g</span> : null}
+            </p>
+            <p className="ya-kpi-context">Combined across varieties</p>
+          </div>
+          <div className="ya-kpi">
+            <p className="ya-kpi-label">kg / m²</p>
+            <p className="ya-kpi-value">{formatKgPerM2(averageRow.kg_per_m2)}</p>
+            <p className="ya-kpi-context">Varieties with a valid area</p>
+          </div>
+          <div className="ya-kpi">
+            <p className="ya-kpi-label">Waste</p>
+            <p className="ya-kpi-value">{formatWastePct(averageRow.waste_pct)}</p>
+            <p className="ya-kpi-context">Weighted by kg</p>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="ya-card" aria-labelledby="ya-summary-heading">
+        <div className="ya-card-head">
+          <div>
+            <h2 id="ya-summary-heading" className="ya-card-title">
+              Variety Summary
+            </h2>
+            <p className="ya-card-description">Totals, waste, fruit weight and size mix per variety for the selected period.</p>
+          </div>
+          {!loading && !error && hasSummaryRows ? (
+            <span className="ya-card-meta">
+              {filteredVarietySummary.rows.length} variet{filteredVarietySummary.rows.length === 1 ? "y" : "ies"}
+            </span>
+          ) : null}
+        </div>
+
+        {loading ? <TableSkeleton /> : null}
+
+        {error ? <p className="ya-unavailable">Variety Summary is unavailable until the data loads.</p> : null}
+
+        {!loading && !error && !hasSummaryRows ? (
+          <div className="ya-empty" role="status">
+            <p className="ya-empty-title">No analytics data for these filters</p>
+            <p className="ya-empty-body">No yield entries found for {activeFilterLabel}. Try another week range or year.</p>
+          </div>
         ) : null}
 
-        {!loading && !error && filteredVarietySummary.rows.length > 0 ? (
-          <div className="varieties-table-wrapper">
-            <table className="varieties-table yield-analytics-table yield-analytics-summary-table">
+        {!loading && !error && hasSummaryRows ? (
+          <div className="varieties-table-wrapper ya-table-scroll">
+            <table className="varieties-table yield-analytics-table yield-analytics-summary-table ya-table">
               <thead>
                 <tr>
-                  <th>Variety</th>
-                  <th>Entries</th>
-                  <th>Total kg</th>
-                  <th>Waste %</th>
-                  <th>Avg fw (g)</th>
-                  <th>kg / m²</th>
+                  <th scope="col">Variety</th>
+                  <th scope="col">Entries</th>
+                  <th scope="col">Total kg</th>
+                  <th scope="col">Waste %</th>
+                  <th scope="col">Avg fw (g)</th>
+                  <th scope="col">kg / m²</th>
                   {filteredVarietySummary.sizes.map((size) => (
-                    <th key={size.id}>{size.name} %</th>
+                    <th key={size.id} scope="col">{size.name} %</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filteredVarietySummary.rows.map((row) => (
                   <tr key={row.variety_id}>
-                    <td>{row.variety_name}</td>
+                    <th scope="row">{row.variety_name}</th>
                     <td>{row.entries_count}</td>
                     <td>{roundTo(row.total_kg, 2)}</td>
                     <td>{formatWastePct(row.waste_pct)}</td>
@@ -1176,18 +1312,18 @@ export function YieldAnalyticsPage() {
                   </tr>
                 ))}
               </tbody>
-              {filteredVarietySummary.averageRow ? (
+              {averageRow ? (
                 <tfoot>
                   <tr>
-                    <td>Average</td>
-                    <td>{filteredVarietySummary.averageRow.entries_count}</td>
-                    <td>{roundTo(filteredVarietySummary.averageRow.total_kg, 2)}</td>
-                    <td>{formatWastePct(filteredVarietySummary.averageRow.waste_pct)}</td>
-                    <td>{formatAvgFruitWeight(filteredVarietySummary.averageRow.avg_fruit_weight_g)}</td>
-                    <td>{formatKgPerM2(filteredVarietySummary.averageRow.kg_per_m2)}</td>
+                    <th scope="row">Average</th>
+                    <td>{averageRow.entries_count}</td>
+                    <td>{roundTo(averageRow.total_kg, 2)}</td>
+                    <td>{formatWastePct(averageRow.waste_pct)}</td>
+                    <td>{formatAvgFruitWeight(averageRow.avg_fruit_weight_g)}</td>
+                    <td>{formatKgPerM2(averageRow.kg_per_m2)}</td>
                     {filteredVarietySummary.sizes.map((size) => (
                       <td key={`average-${size.id}`}>
-                        {formatWholePercent(filteredVarietySummary.averageRow!.size_pct[size.id] ?? 0)}
+                        {formatWholePercent(averageRow.size_pct[size.id] ?? 0)}
                       </td>
                     ))}
                   </tr>
@@ -1196,188 +1332,222 @@ export function YieldAnalyticsPage() {
             </table>
           </div>
         ) : null}
-      </div>
+      </section>
 
-      <div className="coming-soon-card">
-        <h2>Harvest vs Shipped</h2>
+      <section className="ya-card" aria-labelledby="ya-harvest-heading">
+        <div className="ya-card-head">
+          <div>
+            <h2 id="ya-harvest-heading" className="ya-card-title">
+              Harvest vs Shipped
+            </h2>
+            <p className="ya-card-description">Harvested kg by pepper colour against shipped cases, across all recorded data. Not affected by the filters.</p>
+          </div>
+        </div>
 
-        {loading ? <p>Loading...</p> : null}
+        {loading ? <TableSkeleton rows={4} /> : null}
 
-        {error ? <p className="form-error">{error}</p> : null}
+        {error ? <p className="ya-unavailable">Harvest vs Shipped is unavailable until the data loads.</p> : null}
 
         {!loading && !error ? (
-          <div className="varieties-table-wrapper">
-            <table className="varieties-table yield-analytics-table">
-              <thead>
-                <tr>
-                  <th>Color</th>
-                  <th>Harvested kg</th>
-                  <th>Shipped Cases</th>
-                  <th>Est. kg / Case</th>
-                  <th>Estimated Shipped kg</th>
-                  <th>Remaining kg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reconciliationRows.map((row) => (
-                  <tr key={row.color}>
-                    <td>{row.color.charAt(0).toUpperCase() + row.color.slice(1)}</td>
-                    <td>{roundTo(row.harvestedKg, 1)}</td>
-                    <td>{roundTo(row.shippedCases, 1)}</td>
-                    <td>{row.isKgPerCaseEstimated ? `~${roundTo(row.estimatedKgPerCase, 1)}` : roundTo(row.estimatedKgPerCase, 1)}</td>
-                    <td>{roundTo(row.estimatedShippedKg, 1)}</td>
-                    <td>{roundTo(row.remainingKg, 1)}</td>
+          <>
+            <div className="varieties-table-wrapper ya-table-scroll">
+              <table className="varieties-table yield-analytics-table ya-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Color</th>
+                    <th scope="col">Harvested kg</th>
+                    <th scope="col">Shipped Cases</th>
+                    <th scope="col">Est. kg / Case</th>
+                    <th scope="col">Estimated Shipped kg</th>
+                    <th scope="col">Remaining kg</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {reconciliationRows.map((row) => (
+                    <tr key={row.color}>
+                      <th scope="row">
+                        <span className={`ya-color-swatch ya-color-swatch--${row.color}`} aria-hidden="true" />
+                        {row.color.charAt(0).toUpperCase() + row.color.slice(1)}
+                      </th>
+                      <td>{roundTo(row.harvestedKg, 1)}</td>
+                      <td>{roundTo(row.shippedCases, 1)}</td>
+                      <td>{row.isKgPerCaseEstimated ? `~${roundTo(row.estimatedKgPerCase, 1)}` : roundTo(row.estimatedKgPerCase, 1)}</td>
+                      <td>{roundTo(row.estimatedShippedKg, 1)}</td>
+                      <td>{roundTo(row.remainingKg, 1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {hasEstimatedKgPerCase ? (
+              <p className="ya-footnote">~ Estimated with the default {DEFAULT_KG_PER_CASE} kg per case where no variety case weight is set.</p>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+
+      <div className="ya-chart-grid">
+        <section className="ya-card" aria-labelledby="ya-kgm2-heading">
+          <div className="ya-card-head">
+            <div>
+              <h2 id="ya-kgm2-heading" className="ya-card-title">
+                kg / m² Over Time
+              </h2>
+              <p className="ya-card-description">Weekly kg/m² per variety across all recorded weeks. Not affected by the filters.</p>
+            </div>
           </div>
-        ) : null}
-      </div>
 
-      <div className="coming-soon-card">
-        <h2>kg / m² Over Time</h2>
+          {loading ? <div className="ya-chart-placeholder ya-skeleton" aria-hidden="true" /> : null}
 
-        {loading ? <p>Loading...</p> : null}
+          {error ? <p className="ya-unavailable">Chart unavailable until the data loads.</p> : null}
 
-        {error ? <p className="form-error">{error}</p> : null}
+          {!loading && !error && chartPoints.length === 0 ? (
+            <div className="ya-chart-placeholder ya-empty" role="status">
+              <p className="ya-empty-title">No kg/m² data yet</p>
+              <p className="ya-empty-body">Add entries in Yield Data Entry to see this chart.</p>
+            </div>
+          ) : null}
 
-        {!loading && !error && chartPoints.length === 0 ? (
-          <p>No yield entries found. Add entries in Yield Data Entry to see the chart here.</p>
-        ) : null}
-
-        {!loading && !error && chartPoints.length > 0 ? (
-          <div className="yield-analytics-chart-wrapper">
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={chartPoints} margin={{ top: 8, right: 24, bottom: 8, left: 0 }}>
-                <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                  tickLine={false}
-                  axisLine={{ stroke: "var(--border)" }}
-                />
-                <YAxis
-                  tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v: number) => String(roundTo(v, 2))}
-                  label={{
-                    value: "kg / m²",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 12,
-                    style: { fill: "var(--text-muted)", fontSize: 12 }
-                  }}
-                  width={64}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 10,
-                    fontSize: 13
-                  }}
-                  formatter={(value, name) => [
-                    typeof value === "number" ? `${roundTo(value, 3)} kg/m²` : String(value),
-                    typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
-                  ]}
-                  labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
-                />
-                <Legend
-                  formatter={(value: string) => varietyNameById[value] ?? value}
-                  wrapperStyle={{ fontSize: 13, paddingTop: 8 }}
-                />
-                {varietyIds.map((varietyId, index) => (
-                  <Line
-                    key={varietyId}
-                    type="monotone"
-                    dataKey={varietyId}
-                    name={varietyId}
-                    stroke={LINE_COLORS[index % LINE_COLORS.length]}
-                    strokeWidth={2}
-                    dot={{ r: 3 }}
-                    activeDot={{ r: 5 }}
-                    connectNulls={false}
+          {!loading && !error && chartPoints.length > 0 ? (
+            <div className="yield-analytics-chart-wrapper ya-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartPoints} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={{ stroke: "var(--border)" }}
+                    minTickGap={16}
                   />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="coming-soon-card">
-        <h2>Average Fruit Weight Over Time</h2>
-        <p>Average fruit weight (g) by week across all varieties.</p>
-
-        {loading ? <p>Loading...</p> : null}
-
-        {error ? <p className="form-error">{error}</p> : null}
-
-        {!loading && !error && fruitWeightChartPoints.length === 0 ? (
-          <p>No average fruit weight data available yet.</p>
-        ) : null}
-
-        {!loading && !error && fruitWeightChartPoints.length > 0 ? (
-          <div className="yield-analytics-chart-wrapper">
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={fruitWeightChartPoints} margin={{ top: 8, right: 24, bottom: 8, left: 0 }}>
-                <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                  tickLine={false}
-                  axisLine={{ stroke: "var(--border)" }}
-                />
-                <YAxis
-                  tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v: number) => String(roundTo(v, 1))}
-                  label={{
-                    value: "Avg fruit weight (g)",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 12,
-                    style: { fill: "var(--text-muted)", fontSize: 12 }
-                  }}
-                  width={64}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 10,
-                    fontSize: 13
-                  }}
-                  formatter={(value, name) => [
-                    typeof value === "number" ? `${roundTo(value, 1)} g` : String(value),
-                    typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
-                  ]}
-                  labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
-                />
-                <Legend
-                  formatter={(value: string) => varietyNameById[value] ?? value}
-                  wrapperStyle={{ fontSize: 13, paddingTop: 8 }}
-                />
-                {fruitWeightVarietyIds.map((varietyId, index) => (
-                  <Line
-                    key={varietyId}
-                    type="monotone"
-                    dataKey={varietyId}
-                    name={varietyId}
-                    stroke={LINE_COLORS[index % LINE_COLORS.length]}
-                    strokeWidth={2}
-                    dot={{ r: 3 }}
-                    activeDot={{ r: 5 }}
-                    connectNulls={false}
+                  <YAxis
+                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: number) => String(roundTo(v, 2))}
+                    label={{
+                      value: "kg / m²",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 12,
+                      style: { fill: "var(--text-muted)", fontSize: 12 }
+                    }}
+                    width={64}
                   />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+                  <Tooltip
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    formatter={(value, name) => [
+                      typeof value === "number" ? `${roundTo(value, 3)} kg/m²` : String(value),
+                      typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
+                    ]}
+                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                  />
+                  <Legend
+                    formatter={(value: string) => varietyNameById[value] ?? value}
+                    iconType="circle"
+                    iconSize={8}
+                    wrapperStyle={CHART_LEGEND_STYLE}
+                  />
+                  {varietyIds.map((varietyId, index) => (
+                    <Line
+                      key={varietyId}
+                      type="monotone"
+                      dataKey={varietyId}
+                      name={varietyId}
+                      stroke={LINE_COLORS[index % LINE_COLORS.length]}
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 5 }}
+                      connectNulls={false}
+                      isAnimationActive={!prefersReducedMotion}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="ya-card" aria-labelledby="ya-afw-heading">
+          <div className="ya-card-head">
+            <div>
+              <h2 id="ya-afw-heading" className="ya-card-title">
+                Average Fruit Weight Over Time
+              </h2>
+              <p className="ya-card-description">Average fruit weight (g) by week across all varieties. Not affected by the filters.</p>
+            </div>
           </div>
-        ) : null}
+
+          {loading ? <div className="ya-chart-placeholder ya-skeleton" aria-hidden="true" /> : null}
+
+          {error ? <p className="ya-unavailable">Chart unavailable until the data loads.</p> : null}
+
+          {!loading && !error && fruitWeightChartPoints.length === 0 ? (
+            <div className="ya-chart-placeholder ya-empty" role="status">
+              <p className="ya-empty-title">No average fruit weight data yet</p>
+              <p className="ya-empty-body">It appears once entries include an average fruit weight.</p>
+            </div>
+          ) : null}
+
+          {!loading && !error && fruitWeightChartPoints.length > 0 ? (
+            <div className="yield-analytics-chart-wrapper ya-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={fruitWeightChartPoints} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={{ stroke: "var(--border)" }}
+                    minTickGap={16}
+                  />
+                  <YAxis
+                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: number) => String(roundTo(v, 1))}
+                    label={{
+                      value: "Avg fruit weight (g)",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 12,
+                      style: { fill: "var(--text-muted)", fontSize: 12 }
+                    }}
+                    width={64}
+                  />
+                  <Tooltip
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    formatter={(value, name) => [
+                      typeof value === "number" ? `${roundTo(value, 1)} g` : String(value),
+                      typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
+                    ]}
+                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                  />
+                  <Legend
+                    formatter={(value: string) => varietyNameById[value] ?? value}
+                    iconType="circle"
+                    iconSize={8}
+                    wrapperStyle={CHART_LEGEND_STYLE}
+                  />
+                  {fruitWeightVarietyIds.map((varietyId, index) => (
+                    <Line
+                      key={varietyId}
+                      type="monotone"
+                      dataKey={varietyId}
+                      name={varietyId}
+                      stroke={LINE_COLORS[index % LINE_COLORS.length]}
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 5 }}
+                      connectNulls={false}
+                      isAnimationActive={!prefersReducedMotion}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : null}
+        </section>
       </div>
 
       {exportPreviewType ? (
