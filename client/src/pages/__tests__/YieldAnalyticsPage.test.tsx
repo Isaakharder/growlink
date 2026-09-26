@@ -57,6 +57,14 @@ const CASES = [
   { color: "yellow", total_cases: 10 }
 ];
 const WASTE = [{ id: "w1", variety_id: "v-cad", year: YEAR, week: 30, waste_kg: 30 }];
+// Measured growing area: Cadalora's 10 rows of 100 m². Mathieu has no rows or
+// link, so its kg can't be put over an area.
+const AREA_FOOTPRINTS = {
+  groups: [{ id: "g1", name: "Phase 1" }],
+  rows: Array.from({ length: 10 }, (_, i) => ({ key: `g1:${i + 1}`, groupId: "g1", areaM2: 100 })),
+  footprints: { "v-cad": Array.from({ length: 10 }, (_, i) => `g1:${i + 1}`) },
+  linksAvailable: true
+};
 
 type Override = (path: string) => unknown;
 let override: Override | null = null;
@@ -69,6 +77,7 @@ function route(path: string) {
   if (path === "/api/color-case-entries") return jsonOk(CASES);
   if (path === "/api/varieties") return jsonOk(VARIETIES);
   if (path === "/api/waste-imports") return jsonOk(WASTE);
+  if (path === "/api/yield-analytics/area-footprints") return jsonOk(AREA_FOOTPRINTS);
   return jsonOk([]);
 }
 
@@ -102,8 +111,9 @@ describe("Yield Analytics — summary metrics and Variety Summary", () => {
     expect(metric("Entries")).toHaveTextContent(`${YEAR} · Full Year`);
     // Combined AFW = 1,800 kg / (5,000 + 2,000 + 2,000 fruit) = 200 g.
     expect(metric("Average fruit weight")).toHaveTextContent("200 g");
-    // Only Cadalora has a valid area: 1,500 kg / 1,000 m².
+    // Only Cadalora's kg has measured growing area behind it: 1,500 kg / 1,000 m².
     expect(metric("kg / m²")).toHaveTextContent("1.5");
+    expect(metric("kg / m²")).toHaveTextContent("1,500 kg ÷ 1,000 m² of unique growing area");
     // 30 kg waste / 1,800 kg.
     expect(metric("Waste")).toHaveTextContent("1.7%");
 
@@ -223,8 +233,49 @@ describe("Yield Analytics — loading and error states", () => {
 
     expect(await screen.findByRole("region", { name: "Summary metrics" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    // Retry re-ran the same five requests, once.
+    // Retry re-ran the same six requests, once.
     expect(calls.filter((c) => c === "/api/yield-analytics/summary")).toHaveLength(2);
     expect(calls.filter((c) => c === "/api/yield-entries")).toHaveLength(2);
+  });
+});
+
+describe("Yield Analytics — farm-wide kg/m²", () => {
+  it("uses one calculation for the metric card and the Average row, and names kg it could not cover", async () => {
+    await renderLoaded();
+    const card = metric("kg / m²");
+    const footer = within(summaryCard()).getByRole("rowheader", { name: "Average" }).closest("tr")!;
+    const footerKgPerM2 = within(footer).getAllByRole("cell")[4].textContent;
+    expect(within(card).getByText(footerKgPerM2!)).toBeInTheDocument();
+
+    // Mathieu's 300 kg is still in Total kg, and the gap is stated, not hidden.
+    expect(metric("Total kg")).toHaveTextContent("1,800 kg");
+    expect(within(card).getByRole("note")).toHaveTextContent(
+      "Coverage: 300 kg from Mathieu isn’t linked to a growing area, so it’s left out of kg/m²."
+    );
+  });
+
+  it("counts shared rows once when several varieties grow on them", async () => {
+    override = (path) =>
+      path === "/api/yield-analytics/area-footprints"
+        ? jsonOk({ ...AREA_FOOTPRINTS, footprints: { ...AREA_FOOTPRINTS.footprints, "v-mat": AREA_FOOTPRINTS.footprints["v-cad"] } })
+        : undefined;
+    await renderLoaded();
+    // 1,800 kg over the same 1,000 m² — not 2,000 m².
+    expect(metric("kg / m²")).toHaveTextContent("1.8");
+    expect(metric("kg / m²")).toHaveTextContent("1,800 kg ÷ 1,000 m² of unique growing area");
+    expect(within(metric("kg / m²")).queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("shows no kg/m² figure when the growing areas can't be loaded — the rest of the page still loads", async () => {
+    override = (path) => (path === "/api/yield-analytics/area-footprints" ? failed(500) : undefined);
+    await renderLoaded();
+    expect(metric("kg / m²")).toHaveTextContent("-");
+    expect(metric("kg / m²")).toHaveTextContent("Growing areas couldn’t be loaded");
+    expect(metric("Total kg")).toHaveTextContent("1,800 kg");
+    const footer = within(summaryCard()).getByRole("rowheader", { name: "Average" }).closest("tr")!;
+    expect(within(footer).getAllByRole("cell")[4]).toHaveTextContent("-");
+    // Per-variety kg/m² keeps using each variety's own area.
+    const cadalora = within(summaryCard()).getByRole("rowheader", { name: "Cadalora" }).closest("tr")!;
+    expect(within(cadalora).getAllByRole("cell")[4]).toHaveTextContent("1.5");
   });
 });

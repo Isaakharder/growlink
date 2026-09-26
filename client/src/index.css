@@ -9741,6 +9741,22 @@ textarea.cleaning-checklist-response-input {
   font-size: 0.82rem;
 }
 
+/* Kg that could not be put over a growing area — stated, never silently dropped. */
+.ya-kpi-warning {
+  margin: 0.45rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--csv-tb-warning-border);
+  border-radius: 8px;
+  background: var(--csv-tb-warning-soft);
+  color: var(--csv-tb-warning);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.ya-kpi-warning-label {
+  font-weight: 700;
+}
+
 /* Tables */
 
 .ya-page .ya-table-scroll {
