@@ -8890,3 +8890,26 @@ textarea.cleaning-checklist-response-input {
     display: none;
   }
 }
+
+/* Pending CSV Imports: Refresh + "Reprocess all pending files" sit together
+   on the right; the heading takes the remaining space. */
+.csv-template-pending-header {
+  flex-wrap: wrap;
+}
+
+.csv-template-pending-header h3 {
+  margin-right: auto;
+}
+
+.csv-reprocess-summary {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.csv-reprocess-summary p {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}

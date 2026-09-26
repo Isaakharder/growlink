@@ -19,11 +19,15 @@ import { csvMappingTemplatesRouter } from "../csvMappingTemplates";
 
 const ORG = "org-route-order";
 const USER = "user-route-order";
+const VIEWER = "viewer-route-order";
 const SOURCE_ID = "5b3c1d2e-0000-4000-8000-000000000001";
 const TEMPLATE_ID = "5b3c1d2e-0000-4000-8000-0000000000aa";
 
 const fake = createFakeDb({
-  memberships: [{ user_id: USER, organization_id: ORG, role: "owner", permissions: {} }],
+  memberships: [
+    { user_id: USER, organization_id: ORG, role: "owner", permissions: {} },
+    { user_id: VIEWER, organization_id: ORG, role: "member", permissions: { "yield:view": true } }
+  ],
   csv_import_source_files: [
     {
       id: SOURCE_ID,
@@ -49,7 +53,7 @@ const realFrom = supabase.from.bind(supabase);
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.userId = USER;
+  req.userId = req.get("x-test-user") ?? USER;
   req.organizationId = ORG;
   next();
 });
@@ -138,4 +142,46 @@ test("GET /csv-templates/pending still reaches the pending handler", async () =>
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { files: [] });
   assert.ok(!templateIdLookups().includes("pending"));
+});
+
+test("GET /csv-templates/pending/reprocess-plan reaches the reprocess handler as a dry run, never the template-detail query", async () => {
+  const base = await ready;
+  fake.queries.length = 0;
+  const res = await fetch(`${base}/api/csv-templates/pending/reprocess-plan`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { dryRun: boolean; total: number };
+  assert.deepEqual({ dryRun: body.dryRun, total: body.total }, { dryRun: true, total: 0 });
+  assert.ok(fake.queries.some((q) => q.table === "agent_pending_imports"));
+  assert.deepEqual(templateIdLookups(), []);
+});
+
+test("POST /csv-templates/pending/reprocess reaches the reprocess handler, never the template-detail query", async () => {
+  const base = await ready;
+  fake.queries.length = 0;
+  const res = await fetch(`${base}/api/csv-templates/pending/reprocess`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { dryRun: boolean; total: number };
+  assert.deepEqual({ dryRun: body.dryRun, total: body.total }, { dryRun: false, total: 0 });
+  assert.deepEqual(templateIdLookups(), []);
+});
+
+test("reprocessing requires yield:edit — a view-only member is refused before any pending data is read", async () => {
+  const base = await ready;
+  fake.queries.length = 0;
+  const headers = { "Content-Type": "application/json", "x-test-user": VIEWER };
+  const post = await fetch(`${base}/api/csv-templates/pending/reprocess`, { method: "POST", headers, body: "{}" });
+  assert.equal(post.status, 403);
+  const plan = await fetch(`${base}/api/csv-templates/pending/reprocess-plan`, { headers });
+  assert.equal(plan.status, 403);
+  assert.ok(!fake.queries.some((q) => q.table === "agent_pending_imports"));
+});
+
+test("reprocess rejects non-UUID pending ids with a 400", async () => {
+  const base = await ready;
+  const res = await fetch(`${base}/api/csv-templates/pending/reprocess`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pendingImportIds: ["source-files"] })
+  });
+  assert.equal(res.status, 400);
 });
