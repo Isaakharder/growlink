@@ -1,5 +1,6 @@
 import { rateLimit, type RateLimitInfo } from "express-rate-limit";
 import type { Request, Response } from "express";
+import { createHash } from "node:crypto";
 
 // Factories (not singletons) so tests can construct fresh, isolated
 // instances — each with its own in-memory store — without sharing state
@@ -34,6 +35,28 @@ export function createApiLimiter() {
   });
 }
 
+// express-rate-limit keys on the client IP by default. Every greenhouse user
+// sits behind one office NAT, so a single person building templates consumed
+// the whole 20-per-15-minutes bucket for ALL their colleagues, who then saw
+// 429s on requests they had not made. Key on the caller's bearer token
+// instead when there is one, so the limit is per signed-in user and still
+// falls back to the IP for unauthenticated callers.
+//
+// This limiter is mounted before requireOrganizationContext, so req.userId is
+// not populated yet -- the raw token is hashed here rather than verified, and
+// is only ever used as an opaque bucket key, never for authorization.
+export function strictLimiterKey(req: Request): string {
+  const auth = req.get("authorization");
+  if (auth && auth.startsWith("Bearer ")) {
+    return "tok:" + createHash("sha256").update(auth.slice(7)).digest("hex");
+  }
+  const uploadKey = req.get("x-upload-key");
+  if (uploadKey) {
+    return "key:" + createHash("sha256").update(uploadKey).digest("hex");
+  }
+  return "ip:" + (req.ip ?? "unknown");
+}
+
 // Strict limiter for expensive write-heavy endpoints: DockLink sync
 // (full-table fetch), PDF batch upload (CPU + DB intensive), and CSV
 // template upload/CRUD/import. Deliberately does NOT cover
@@ -49,6 +72,7 @@ export function createStrictLimiter() {
     limit: 20,
     standardHeaders: "draft-7",
     legacyHeaders: false,
+    keyGenerator: strictLimiterKey,
     // req.path is relative to this middleware's mount point ("/preview",
     // not "/api/csv-templates/preview") since Express strips the mount
     // prefix for app.use-mounted middleware — req.originalUrl is never
@@ -56,9 +80,21 @@ export function createStrictLimiter() {
     // Exact-match (plus an optional query string) so this never
     // accidentally also skips some future sibling path like
     // /api/csv-templates/preview-something.
+    // Also skips SAFE (read-only) requests. This bucket exists for expensive
+    // write-heavy work; GET /api/csv-templates/pending/weekly-cards is a
+    // plain list read that the CSV Templates tab issues on mount and on
+    // Refresh, and it was spending the same 20-per-15-minutes budget as
+    // template saves and imports. Because the client refreshes the pending
+    // list after every mutation, each user action cost TWO tokens, so a
+    // normal session of ten imports exhausted the window and every later
+    // page load 429'd on a read that costs the server almost nothing.
+    // Reads still fall under the general 300-per-15-minutes apiLimiter, so
+    // this narrows a mis-scoped bucket rather than loosening protection:
+    // every write keeps the identical 20-per-15-minutes limit it had before.
     skip: (req) => {
       const path = req.originalUrl.split("?")[0];
-      return path === "/api/csv-templates/preview";
+      if (path === "/api/csv-templates/preview") return true;
+      return req.method === "GET" || req.method === "HEAD";
     },
     handler: rateLimitHandler("Too many requests for this operation. Please wait before retrying.")
   });
