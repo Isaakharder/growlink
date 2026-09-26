@@ -9,6 +9,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ??= "offline-test-key";
 
 type Row = Record<string, unknown>;
 type Filter = (row: Row) => boolean;
+export type RecordedQuery = { table: string; eq: Array<[string, unknown]> };
 
 /**
  * Minimal in-memory stand-in for the supabase-js query builder: supports
@@ -18,9 +19,13 @@ type Filter = (row: Row) => boolean;
  */
 export function createFakeDb(tables: Record<string, Row[]>) {
   const queriedTables: string[] = [];
+  /** Every query issued, with its eq() filters — lets a test assert a query was never made. */
+  const queries: RecordedQuery[] = [];
 
   function query(table: string) {
     queriedTables.push(table);
+    const recorded: RecordedQuery = { table, eq: [] };
+    queries.push(recorded);
     const filters: Filter[] = [];
     let orderBy: { column: string; ascending: boolean } | null = null;
     let limitCount: number | null = null;
@@ -42,6 +47,7 @@ export function createFakeDb(tables: Record<string, Row[]>) {
     const builder = {
       select: () => builder,
       eq(column: string, value: unknown) {
+        recorded.eq.push([column, value]);
         filters.push((row) => row[column] === value);
         return builder;
       },
@@ -76,6 +82,8 @@ export function createFakeDb(tables: Record<string, Row[]>) {
     // Cast at the call site: this implements only the query-builder surface
     // the source-file read paths use.
     client: { from: query } as unknown,
-    queriedTables
+    from: query,
+    queriedTables,
+    queries
   };
 }

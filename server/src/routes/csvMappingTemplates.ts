@@ -2197,6 +2197,11 @@ export function parseResolveLabelsBody(input: unknown): {
 // Routes — thin wrappers translating the functions above to HTTP.
 // ---------------------------------------------------------------------------
 
+// Template ids are UUIDs. Constraining the :id route param means a literal
+// sibling path ("source-files", "pending", ...) can never be captured as a
+// template id and passed to getTemplateById, whatever the registration order.
+export const UUID_PARAM = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
 function handleKnownError(res: import("express").Response, error: unknown, fallbackMessage: string, logContext: string): unknown {
   if (error instanceof TemplateValidationError) return res.status(400).json({ message: error.message });
   if (error instanceof TemplateNotFoundError) return res.status(404).json({ message: error.message });
@@ -2295,7 +2300,35 @@ csvMappingTemplatesRouter.post("/csv-templates/pending/import-week", canEdit, as
   }
 });
 
-csvMappingTemplatesRouter.get("/csv-templates/:id", canView, async (req, res) => {
+// Source-file routes must be registered before any /csv-templates/:id route
+// for the same reason as /pending above. (:id is also UUID-constrained, so
+// even a mis-ordered literal path now falls through instead of reaching
+// getTemplateById.)
+csvMappingTemplatesRouter.get("/csv-templates/source-files", canView, async (req, res) => {
+  try {
+    const templateId = typeof req.query.templateId === "string" && req.query.templateId ? req.query.templateId : null;
+    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const limit = limitRaw !== undefined && Number.isFinite(limitRaw) ? limitRaw : undefined;
+    const files = await listRecentSourceFiles(req.organizationId, { templateId, limit });
+    return res.json({ files });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load recent source files.", "csv-templates source-files list error:");
+  }
+});
+
+// Lets the Template Builder UI resume an already-uploaded source file (e.g.
+// from a pending review row's "Set up CSV template" action) without
+// requiring the raw bytes to be uploaded again.
+csvMappingTemplatesRouter.get(`/csv-templates/source-files/:id(${UUID_PARAM})/grid`, canView, async (req, res) => {
+  try {
+    const result = await getSourceFileGridAndMatch(req.organizationId, String(req.params.id));
+    return res.json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to load source file.", "csv-templates source-file grid error:");
+  }
+});
+
+csvMappingTemplatesRouter.get(`/csv-templates/:id(${UUID_PARAM})`, canView, async (req, res) => {
   try {
     const row = await getTemplateById(req.organizationId, String(req.params.id));
     if (!row) return res.status(404).json({ message: "Template not found." });
@@ -2322,7 +2355,7 @@ csvMappingTemplatesRouter.post("/csv-templates", canEdit, async (req, res) => {
   }
 });
 
-csvMappingTemplatesRouter.put("/csv-templates/:id", canEdit, async (req, res) => {
+csvMappingTemplatesRouter.put(`/csv-templates/:id(${UUID_PARAM})`, canEdit, async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   try {
@@ -2334,7 +2367,7 @@ csvMappingTemplatesRouter.put("/csv-templates/:id", canEdit, async (req, res) =>
   }
 });
 
-csvMappingTemplatesRouter.patch("/csv-templates/:id/rename", canEdit, async (req, res) => {
+csvMappingTemplatesRouter.patch(`/csv-templates/:id(${UUID_PARAM})/rename`, canEdit, async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   try {
@@ -2346,7 +2379,7 @@ csvMappingTemplatesRouter.patch("/csv-templates/:id/rename", canEdit, async (req
   }
 });
 
-csvMappingTemplatesRouter.patch("/csv-templates/:id/active", canEdit, async (req, res) => {
+csvMappingTemplatesRouter.patch(`/csv-templates/:id(${UUID_PARAM})/active`, canEdit, async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   try {
@@ -2358,7 +2391,7 @@ csvMappingTemplatesRouter.patch("/csv-templates/:id/active", canEdit, async (req
   }
 });
 
-csvMappingTemplatesRouter.post("/csv-templates/:id/duplicate", canEdit, async (req, res) => {
+csvMappingTemplatesRouter.post(`/csv-templates/:id(${UUID_PARAM})/duplicate`, canEdit, async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   try {
@@ -2370,7 +2403,7 @@ csvMappingTemplatesRouter.post("/csv-templates/:id/duplicate", canEdit, async (r
   }
 });
 
-csvMappingTemplatesRouter.delete("/csv-templates/:id", canEdit, async (req, res) => {
+csvMappingTemplatesRouter.delete(`/csv-templates/:id(${UUID_PARAM})`, canEdit, async (req, res) => {
   try {
     await deleteTemplateIfUnused(req.organizationId, String(req.params.id));
     return res.status(204).send();
@@ -2386,30 +2419,6 @@ csvMappingTemplatesRouter.post("/csv-templates/preview", canView, async (req, re
     return res.json(result);
   } catch (error) {
     return handleKnownError(res, error, "Failed to build CSV preview.", "csv-templates preview error:");
-  }
-});
-
-csvMappingTemplatesRouter.get("/csv-templates/source-files", canView, async (req, res) => {
-  try {
-    const templateId = typeof req.query.templateId === "string" && req.query.templateId ? req.query.templateId : null;
-    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-    const limit = limitRaw !== undefined && Number.isFinite(limitRaw) ? limitRaw : undefined;
-    const files = await listRecentSourceFiles(req.organizationId, { templateId, limit });
-    return res.json({ files });
-  } catch (error) {
-    return handleKnownError(res, error, "Failed to load recent source files.", "csv-templates source-files list error:");
-  }
-});
-
-// Lets the Template Builder UI resume an already-uploaded source file (e.g.
-// from a pending review row's "Set up CSV template" action) without
-// requiring the raw bytes to be uploaded again.
-csvMappingTemplatesRouter.get("/csv-templates/source-files/:id/grid", canView, async (req, res) => {
-  try {
-    const result = await getSourceFileGridAndMatch(req.organizationId, String(req.params.id));
-    return res.json(result);
-  } catch (error) {
-    return handleKnownError(res, error, "Failed to load source file.", "csv-templates source-file grid error:");
   }
 });
 
