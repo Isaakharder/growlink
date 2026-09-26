@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 // rendering was checked in a browser at 320-1440 px) and on the builder
 // staying out of the main bundle.
 const css = readFileSync(resolve(process.cwd(), "src/index.css"), "utf-8");
-const csvTbCss = css.slice(css.indexOf("/* ── CSV Templates page: sections, buttons and template cards"));
+const csvTbStart = css.indexOf("/* ── CSV Templates page: sections, buttons and template cards");
+// The block runs to the next top-level section comment (or the end of the file).
+const csvTbEnd = css.indexOf("\n/* ── ", csvTbStart + 1);
+const csvTbCss = css.slice(csvTbStart, csvTbEnd === -1 ? undefined : csvTbEnd);
 
 /** The declarations of the first rule whose selector list is exactly `selector` within `source`. */
 function rule(source: string, selector: string): string {
