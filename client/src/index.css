@@ -8917,3 +8917,489 @@ textarea.cleaning-checklist-response-input {
   margin: 0 0 0.35rem;
   font-weight: 600;
 }
+
+/* ── CSV Templates page: sections, buttons and template cards ──────────────
+   Everything is scoped to csv-tb-* classes used only by the CSV Template
+   Builder, so no other page's buttons change. Colours come from the global
+   tokens (--brand, --brand-soft, --border, --surface-soft, --text-muted);
+   the amber/red values match the existing csv-weekly-badge-warning/error. */
+
+.csv-template-builder {
+  --csv-tb-brand-dark: #0a5e4c;
+  --csv-tb-brand-hover: #0b624f;
+  --csv-tb-focus: rgba(15, 118, 96, 0.4);
+  --csv-tb-warning: #8a4510;
+  --csv-tb-warning-border: #e6b98c;
+  --csv-tb-warning-soft: #fff4e8;
+  --csv-tb-danger: #9a1e1e;
+  --csv-tb-danger-border: #e9b7b7;
+  --csv-tb-danger-soft: #fdeeee;
+}
+
+.csv-tb-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.csv-tb-btn:hover:not(:disabled) {
+  background: var(--surface-soft);
+  border-color: #c2d4ca;
+}
+
+.csv-tb-btn:active:not(:disabled) {
+  background: #e7efeb;
+}
+
+.csv-tb-btn:focus-visible {
+  outline: 3px solid var(--csv-tb-focus);
+  outline-offset: 2px;
+}
+
+.csv-tb-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A disabled primary goes neutral so it never reads as an available green action. */
+.csv-tb-btn--primary:disabled {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.csv-tb-btn[aria-busy="true"] {
+  cursor: progress;
+}
+
+.csv-tb-btn-icon {
+  flex: none;
+}
+
+.csv-tb-btn--primary {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #ffffff;
+}
+
+.csv-tb-btn--primary:hover:not(:disabled) {
+  border-color: var(--csv-tb-brand-hover);
+  background: var(--csv-tb-brand-hover);
+}
+
+.csv-tb-btn--primary:active:not(:disabled) {
+  background: var(--csv-tb-brand-dark);
+}
+
+.csv-tb-btn--outline {
+  border-color: #9fcdbd;
+  color: var(--csv-tb-brand-dark);
+}
+
+.csv-tb-btn--outline:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.csv-tb-btn--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.csv-tb-btn--quiet:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.csv-tb-btn--warning {
+  border-color: var(--csv-tb-warning-border);
+  color: var(--csv-tb-warning);
+}
+
+.csv-tb-btn--warning:hover:not(:disabled) {
+  border-color: var(--csv-tb-warning);
+  background: var(--csv-tb-warning-soft);
+}
+
+.csv-tb-btn--danger {
+  border-color: var(--csv-tb-danger-border);
+  color: var(--csv-tb-danger);
+}
+
+.csv-tb-btn--danger:hover:not(:disabled) {
+  border-color: var(--csv-tb-danger);
+  background: var(--csv-tb-danger-soft);
+}
+
+.csv-tb-btn--sm {
+  min-height: 34px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.84rem;
+}
+
+.csv-tb-select {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.csv-tb-select:focus-visible {
+  outline: 3px solid var(--csv-tb-focus);
+  outline-offset: 2px;
+}
+
+.csv-tb-select-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+}
+
+/* Sections */
+
+.csv-template-builder > p {
+  max-width: 72ch;
+  color: var(--text-muted);
+}
+
+.csv-tb-section.csv-template-pending-section {
+  margin: 1.25rem 0 0;
+  padding: 1.25rem 0 0;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.csv-tb-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.csv-tb-section-title {
+  margin: 0;
+  font-size: 1.08rem;
+  color: var(--text);
+}
+
+.csv-tb-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.csv-tb-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--csv-tb-brand-dark);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.csv-tb-section-hint,
+.csv-tb-section-description {
+  margin: 0.4rem 0 0;
+  max-width: 72ch;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.csv-tb-section-hint {
+  text-align: right;
+  max-width: none;
+  font-size: 0.82rem;
+}
+
+.csv-tb-section--load {
+  margin-top: 1.5rem;
+  padding: 1.1rem 1.2rem 1.2rem;
+  border: 1px solid #cfe7de;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f3faf7 0%, var(--surface) 100%);
+}
+
+.csv-tb-section--load + .csv-tb-inline-status,
+.csv-tb-section--load .csv-source-picker {
+  margin-bottom: 0;
+}
+
+.csv-tb-section--load .csv-source-picker-actions {
+  margin-top: 0.9rem;
+  gap: 0.6rem;
+}
+
+.csv-tb-inline-status {
+  margin: 0.6rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.csv-tb-subsection {
+  margin-top: 1.25rem;
+}
+
+.csv-tb-subsection-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+/* Empty states */
+
+.csv-tb-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 0.9rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #cfe7de;
+  border-radius: 12px;
+  background: var(--active);
+  color: var(--csv-tb-brand-dark);
+}
+
+.csv-tb-empty--neutral {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.csv-tb-empty-icon {
+  flex: none;
+  color: var(--brand);
+}
+
+.csv-tb-empty-title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.csv-tb-empty-body {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+/* Saved template cards */
+
+.csv-tb-template-card {
+  margin-top: 0.9rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.csv-tb-template-card.is-disabled {
+  background: var(--surface-soft);
+}
+
+.csv-tb-template-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  margin-bottom: 0.35rem;
+}
+
+.csv-tb-template-name {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.csv-tb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.csv-tb-badge-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.csv-tb-badge--active {
+  border-color: #bfe3d4;
+  background: var(--brand-soft);
+  color: var(--csv-tb-brand-dark);
+}
+
+.csv-tb-badge--disabled {
+  border-color: var(--csv-tb-warning-border);
+  background: var(--csv-tb-warning-soft);
+  color: var(--csv-tb-warning);
+}
+
+.csv-tb-template-summary {
+  margin: 0.2rem 0 0;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.csv-tb-template-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 1.25rem;
+  margin: 0.55rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.csv-tb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Disable/Enable and Delete wrap together, never leaving Delete alone on a line. */
+.csv-tb-toolbar-group {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+.csv-tb-toolbar-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 0.2rem 0.25rem;
+  background: var(--border);
+}
+
+/* Pending cards: action rows wrap instead of overflowing. */
+.csv-template-builder .csv-weekly-actions {
+  flex-wrap: wrap;
+}
+
+.csv-template-builder .csv-template-pending-card-header {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .csv-tb-btn {
+    min-height: 44px;
+  }
+
+  .csv-tb-btn--sm {
+    min-height: 44px;
+  }
+
+  .csv-tb-section-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .csv-tb-section-actions .csv-tb-btn,
+  .csv-tb-section--load .csv-source-picker-actions .csv-tb-btn {
+    flex: 1 1 auto;
+  }
+
+  .csv-tb-section-hint {
+    text-align: left;
+  }
+
+  .csv-tb-section--load {
+    padding: 1rem;
+  }
+
+  .csv-tb-toolbar-divider {
+    display: none;
+  }
+
+  /* As many equal columns as fit (one on the narrowest phones), so no label is squeezed into several lines. */
+  .csv-tb-toolbar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  }
+
+  .csv-tb-toolbar-group {
+    display: contents;
+  }
+
+  .csv-tb-select {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .csv-template-builder.coming-soon-card {
+    padding: 0.85rem;
+  }
+
+  .csv-tb-template-card,
+  .csv-template-builder .csv-weekly-card {
+    padding: 0.85rem;
+  }
+
+  .csv-template-builder .csv-weekly-card-lots li {
+    white-space: normal;
+  }
+
+  .csv-template-builder .csv-weekly-size-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .csv-template-builder .csv-weekly-size-box {
+    min-width: 0;
+  }
+
+  /* Smaller figure on phones so "5,211.91 kg" fits a half-width tile; the unit may drop to its own line, the number never splits. */
+  .csv-template-builder .csv-weekly-size-kg {
+    font-size: 0.98rem;
+    white-space: nowrap;
+  }
+
+  .csv-template-builder .csv-weekly-size-unit {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .csv-tb-btn {
+    transition: none;
+  }
+}

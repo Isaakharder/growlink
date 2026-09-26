@@ -96,17 +96,28 @@ export function CsvSourcePicker({ templateId, busy, onUpload, onSelect }: Props)
   return (
     <div className="csv-source-picker">
       <div className="csv-source-picker-actions" role="group" aria-label="Choose a source CSV">
-        <button type="button" onClick={onUpload} disabled={disabled}>
+        <button type="button" className="csv-tb-btn csv-tb-btn--primary" onClick={onUpload} disabled={disabled} aria-busy={busy || undefined}>
+          <UploadIcon />
           Upload CSV
         </button>
-        <button type="button" onClick={() => void handleUseMostRecent()} disabled={disabled}>
+        <button type="button" className="csv-tb-btn csv-tb-btn--outline" onClick={() => void handleUseMostRecent()} disabled={disabled}>
           {templateId ? "Use most recent compatible source" : "Use most recent source"}
         </button>
-        <button type="button" onClick={() => void handleChooseRecent()} disabled={disabled} aria-expanded={showList}>
+        <button
+          type="button"
+          className="csv-tb-btn csv-tb-btn--outline"
+          onClick={() => void handleChooseRecent()}
+          disabled={disabled}
+          aria-expanded={showList}
+        >
           Choose recent source
         </button>
       </div>
-      {loading && <p>Loading recent sources&hellip;</p>}
+      {loading && (
+        <p className="csv-tb-inline-status" role="status">
+          Loading recent sources&hellip;
+        </p>
+      )}
       {message && <p className="form-error">{message}</p>}
 
       {showList && files && (
@@ -139,7 +150,13 @@ export function CsvSourcePicker({ templateId, busy, onUpload, onSelect }: Props)
                     <td>{f.templateName ? `${f.templateName}${f.templateVersion !== null ? ` v${f.templateVersion}` : ""}` : "—"}</td>
                     {templateId && <td>{f.compatible ? "Matches" : "Different layout"}</td>}
                     <td>
-                      <button type="button" onClick={() => void onSelect(f)} disabled={disabled} aria-label={`Use ${f.filename}`}>
+                      <button
+                        type="button"
+                        className="csv-tb-btn csv-tb-btn--outline csv-tb-btn--sm"
+                        onClick={() => void onSelect(f)}
+                        disabled={disabled}
+                        aria-label={`Use ${f.filename}`}
+                      >
                         Use this file
                       </button>
                     </td>
@@ -148,11 +165,19 @@ export function CsvSourcePicker({ templateId, busy, onUpload, onSelect }: Props)
               </tbody>
             </table>
           )}
-          <button type="button" onClick={() => setShowList(false)}>
+          <button type="button" className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm" onClick={() => setShowList(false)}>
             Hide list
           </button>
         </div>
       )}
     </div>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg className="csv-tb-btn-icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+      <path d="M10 13V3.5M6 7.5l4-4 4 4M4 13.5v2a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
