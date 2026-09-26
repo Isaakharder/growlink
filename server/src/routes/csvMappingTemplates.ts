@@ -1497,6 +1497,265 @@ export async function listPendingCsvTemplateWeeklyCards(organizationId: string):
 }
 
 // ---------------------------------------------------------------------------
+// Reprocessing pending sources against the organization's CURRENT templates.
+//
+// A pending csv_template row pins the id of one specific template VERSION
+// (csv_mapping_template_id), and its card is rebuilt live from the retained
+// raw CSV using that pinned version. Saving a new version (createTemplateVersion)
+// demotes the old row but never re-points pending rows, so their cards keep
+// rendering the old mapping. This re-runs each retained source through the
+// same fingerprint match + validating preview a new upload gets
+// (parseAndMatchCsvFile -> buildCsvPreview in agentRoutes.ts) and re-points
+// the pending row at whatever the current active template is.
+//
+// Writes ONLY agent_pending_imports.csv_mapping_template_id / needs_template.
+// Never touches csv_import_source_files (the retained CSV is immutable here)
+// and never writes yield_entries / yield_import_runs — nothing is imported.
+// Idempotent: a second run finds every row already pointing at its target
+// and reports it unchanged.
+// ---------------------------------------------------------------------------
+
+/** How many sources are re-parsed/validated at once — bounded so a large queue can't flood the database. */
+export const REPROCESS_CONCURRENCY = 4;
+/** Upper bound on sources handled by one request. */
+export const REPROCESS_MAX_SOURCES = 500;
+
+export type TemplateLabel = { id: string; name: string; version: number };
+
+export type ReprocessOutcome = "updated" | "unchanged" | "failed";
+
+export type ReprocessSourceResult = {
+  pendingImportId: string;
+  sourceFileId: string | null;
+  sourceFilename: string;
+  /** For a dry run: what WOULD happen. */
+  outcome: ReprocessOutcome;
+  previousTemplate: TemplateLabel | null;
+  /** The template this source is (or would be) processed with; null when it now needs a template. */
+  template: TemplateLabel | null;
+  needsTemplate: boolean;
+  /** Safe, user-facing message for a failed source — never a raw database/server error. */
+  error: string | null;
+};
+
+export type ReprocessResult = {
+  dryRun: boolean;
+  total: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  /** Pending rows skipped because their source has already been imported. */
+  skippedImported: number;
+  /** Distinct templates the processed sources resolve to, with counts — for the confirmation prompt. */
+  targetTemplates: Array<TemplateLabel & { sourceCount: number }>;
+  results: ReprocessSourceResult[];
+};
+
+type ReprocessPendingRow = {
+  id: string;
+  source_filename: string;
+  source_file_id: string | null;
+  csv_mapping_template_id: string | null;
+  needs_template: boolean;
+};
+
+/** Runs `task` over `items` with at most `limit` in flight, preserving result order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await task(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+function safeReprocessError(error: unknown): string {
+  // Only this module's own error types carry messages written for users;
+  // anything else (Postgres, network) is logged server-side and replaced.
+  if (
+    error instanceof TemplateValidationError ||
+    error instanceof TemplateNotFoundError ||
+    error instanceof TemplateConflictError
+  ) {
+    return error.message;
+  }
+  return "This file could not be reprocessed. Try again, or open it in the Template Builder.";
+}
+
+/**
+ * Reprocesses this organization's pending csv_template sources (all of
+ * them, or only `pendingImportIds`) against the current active templates.
+ * One source failing never stops or rolls back the others. `dryRun`
+ * computes the same per-source outcome without writing anything.
+ */
+export async function reprocessPendingCsvSources(
+  organizationId: string,
+  options: { pendingImportIds?: string[]; dryRun?: boolean } = {}
+): Promise<ReprocessResult> {
+  const run = () => reprocessPendingCsvSourcesUnlocked(organizationId, options);
+  // Serialize real runs per organization, so a double click or a retry
+  // that overlaps the first request waits and then finds nothing to change.
+  return options.dryRun ? run() : withTemplateWriteLock(`reprocess-pending:${organizationId}`, run);
+}
+
+async function reprocessPendingCsvSourcesUnlocked(
+  organizationId: string,
+  options: { pendingImportIds?: string[]; dryRun?: boolean }
+): Promise<ReprocessResult> {
+  const dryRun = options.dryRun === true;
+
+  let pendingQuery = supabase
+    .from("agent_pending_imports")
+    .select("id, source_filename, source_file_id, csv_mapping_template_id, needs_template")
+    .eq("organization_id", organizationId)
+    .eq("data_source_type", "csv_template");
+  if (options.pendingImportIds) {
+    if (options.pendingImportIds.length === 0) {
+      return { dryRun, total: 0, updated: 0, unchanged: 0, failed: 0, skippedImported: 0, targetTemplates: [], results: [] };
+    }
+    pendingQuery = pendingQuery.in("id", options.pendingImportIds);
+  }
+  const { data: pendingData, error: pendingErr } = await pendingQuery.order("uploaded_at", { ascending: false });
+  if (pendingErr) throw pendingErr;
+  const pendingRows = ((pendingData ?? []) as ReprocessPendingRow[]).slice(0, REPROCESS_MAX_SOURCES);
+
+  // A source that has already produced a completed import is never
+  // reprocessed, even if a stray pending row still references it.
+  const sourceIds = Array.from(new Set(pendingRows.map((r) => r.source_file_id).filter((id): id is string => !!id)));
+  const importedSourceIds = new Set<string>();
+  if (sourceIds.length > 0) {
+    const { data: runs, error: runsErr } = await supabase
+      .from("yield_import_runs")
+      .select("source_file_id")
+      .eq("organization_id", organizationId)
+      .in("source_file_id", sourceIds);
+    if (runsErr) throw runsErr;
+    for (const r of runs ?? []) importedSourceIds.add(r.source_file_id as string);
+  }
+  const rows = pendingRows.filter((r) => !r.source_file_id || !importedSourceIds.has(r.source_file_id));
+  const skippedImported = pendingRows.length - rows.length;
+
+  const activeTemplates = await loadCurrentActiveTemplates(organizationId);
+  const candidates = toFingerprintCandidates(activeTemplates);
+
+  const labelIds = Array.from(
+    new Set([...activeTemplates.map((t) => t.id), ...rows.map((r) => r.csv_mapping_template_id).filter((id): id is string => !!id)])
+  );
+  const labelById = new Map<string, TemplateLabel>();
+  if (labelIds.length > 0) {
+    const { data: labelRows, error: labelErr } = await supabase
+      .from("csv_mapping_templates")
+      .select("id, name, version")
+      .eq("organization_id", organizationId)
+      .in("id", labelIds);
+    if (labelErr) throw labelErr;
+    for (const t of labelRows ?? []) labelById.set(t.id as string, { id: t.id as string, name: t.name as string, version: t.version as number });
+  }
+  const label = (id: string | null) => (id ? labelById.get(id) ?? null : null);
+
+  const results = await mapWithConcurrency(rows, REPROCESS_CONCURRENCY, async (row): Promise<ReprocessSourceResult> => {
+    const base = {
+      pendingImportId: row.id,
+      sourceFileId: row.source_file_id,
+      sourceFilename: row.source_filename,
+      previousTemplate: row.needs_template ? null : label(row.csv_mapping_template_id)
+    };
+    const failed = (error: string): ReprocessSourceResult => ({
+      ...base,
+      outcome: "failed",
+      template: null,
+      needsTemplate: row.needs_template,
+      error
+    });
+
+    if (!row.source_file_id) return failed("The original CSV for this file was not retained, so it can't be reprocessed.");
+
+    try {
+      // Same match a new upload gets (parseAndMatchCsvFile): structural
+      // fingerprint at header row 0 against current, active templates.
+      const grid = await loadSourceFileGrid(organizationId, row.source_file_id);
+      const fingerprint = computeFingerprint(grid.rows, grid.delimiter, 0);
+      const match = matchFingerprint(fingerprint, computeFingerprintHash(fingerprint), candidates);
+
+      let targetTemplateId: string | null;
+      let needsTemplate: boolean;
+      if (match.kind === "exact" && match.template) {
+        // Validate exactly as the upload path does before queuing: a
+        // template that throws on this file is not applied.
+        await buildCsvPreview(organizationId, { sourceFileId: row.source_file_id, templateId: match.template.id });
+        targetTemplateId = match.template.id;
+        needsTemplate = false;
+      } else {
+        // No exact match now. A row already awaiting a template is left as
+        // it is; a previously matched row goes back to awaiting one.
+        targetTemplateId = row.needs_template ? row.csv_mapping_template_id : null;
+        needsTemplate = true;
+      }
+
+      const changed = targetTemplateId !== row.csv_mapping_template_id || needsTemplate !== row.needs_template;
+      if (changed && !dryRun) {
+        const { error: updateErr } = await supabase
+          .from("agent_pending_imports")
+          .update({ csv_mapping_template_id: targetTemplateId, needs_template: needsTemplate })
+          .eq("id", row.id)
+          .eq("organization_id", organizationId)
+          .eq("data_source_type", "csv_template");
+        if (updateErr) throw updateErr;
+      }
+
+      return {
+        ...base,
+        outcome: changed ? "updated" : "unchanged",
+        template: needsTemplate ? null : label(targetTemplateId),
+        needsTemplate,
+        error: null
+      };
+    } catch (error) {
+      console.error("csv-templates reprocess: source failed", { organizationId, pendingImportId: row.id, error });
+      return failed(safeReprocessError(error));
+    }
+  });
+
+  const targetCounts = new Map<string, TemplateLabel & { sourceCount: number }>();
+  for (const r of results) {
+    if (!r.template) continue;
+    const existing = targetCounts.get(r.template.id);
+    if (existing) existing.sourceCount += 1;
+    else targetCounts.set(r.template.id, { ...r.template, sourceCount: 1 });
+  }
+
+  return {
+    dryRun,
+    total: results.length,
+    updated: results.filter((r) => r.outcome === "updated").length,
+    unchanged: results.filter((r) => r.outcome === "unchanged").length,
+    failed: results.filter((r) => r.outcome === "failed").length,
+    skippedImported,
+    targetTemplates: Array.from(targetCounts.values()),
+    results
+  };
+}
+
+export function parseReprocessBody(input: unknown): { pendingImportIds?: string[] } {
+  if (input === undefined || input === null) return {};
+  if (typeof input !== "object") throw new TemplateValidationError("Invalid request body");
+  const raw = (input as Record<string, unknown>).pendingImportIds;
+  if (raw === undefined || raw === null) return {};
+  if (!Array.isArray(raw) || raw.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))) {
+    throw new TemplateValidationError("pendingImportIds must be an array of pending import ids");
+  }
+  if (raw.length > REPROCESS_MAX_SOURCES) {
+    throw new TemplateValidationError(`At most ${REPROCESS_MAX_SOURCES} pending imports can be reprocessed at once`);
+  }
+  return { pendingImportIds: Array.from(new Set(raw as string[])) };
+}
+
+// ---------------------------------------------------------------------------
 // Final import — writes yield_entries / yield_entry_daily_breakdown /
 // yield_import_runs. Mirrors pdfImport.ts's create/append semantics
 // (merge-on-append, kg-weighted... actually simple-replace here since a CSV
@@ -2201,6 +2460,7 @@ export function parseResolveLabelsBody(input: unknown): {
 // sibling path ("source-files", "pending", ...) can never be captured as a
 // template id and passed to getTemplateById, whatever the registration order.
 export const UUID_PARAM = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const UUID_PATTERN = new RegExp(`^${UUID_PARAM}$`);
 
 function handleKnownError(res: import("express").Response, error: unknown, fallbackMessage: string, logContext: string): unknown {
   if (error instanceof TemplateValidationError) return res.status(400).json({ message: error.message });
@@ -2297,6 +2557,31 @@ csvMappingTemplatesRouter.post("/csv-templates/pending/import-week", canEdit, as
     return res.status(201).json(result);
   } catch (error) {
     return handleKnownError(res, error, "Failed to import this weekly card.", "csv-templates import-week error:");
+  }
+});
+
+// Reprocess pending sources against the current active templates. Static
+// paths under /pending — registered with the other /pending routes, ahead
+// of every /csv-templates/:id route. Read-only plan first (dry run), then
+// the real run; both need yield:edit, like every other pending-data change.
+csvMappingTemplatesRouter.get("/csv-templates/pending/reprocess-plan", canEdit, async (req, res) => {
+  try {
+    const raw = typeof req.query.pendingImportIds === "string" && req.query.pendingImportIds ? req.query.pendingImportIds.split(",") : undefined;
+    const body = parseReprocessBody(raw ? { pendingImportIds: raw } : {});
+    const result = await reprocessPendingCsvSources(req.organizationId, { ...body, dryRun: true });
+    return res.json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to check pending files for reprocessing.", "csv-templates reprocess-plan error:");
+  }
+});
+
+csvMappingTemplatesRouter.post("/csv-templates/pending/reprocess", canEdit, async (req, res) => {
+  try {
+    const body = parseReprocessBody(req.body);
+    const result = await reprocessPendingCsvSources(req.organizationId, body);
+    return res.json(result);
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to reprocess pending files.", "csv-templates reprocess error:");
   }
 });
 

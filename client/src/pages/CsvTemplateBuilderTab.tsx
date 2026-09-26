@@ -24,6 +24,14 @@ import {
   type InferredIgnoreRule
 } from "./csvVisualMapping";
 import { CsvSourcePicker, formatSourceUploadedAt, type RecentSourceFile } from "./CsvSourcePicker";
+import {
+  REPROCESS_URL,
+  reprocessPlanUrl,
+  reprocessConfirmationText,
+  reprocessConfirmationNotes,
+  reprocessSummaryText,
+  type ReprocessResult
+} from "./csvReprocess";
 
 // ---------------------------------------------------------------------------
 // Types mirroring server/src/utils/csvTemplateTypes.ts (kept independent —
@@ -483,6 +491,15 @@ export function CsvTemplateBuilderTab() {
   const [editingTemplateName, setEditingTemplateName] = useState<string | null>(null);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
   const [sourceMeta, setSourceMeta] = useState<SourceMeta | null>(null);
+  // Reprocessing pending sources against the current templates. One real
+  // run in flight at a time (the ref guards against a double click landing
+  // before the disabled state renders); the server serializes runs too.
+  const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessConfirm, setReprocessConfirm] = useState<{ plan: ReprocessResult; scope: "all" | "card"; pendingImportIds?: string[] } | null>(null);
+  const [reprocessSummary, setReprocessSummary] = useState<ReprocessResult | null>(null);
+  const [reprocessError, setReprocessError] = useState<string | null>(null);
+  const [savePrompt, setSavePrompt] = useState<{ name: string; version: number; sourceCount: number } | null>(null);
+  const reprocessInFlightRef = useRef(false);
   const [sourcePreviewCollapsed, setSourcePreviewCollapsed] = useState(false);
   const [testSourceName, setTestSourceName] = useState<string | null>(null);
   const sourceSectionRef = useRef<HTMLDivElement | null>(null);
@@ -949,6 +966,77 @@ export function CsvTemplateBuilderTab() {
       return { ok: true };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Failed to resolve label(s)." };
+    }
+  }
+
+  // Dry run: what reprocessing would do, for the confirmation / post-save prompt.
+  async function fetchReprocessPlan(pendingImportIds?: string[]): Promise<ReprocessResult | null> {
+    const res = await apiFetch(reprocessPlanUrl(pendingImportIds));
+    if (res.status === 429) {
+      await handleRateLimited(res, "pending");
+      return null;
+    }
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message ?? `Failed to check pending files for reprocessing (${res.status})`);
+    }
+    return (await res.json()) as ReprocessResult;
+  }
+
+  async function requestReprocess(scope: "all" | "card", pendingImportIds?: string[]) {
+    if (reprocessInFlightRef.current) return;
+    setReprocessError(null);
+    try {
+      const plan = await fetchReprocessPlan(pendingImportIds);
+      if (plan) setReprocessConfirm({ plan, scope, pendingImportIds });
+    } catch (err) {
+      setReprocessError(err instanceof Error ? err.message : "Failed to check pending files for reprocessing.");
+    }
+  }
+
+  // One server-side request for the whole batch (or one card's sources) —
+  // never a request per file. Cards are refreshed once it finishes.
+  async function runReprocess(pendingImportIds?: string[]) {
+    if (reprocessInFlightRef.current) return;
+    reprocessInFlightRef.current = true;
+    setReprocessing(true);
+    setReprocessConfirm(null);
+    setSavePrompt(null);
+    setReprocessError(null);
+    setReprocessSummary(null);
+    try {
+      const res = await apiFetch(REPROCESS_URL, {
+        method: "POST",
+        body: JSON.stringify(pendingImportIds ? { pendingImportIds } : {})
+      });
+      if (res.status === 429) {
+        await handleRateLimited(res, "pending");
+        return;
+      }
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Failed to reprocess pending files (${res.status})`);
+      }
+      setReprocessSummary((await res.json()) as ReprocessResult);
+      void fetchPendingItems();
+    } catch (err) {
+      setReprocessError(err instanceof Error ? err.message : "Failed to reprocess pending files.");
+    } finally {
+      reprocessInFlightRef.current = false;
+      setReprocessing(false);
+    }
+  }
+
+  // After a successful save, offer (never force) reprocessing when pending
+  // sources would pick up the template just saved. Failing to check is
+  // harmless: the save already succeeded and the bulk action stays available.
+  async function offerReprocessAfterSave(saved: TemplateDetail) {
+    try {
+      const plan = await fetchReprocessPlan();
+      const sourceCount = plan ? plan.results.filter((r) => r.template?.id === saved.id && r.outcome === "updated").length : 0;
+      if (sourceCount > 0) setSavePrompt({ name: saved.name, version: saved.version, sourceCount });
+    } catch {
+      // Nothing to offer.
     }
   }
 
@@ -1612,6 +1700,7 @@ export function CsvTemplateBuilderTab() {
       await fetchTemplates();
       clearPersistedBuilderState();
       clearBuilderAfterSave();
+      void offerReprocessAfterSave(savedTemplate);
     } catch (err) {
       // Deliberately does not touch draft/columnAssignments/rowIgnoreSelections —
       // a failed save must never lose the user's in-progress mapping work.
@@ -1890,7 +1979,55 @@ export function CsvTemplateBuilderTab() {
         onImportCard={setImportConfirmCard}
         onRemoveSource={(source) => setRemoveConfirmTarget({ kind: "source", source })}
         onOpenResolveLabels={setResolveModalCard}
+        reprocessing={reprocessing}
+        reprocessSummary={reprocessSummary}
+        reprocessError={reprocessError}
+        onReprocessAll={() => void requestReprocess("all")}
+        onReprocessCard={(card) => void requestReprocess("card", card.sources.map((s) => s.pendingImportId))}
+        onDismissReprocessSummary={() => setReprocessSummary(null)}
       />
+
+      {reprocessConfirm && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal" role="dialog" aria-label="Confirm reprocessing">
+            <h3>{reprocessConfirm.scope === "card" ? "Reprocess this card?" : "Reprocess all pending files?"}</h3>
+            <p>{reprocessConfirmationText(reprocessConfirm.plan, reprocessConfirm.scope)}</p>
+            {reprocessConfirmationNotes(reprocessConfirm.plan).map((note) => (
+              <p key={note} className="recent-entries-footer">{note}</p>
+            ))}
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => setReprocessConfirm(null)}>Cancel</button>
+              <button
+                type="button"
+                className="cases-entry-open-button"
+                disabled={reprocessing || reprocessConfirm.plan.total === 0}
+                onClick={() => void runReprocess(reprocessConfirm.pendingImportIds)}
+              >
+                Reprocess
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {savePrompt && (
+        <div className="modal-overlay">
+          <div className="variety-modal csv-template-modal" role="dialog" aria-label="Reprocess after saving">
+            <h3>Mapping saved</h3>
+            <p>Mapping saved as version {savePrompt.version}. Reprocess all pending files now?</p>
+            <p className="recent-entries-footer">
+              {savePrompt.sourceCount} pending file{savePrompt.sourceCount === 1 ? "" : "s"} would use &ldquo;{savePrompt.name}&rdquo; v
+              {savePrompt.version}. Nothing is imported; you can also do this later with &ldquo;Reprocess all pending files&rdquo;.
+            </p>
+            <div className="csv-template-modal-actions">
+              <button type="button" onClick={() => setSavePrompt(null)}>Not now</button>
+              <button type="button" className="cases-entry-open-button" disabled={reprocessing} onClick={() => void runReprocess()}>
+                Reprocess now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {resolveModalCard && (
         <ResolveLabelsModal
@@ -2803,7 +2940,13 @@ function WeeklyPendingCardsSection({
   onRefresh,
   onImportCard,
   onRemoveSource,
-  onOpenResolveLabels
+  onOpenResolveLabels,
+  reprocessing,
+  reprocessSummary,
+  reprocessError,
+  onReprocessAll,
+  onReprocessCard,
+  onDismissReprocessSummary
 }: {
   cards: WeeklyCard[];
   loading: boolean;
@@ -2817,7 +2960,14 @@ function WeeklyPendingCardsSection({
   onImportCard: (card: WeeklyCard) => void;
   onRemoveSource: (source: WeeklyCardSourceDetail) => void;
   onOpenResolveLabels: (card: WeeklyCard) => void;
+  reprocessing: boolean;
+  reprocessSummary: ReprocessResult | null;
+  reprocessError: string | null;
+  onReprocessAll: () => void;
+  onReprocessCard: (card: WeeklyCard) => void;
+  onDismissReprocessSummary: () => void;
 }) {
+  const reprocessFailures = reprocessSummary?.results.filter((r) => r.outcome === "failed") ?? [];
   return (
     <div className="csv-template-pending-section">
       <div className="csv-template-pending-header">
@@ -2825,7 +2975,32 @@ function WeeklyPendingCardsSection({
         <button type="button" onClick={onRefresh} disabled={loading}>
           {loading ? "Refreshing..." : "Refresh"}
         </button>
+        <button
+          type="button"
+          onClick={onReprocessAll}
+          disabled={reprocessing}
+          title="Re-run every pending file's retained original CSV through your current templates. Nothing is imported."
+        >
+          {reprocessing ? "Reprocessing\u2026" : "Reprocess all pending files"}
+        </button>
       </div>
+
+      {reprocessError && <p className="form-error">{reprocessError}</p>}
+      {reprocessSummary && (
+        <div className="csv-reprocess-summary" role="status">
+          <p>{reprocessSummaryText(reprocessSummary)}</p>
+          {reprocessFailures.length > 0 && (
+            <ul className="form-error csv-template-issue-list">
+              {reprocessFailures.map((f) => (
+                <li key={f.pendingImportId}>
+                  <strong>{f.sourceFilename}</strong>: {f.error}
+                </li>
+              ))}
+            </ul>
+          )}
+          <button type="button" onClick={onDismissReprocessSummary}>Dismiss</button>
+        </div>
+      )}
 
       {error && <p className="form-error">{error}</p>}
       {!loading && cards.length === 0 && !error && <p>No pending CSV imports right now.</p>}
@@ -2842,6 +3017,8 @@ function WeeklyPendingCardsSection({
           onImportCard={onImportCard}
           onRemoveSource={onRemoveSource}
           onOpenResolveLabels={onOpenResolveLabels}
+          reprocessing={reprocessing}
+          onReprocessCard={onReprocessCard}
         />
       ))}
     </div>
@@ -2857,7 +3034,9 @@ function WeeklyCardView({
   removeErrors,
   onImportCard,
   onRemoveSource,
-  onOpenResolveLabels
+  onOpenResolveLabels,
+  reprocessing,
+  onReprocessCard
 }: {
   card: WeeklyCard;
   yieldSizes: YieldSizeOption[];
@@ -2868,6 +3047,8 @@ function WeeklyCardView({
   onImportCard: (card: WeeklyCard) => void;
   onRemoveSource: (source: WeeklyCardSourceDetail) => void;
   onOpenResolveLabels: (card: WeeklyCard) => void;
+  reprocessing: boolean;
+  onReprocessCard: (card: WeeklyCard) => void;
 }) {
   const [showAllLots, setShowAllLots] = useState(false);
 
@@ -2997,6 +3178,14 @@ function WeeklyCardView({
               Resolve labels ({card.unresolvedLabelGroups.length})
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => onReprocessCard(card)}
+            disabled={reprocessing}
+            title="Reprocesses every source file on this card together, so its combined totals stay consistent. Nothing is imported."
+          >
+            {reprocessing ? "Reprocessing\u2026" : `Reprocess card (${card.sources.length} file${card.sources.length === 1 ? "" : "s"})`}
+          </button>
           <button type="button" className="cases-entry-open-button" disabled={!card.canImport || importing} onClick={() => onImportCard(card)}>
             {importing ? "Importing..." : "Import"}
           </button>
