@@ -113,10 +113,18 @@ export function getIsoWeekYear(isoDate: string): { isoYear: number; isoWeek: num
 // Numeric parsing — decimal/thousands separators, unit conversion, blanks.
 // ---------------------------------------------------------------------------
 
-export type NumberParseResult = { value: number | null; error: string | null };
+/** `missing` marks a literal "null" token: the source says the value is absent. It is never read as zero, whatever the blank-handling setting. */
+export type NumberParseResult = { value: number | null; error: string | null; missing?: boolean };
+
+/** Exporters such as FlowMaster write the literal text null (quoted or not — the grid parser strips quotes) for a value they don't have. */
+export function isNullToken(raw: string | null | undefined): boolean {
+  return (raw ?? "").trim().toLowerCase() === "null";
+}
 
 export function parseNumberValue(raw: string, config: NumberFormatConfig): NumberParseResult {
   const cleaned = raw.trim();
+
+  if (isNullToken(cleaned)) return { value: null, error: null, missing: true };
 
   if (!cleaned) {
     if (config.blankHandling === "zero") return { value: 0, error: null };
@@ -579,22 +587,53 @@ export function normalizeCsvWithTemplate(
     const classification = classifyRow(rowValues, template, context, grid, rowIndex);
 
     const parseErrors: string[] = [];
-    if (sizeWeight.error) parseErrors.push(sizeWeight.error);
-    if (pieceCountResult.error) parseErrors.push(pieceCountResult.error);
-    if (afwResult.error) parseErrors.push(afwResult.error);
-    if (wasteResult.error) parseErrors.push(wasteResult.error);
+    const invalidFields: Array<{ field: MappedField; raw: string }> = [];
+    const numericResults: Array<[MappedField, NumberParseResult]> = [
+      ["size_weight_kg", sizeWeight],
+      ["piece_count", pieceCountResult],
+      ["average_fruit_weight_g", afwResult],
+      ["waste_kg", wasteResult]
+    ];
+    for (const [field, result] of numericResults) {
+      if (!result.error) continue;
+      parseErrors.push(result.error);
+      invalidFields.push({ field, raw: rowValues[field] ?? "" });
+    }
+
+    const missingFields = (
+      [
+        ["size_weight_kg", sizeWeight],
+        ["piece_count", pieceCountResult],
+        ["average_fruit_weight_g", afwResult],
+        ["waste_kg", wasteResult],
+        ["total_lot_weight", totalLotWeightResult]
+      ] as Array<[MappedField, NumberParseResult]>
+    )
+      .filter(([, result]) => result.missing)
+      .map(([field]) => field);
+
+    // A "null" weight is only ever resolved from another exact source
+    // value: a Piece Count written as a literal 0 means no fruit was
+    // counted on that row, so its weight is 0 kg by definition. A blank PCS
+    // that blank-handling turned into 0 doesn't qualify.
+    const pieceCountIsLiteralZero = pieceCountResult.value === 0 && (rowValues.piece_count ?? "").trim() !== "";
+    const sizeWeightFromZeroPieces = sizeWeight.missing === true && pieceCountIsLiteralZero;
 
     const normalizedRow: NormalizedRow = {
       rowIndex,
       action: classification.action,
       sizeLabelRaw: rowValues.size_label ?? null,
       marketGradeRaw: rowValues.market_grade ?? null,
-      sizeWeightKg: sizeWeight.value,
+      sizeWeightKg: sizeWeightFromZeroPieces ? 0 : sizeWeight.value,
       pieceCount: pieceCountResult.value,
       averageFruitWeightG: afwResult.value,
       matchedRuleId: classification.matchedRuleId,
       resolvedSizeName: classification.targetSizeName,
-      parseErrors
+      parseErrors,
+      missingFields,
+      invalidFields,
+      sizeWeightFromZeroPieces,
+      averageFruitWeightRaw: rowValues.average_fruit_weight_g ?? null
     };
 
     const groupKey = buildGroupKey(lotNumber, varietyRaw, isoYear, isoWeek, packedDate);
@@ -724,11 +763,14 @@ export function normalizeCsvWithTemplate(
     });
   }
 
-  const validationIssues = validateNormalizedPreview(normalizedGroups, template, context);
+  const columnHeaders = grid[template.headerRowIndex] ?? [];
+  const validationIssues = validateNormalizedPreview(normalizedGroups, template, context, columnHeaders);
+  const warnings = normalizedGroups.flatMap((g) => analyzeValueIssues(g, template, columnHeaders).warnings);
 
   return {
     groups: normalizedGroups,
     validationIssues,
+    warnings,
     canImport: validationIssues.length === 0
   };
 }
@@ -743,7 +785,8 @@ export function normalizeCsvWithTemplate(
 export function validateNormalizedPreview(
   groups: NormalizedGroup[],
   template: TemplateConfig,
-  context: { alreadyImportedLotNumbers: Set<string> }
+  context: { alreadyImportedLotNumbers: Set<string> },
+  columnHeaders: string[] = []
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -782,6 +825,8 @@ export function validateNormalizedPreview(
         });
       }
 
+      // Rows built without invalidFields (older callers) keep the per-row message.
+      if (row.invalidFields) continue;
       for (const err of row.parseErrors) {
         issues.push({
           code: "invalid_numeric_value",
@@ -791,6 +836,8 @@ export function validateNormalizedPreview(
         });
       }
     }
+
+    issues.push(...analyzeValueIssues(group, template, columnHeaders).blocking);
 
     const rawNonIgnoredKg = group.rows
       .filter((r) => r.action === "included" || r.action === "unresolved")
@@ -859,6 +906,226 @@ export function validateNormalizedPreview(
   }
 
   return issues;
+}
+
+// ---------------------------------------------------------------------------
+// Missing / unreadable value analysis — one consolidated issue per group and
+// field (never one per row), stating the column it came from, the rows
+// affected and whether it blocks the import, only the AFW, or nothing.
+// ---------------------------------------------------------------------------
+
+const FIELD_LABELS: Partial<Record<MappedField, string>> = {
+  size_weight_kg: "Size Weight",
+  piece_count: "Piece Count",
+  average_fruit_weight_g: "Source AFW",
+  waste_kg: "Waste kg",
+  total_lot_weight: "Total Lot Weight"
+};
+
+function fieldLabel(field: MappedField): string {
+  return FIELD_LABELS[field] ?? field;
+}
+
+function ordinal(n: number): string {
+  const suffix = n % 100 >= 11 && n % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
+
+/** Where a field's value comes from, naming the header occurrence when a header repeats (e.g. FlowMaster's two WEIGHT/AVG/PCS groups). */
+export function describeFieldSource(template: TemplateConfig, field: MappedField, columnHeaders: string[]): string {
+  const fixed = findFixedCellMapping(template.fixedCellMappings, field);
+  if (fixed) return `fixed cell at row ${fixed.rowIndex + 1}, column ${fixed.columnIndex + 1}`;
+
+  const column = findColumnMapping(template.columnMappings, field);
+  if (!column) return "an unmapped column";
+
+  const columnNumber = column.columnIndex + 1;
+  const header = (columnHeaders[column.columnIndex] ?? "").trim();
+  if (!header) return `column ${columnNumber}`;
+
+  const sameHeader = columnHeaders
+    .map((h, i) => ({ h: h.trim().toLowerCase(), i }))
+    .filter((c) => c.h === header.toLowerCase())
+    .map((c) => c.i);
+  if (sameHeader.length <= 1) return `column "${header}" (column ${columnNumber})`;
+
+  const occurrence = sameHeader.indexOf(column.columnIndex) + 1;
+  return `column "${header}" (column ${columnNumber}, the ${ordinal(occurrence)} of ${sameHeader.length} "${header}" columns)`;
+}
+
+/** Spreadsheet-style row numbers (header row = row 1), compressed into ranges: "rows 2–9, 12". */
+export function formatRowNumbers(rowIndexes: number[]): string {
+  const sorted = Array.from(new Set(rowIndexes.map((i) => i + 1))).sort((a, b) => a - b);
+  const ranges: string[] = [];
+  for (let i = 0; i < sorted.length; i += 1) {
+    const start = sorted[i];
+    while (i + 1 < sorted.length && sorted[i + 1] === sorted[i] + 1) i += 1;
+    ranges.push(start === sorted[i] ? `${start}` : `${start}\u2013${sorted[i]}`);
+  }
+  const shown = ranges.length > 10 ? [...ranges.slice(0, 10), "\u2026"] : ranges;
+  return `${sorted.length === 1 ? "row" : "rows"} ${shown.join(", ")}`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function decimalsOf(raw: string | null | undefined): number {
+  const cleaned = (raw ?? "").trim();
+  const sep = Math.max(cleaned.lastIndexOf("."), cleaned.lastIndexOf(","));
+  return sep === -1 ? 0 : cleaned.length - sep - 1;
+}
+
+function isMapped(template: TemplateConfig, field: MappedField): boolean {
+  return !!findFixedCellMapping(template.fixedCellMappings, field) || !!findColumnMapping(template.columnMappings, field);
+}
+
+export function analyzeValueIssues(
+  group: NormalizedGroup,
+  template: TemplateConfig,
+  columnHeaders: string[]
+): { blocking: ValidationIssue[]; warnings: ValidationIssue[] } {
+  const blocking: ValidationIssue[] = [];
+  const warnings: ValidationIssue[] = [];
+  const source = (field: MappedField) => describeFieldSource(template, field, columnHeaders);
+  const base = (field: MappedField, rows: NormalizedRow[]) => ({
+    groupKey: group.groupKey,
+    field,
+    columnLabel: source(field),
+    rowIndexes: rows.map((r) => r.rowIndex),
+    rowIndex: rows[0]?.rowIndex
+  });
+  const missing = (row: NormalizedRow, field: MappedField) => (row.missingFields ?? []).includes(field);
+  const counted = (row: NormalizedRow) => row.action === "included" || row.action === "unresolved";
+
+  // Unreadable values: blocking, one issue per field.
+  const invalidByField = new Map<MappedField, { rows: NormalizedRow[]; raws: Set<string> }>();
+  for (const row of group.rows) {
+    for (const { field, raw } of row.invalidFields ?? []) {
+      const entry = invalidByField.get(field) ?? { rows: [], raws: new Set<string>() };
+      entry.rows.push(row);
+      entry.raws.add(raw.trim());
+      invalidByField.set(field, entry);
+    }
+  }
+  for (const [field, { rows, raws }] of invalidByField) {
+    const examples = Array.from(raws).slice(0, 3).map((r) => `"${r}"`).join(", ");
+    blocking.push({
+      code: "invalid_numeric_value",
+      severity: "blocking",
+      impact: "import",
+      message: `${fieldLabel(field)} could not be read on ${plural(rows.length, "row")} (${formatRowNumbers(rows.map((r) => r.rowIndex))}, ${source(field)}): ${examples}. The import is blocked until the file or mapping is corrected.`,
+      ...base(field, rows)
+    });
+  }
+
+  // "null" Size Weight on rows whose Piece Count is a literal 0: no fruit.
+  const noFruitRows = group.rows.filter((r) => r.sizeWeightFromZeroPieces);
+  if (noFruitRows.length > 0) {
+    const afwAlsoMissing = noFruitRows.every((r) => missing(r, "average_fruit_weight_g"));
+    warnings.push({
+      code: "missing_values_no_fruit",
+      severity: "warning",
+      impact: "none",
+      message: `Size Weight${afwAlsoMissing ? " and Source AFW are" : " is"} "null" on ${plural(noFruitRows.length, "row")} (${formatRowNumbers(noFruitRows.map((r) => r.rowIndex))}, ${source("size_weight_kg")}), and Piece Count is 0 on each of them. No fruit was recorded, so these rows count as 0 kg and do not affect AFW.`,
+      ...base("size_weight_kg", noFruitRows)
+    });
+  }
+
+  // "null" Size Weight on a counted row with nothing exact to derive it from: blocking.
+  const missingWeightRows = group.rows.filter((r) => counted(r) && missing(r, "size_weight_kg") && !r.sizeWeightFromZeroPieces);
+  if (missingWeightRows.length > 0) {
+    blocking.push({
+      code: "missing_size_weight",
+      severity: "blocking",
+      impact: "import",
+      message: `Size Weight is "null" on ${plural(missingWeightRows.length, "included size row")} (${formatRowNumbers(missingWeightRows.map((r) => r.rowIndex))}, ${source("size_weight_kg")}) and no exact source value provides it. The import is blocked — kg cannot be assumed.`,
+      ...base("size_weight_kg", missingWeightRows)
+    });
+  }
+
+  // AFW / Piece Count on included rows that carry weight.
+  const weightedIncluded = group.rows.filter((r) => r.action === "included" && isValidPositive(r.sizeWeightKg));
+
+  const afwMissingWithPcs = weightedIncluded.filter((r) => missing(r, "average_fruit_weight_g") && isValidPositive(r.pieceCount));
+  if (afwMissingWithPcs.length > 0) {
+    warnings.push({
+      code: "missing_source_afw",
+      severity: "warning",
+      impact: "none",
+      message: `Source AFW is "null" on ${plural(afwMissingWithPcs.length, "included row")} (${formatRowNumbers(afwMissingWithPcs.map((r) => r.rowIndex))}, ${source("average_fruit_weight_g")}). Valid Piece Count is available, so AFW is calculated from kg and pieces.`,
+      ...base("average_fruit_weight_g", afwMissingWithPcs)
+    });
+  }
+
+  const pcsDerivedFromAfw = weightedIncluded.filter(
+    (r) => missing(r, "piece_count") && !isValidPositive(r.pieceCount) && isValidPositive(r.averageFruitWeightG)
+  );
+  if (pcsDerivedFromAfw.length > 0) {
+    // A source AFW rounded to d decimals is off by at most half a unit in
+    // its last place, so pieces derived from it (and the resulting AFW) are
+    // off by at most that fraction of the AFW, relatively.
+    const maxRelativeError = Math.max(
+      ...pcsDerivedFromAfw.map((r) => (0.5 * 10 ** -decimalsOf(r.averageFruitWeightRaw)) / (r.averageFruitWeightG as number))
+    );
+    const pct = Math.ceil(maxRelativeError * 100 * 100) / 100;
+    warnings.push({
+      code: "missing_piece_count_derived",
+      severity: "warning",
+      impact: "none",
+      message: `Piece Count is "null" on ${plural(pcsDerivedFromAfw.length, "included row")} (${formatRowNumbers(pcsDerivedFromAfw.map((r) => r.rowIndex))}, ${source("piece_count")}). Pieces are derived as kg \u00d7 1000 \u00f7 source AFW; because the source AFW is rounded, the derived pieces and the AFW can differ from the true values by up to \u00b1${pct.toFixed(2)}%.`,
+      ...base("piece_count", pcsDerivedFromAfw)
+    });
+  }
+
+  if (isMapped(template, "piece_count") || isMapped(template, "average_fruit_weight_g")) {
+    const noFruitBasis = weightedIncluded.filter((r) => !isValidPositive(r.pieceCount) && !isValidPositive(r.averageFruitWeightG));
+    if (noFruitBasis.length > 0) {
+      const kg = noFruitBasis.reduce((sum, r) => sum + (r.sizeWeightKg as number), 0);
+      warnings.push({
+        code: "afw_not_calculable",
+        severity: "warning",
+        impact: "afw",
+        message: `Piece Count and AFW are both missing for ${plural(noFruitBasis.length, "included size row")} (${formatRowNumbers(noFruitBasis.map((r) => r.rowIndex))}, ${kg.toFixed(2)} kg). Kg can be imported, but AFW cannot be calculated and will be left blank.`,
+        ...base(isMapped(template, "piece_count") ? "piece_count" : "average_fruit_weight_g", noFruitBasis)
+      });
+    }
+  }
+
+  // "null" anywhere on rows that are not imported never blocks.
+  const ignoredWithMissing = group.rows.filter(
+    (r) => (r.action === "ignored" || r.action === "subtotal") && (r.missingFields ?? []).length > 0 && !r.sizeWeightFromZeroPieces
+  );
+  if (ignoredWithMissing.length > 0) {
+    const fields = Array.from(new Set(ignoredWithMissing.flatMap((r) => r.missingFields ?? [])));
+    const labels = Array.from(new Set(ignoredWithMissing.map((r) => (r.sizeLabelRaw ?? "").trim()).filter(Boolean)));
+    warnings.push({
+      code: "missing_values_ignored_rows",
+      severity: "warning",
+      impact: "none",
+      message: `${fields.map(fieldLabel).join(", ")} ${fields.length === 1 ? "is" : "are"} "null" on ${plural(ignoredWithMissing.length, "ignored row")} (${formatRowNumbers(ignoredWithMissing.map((r) => r.rowIndex))}${labels.length > 0 ? `: ${labels.join(", ")}` : ""}). These rows are not imported, so this does not block the import.`,
+      ...base(fields[0], ignoredWithMissing)
+    });
+  }
+
+  // Optional numeric fields on counted rows: left blank, never zero.
+  for (const field of ["waste_kg", "total_lot_weight"] as MappedField[]) {
+    const rows = group.rows.filter((r) => counted(r) && missing(r, field));
+    if (rows.length === 0) continue;
+    const consequence =
+      field === "total_lot_weight" && group.totalLotWeightKg === null
+        ? " No lot total is available, so kg is not reconciled against one."
+        : "";
+    warnings.push({
+      code: "missing_optional_value",
+      severity: "warning",
+      impact: "none",
+      message: `${fieldLabel(field)} is "null" on ${plural(rows.length, "row")} (${formatRowNumbers(rows.map((r) => r.rowIndex))}, ${source(field)}) and is left blank.${consequence}`,
+      ...base(field, rows)
+    });
+  }
+
+  return { blocking, warnings };
 }
 
 export { resolveDataRowIndexes as _internal_resolveDataRowIndexes };

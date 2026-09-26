@@ -176,7 +176,16 @@ export type NormalizedRow = {
   averageFruitWeightG: number | null;
   matchedRuleId: string | null;
   resolvedSizeName: string | null;
+  /** Unreadable (non-numeric, non-"null") values — always blocking. */
   parseErrors: string[];
+  /** Numeric fields whose cell held a literal "null" token: missing, never zero. Handled per field in validation. */
+  missingFields?: MappedField[];
+  /** Mapped fields whose cell could not be parsed, parallel to parseErrors, for consolidated messages. */
+  invalidFields?: Array<{ field: MappedField; raw: string }>;
+  /** Size Weight was "null" but the row's Piece Count is a literal 0 — no fruit was recorded, so sizeWeightKg is 0 by derivation, not by substitution. */
+  sizeWeightFromZeroPieces?: boolean;
+  /** The AFW cell as written, kept so the rounding of a PCS derived from it can be stated. */
+  averageFruitWeightRaw?: string | null;
 };
 
 export type RowGroupReconciliation = {
@@ -229,17 +238,40 @@ export type ValidationIssueCode =
   | "layout_mismatch"
   | "unexplained_reconciliation_difference"
   | "possible_duplicate_weight_source"
-  | "possible_lot_total_fruit_column";
+  | "possible_lot_total_fruit_column"
+  | "missing_size_weight"
+  | "missing_values_no_fruit"
+  | "missing_source_afw"
+  | "missing_piece_count_derived"
+  | "afw_not_calculable"
+  | "missing_values_ignored_rows"
+  | "missing_optional_value";
+
+/** What an issue prevents: the whole import, only the AFW, or nothing (informational). */
+export type ValidationIssueImpact = "import" | "afw" | "none";
 
 export type ValidationIssue = {
   code: ValidationIssueCode;
   message: string;
   groupKey?: string;
   rowIndex?: number;
+  /** Absent means blocking (every pre-existing issue). Warnings live in NormalizedPreview.warnings, never in validationIssues. */
+  severity?: "blocking" | "warning";
+  impact?: ValidationIssueImpact;
+  field?: MappedField;
+  /** Human-readable column/header occurrence, e.g. 'AVG' (column 10, 1st of 2 'AVG' columns). */
+  columnLabel?: string;
+  /** Grid row indexes (0-based) the issue covers. */
+  rowIndexes?: number[];
+  /** Set by the pending/weekly-card layer, which knows which retained file the issue came from. */
+  sourceFilename?: string;
 };
 
 export type NormalizedPreview = {
   groups: NormalizedGroup[];
+  /** Blocking issues only — canImport is true exactly when this is empty. */
   validationIssues: ValidationIssue[];
+  /** Non-blocking notes on how missing values were handled (e.g. AFW calculated from pieces, or left blank). */
+  warnings?: ValidationIssue[];
   canImport: boolean;
 };
