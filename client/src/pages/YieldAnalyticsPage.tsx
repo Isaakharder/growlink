@@ -13,6 +13,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { computeFarmKgPerM2, type AreaFootprints } from "../lib/yieldAnalytics/farmKgPerM2";
 
 type YieldSize = {
   id: string;
@@ -144,6 +145,15 @@ function formatKgPerM2(value: number | null) {
   }
 
   return Number(value).toFixed(1);
+}
+
+/** Numerator / denominator shown under the farm kg/m2 — grouped, with the precision the figures carry. */
+function formatKgFigure(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function formatAreaFigure(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
 }
 
 function formatWastePct(value: number) {
@@ -383,6 +393,8 @@ export function YieldAnalyticsPage() {
   const [colorCaseEntries, setColorCaseEntries] = useState<ColorCaseEntry[]>([]);
   const [varietyMeta, setVarietyMeta] = useState<VarietyMeta[]>([]);
   const [wasteImports, setWasteImports] = useState<WasteImport[]>([]);
+  /** Physical growing-area footprints for farm-wide kg/m2; null when they could not be loaded. */
+  const [areaFootprints, setAreaFootprints] = useState<AreaFootprints | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
@@ -403,12 +415,13 @@ export function YieldAnalyticsPage() {
       setError(null);
 
       try {
-        const [summaryRes, entriesRes, colorCaseRes, varietiesRes, wasteRes] = await Promise.all([
+        const [summaryRes, entriesRes, colorCaseRes, varietiesRes, wasteRes, areasRes] = await Promise.all([
           apiFetch("/api/yield-analytics/summary"),
           apiFetch("/api/yield-entries"),
           apiFetch("/api/color-case-entries"),
           apiFetch("/api/varieties"),
-          apiFetch("/api/waste-imports")
+          apiFetch("/api/waste-imports"),
+          apiFetch("/api/yield-analytics/area-footprints")
         ]);
 
         if (!summaryRes.ok) {
@@ -461,7 +474,14 @@ export function YieldAnalyticsPage() {
           wasteData = (await wasteRes.json()) as WasteImport[];
         }
 
+        // Non-fatal like the other secondary loads: without it only the farm-wide kg/m2 is unavailable.
+        let areasData: AreaFootprints | null = null;
+        if (areasRes.ok) {
+          areasData = (await areasRes.json()) as AreaFootprints;
+        }
+
         if (active) {
+          setAreaFootprints(areasData);
           setSummary(summaryData);
           setEntries(entriesData);
           setColorCaseEntries(colorCaseData);
@@ -586,6 +606,8 @@ export function YieldAnalyticsPage() {
     return map;
   }, [wasteImports, selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]);
 
+  const farmKgPerM2 = useMemo(() => computeFarmKgPerM2(filteredEntries, areaFootprints), [filteredEntries, areaFootprints]);
+
   const filteredVarietySummary = useMemo(() => {
     if (!summary) {
       return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[], averageRow: null as AnalyticsRow | null };
@@ -702,8 +724,6 @@ export function YieldAnalyticsPage() {
       let totalWasteKg = 0;
       let totalFruitCount = 0;
       let totalFruitCountKg = 0;
-      let kgPerM2Numerator = 0;
-      let kgPerM2Denominator = 0;
       const sizeKgTotals: Record<string, number> = {};
 
       for (const item of byVariety.values()) {
@@ -712,13 +732,6 @@ export function YieldAnalyticsPage() {
         totalWasteKg += filteredWasteKgByVarietyId.get(item.variety_id) ?? 0;
         totalFruitCount += item.fruit_count_sum;
         totalFruitCountKg += item.fruit_count_kg;
-
-        // Only varieties with a known area contribute to the combined kg/m2 figure,
-        // so a missing area on one variety doesn't distort the others' density.
-        if (item.area_m2 > 0) {
-          kgPerM2Numerator += item.total_kg;
-          kgPerM2Denominator += item.area_m2;
-        }
 
         for (const [sizeId, kg] of Object.entries(item.size_kg_sum)) {
           sizeKgTotals[sizeId] = (sizeKgTotals[sizeId] ?? 0) + kg;
@@ -749,13 +762,15 @@ export function YieldAnalyticsPage() {
         // mean), not a simple kg-weighted average of AFW values — those diverge whenever
         // entries with very different fruit sizes are combined.
         avg_fruit_weight_g: totalFruitCount > 0 ? (totalFruitCountKg * 1000) / totalFruitCount : null,
-        kg_per_m2: kgPerM2Denominator > 0 ? kgPerM2Numerator / kgPerM2Denominator : null,
+        // Farm-wide: all qualifying kg over unique physical growing area (see farmKgPerM2.ts),
+        // never a sum of variety area_m2, which double-counts renamed or split varieties.
+        kg_per_m2: farmKgPerM2.kgPerM2,
         size_pct: averageSizePct
       };
     }
 
     return { sizes, rows, averageRow };
-  }, [summary, varietyMeta, filteredEntries, filteredWasteKgByVarietyId]);
+  }, [summary, varietyMeta, filteredEntries, filteredWasteKgByVarietyId, farmKgPerM2]);
 
   const varietySummaryWeekLabel = useMemo(
     () => getWeekFilterLabel(weekFilterMode, selectedWeek, fromWeek, toWeek),
@@ -1239,7 +1254,30 @@ export function YieldAnalyticsPage() {
           <div className="ya-kpi">
             <p className="ya-kpi-label">kg / m²</p>
             <p className="ya-kpi-value">{formatKgPerM2(averageRow.kg_per_m2)}</p>
-            <p className="ya-kpi-context">Varieties with a valid area</p>
+            {farmKgPerM2.kgPerM2 !== null ? (
+              <p className="ya-kpi-context">
+                {formatKgFigure(farmKgPerM2.coveredKg)} kg ÷ {formatAreaFigure(farmKgPerM2.areaM2)} m² of unique growing area
+              </p>
+            ) : (
+              <p className="ya-kpi-context">
+                {areaFootprints ? "No measured growing area for this period" : "Growing areas couldn\u2019t be loaded"}
+              </p>
+            )}
+            {farmKgPerM2.uncovered.length > 0 ? (
+              <p className="ya-kpi-warning" role="note">
+                <span className="ya-kpi-warning-label">Coverage: </span>
+                {formatKgFigure(farmKgPerM2.uncoveredKg)} kg from{" "}
+                {farmKgPerM2.uncovered.map((u) => varietyNameById[u.varietyId] ?? "an unknown variety").join(", ")} isn&rsquo;t linked to a
+                growing area, so it&rsquo;s left out of kg/m².
+              </p>
+            ) : null}
+            {farmKgPerM2.unmeasuredRowCount > 0 ? (
+              <p className="ya-kpi-warning" role="note">
+                <span className="ya-kpi-warning-label">Coverage: </span>
+                {farmKgPerM2.unmeasuredRowCount} greenhouse row{farmKgPerM2.unmeasuredRowCount === 1 ? " has" : "s have"} no width/length, so
+                {farmKgPerM2.unmeasuredRowCount === 1 ? " it adds" : " they add"} no area.
+              </p>
+            ) : null}
           </div>
           <div className="ya-kpi">
             <p className="ya-kpi-label">Waste</p>

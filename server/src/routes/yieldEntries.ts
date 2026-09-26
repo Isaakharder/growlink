@@ -2,6 +2,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
+import { resolveVarietyFootprints } from "../utils/varietyAreaFootprints";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -582,6 +583,74 @@ yieldEntriesRouter.delete("/yield-entries/:id", canYieldEdit, async (req, res) =
   }
 
   return res.status(204).send();
+});
+
+const GREENHOUSE_ROWS_PAGE = 1000;
+
+/** Every greenhouse row, paged: PostgREST caps a response at 1,000 rows, and a truncated list would undercount physical area. */
+async function fetchAllGreenhouseRows(organizationId: string | undefined) {
+  const data: Array<{ group_id: string; row_number: number; width_meters: number | null; length_meters: number | null; section_id: string | null }> = [];
+  for (let from = 0; ; from += GREENHOUSE_ROWS_PAGE) {
+    const { data: page, error } = await supabase
+      .from("greenhouse_rows")
+      .select("group_id, row_number, width_meters, length_meters, section_id")
+      .eq("organization_id", organizationId)
+      .order("group_id", { ascending: true })
+      .order("row_number", { ascending: true })
+      .range(from, from + GREENHOUSE_ROWS_PAGE - 1);
+    if (error) return { data: null, error };
+    data.push(...(page ?? []));
+    if (!page || page.length < GREENHOUSE_ROWS_PAGE) return { data, error: null };
+  }
+}
+
+// Physical growing-area footprints for the farm-wide kg/m2 (see
+// utils/varietyAreaFootprints.ts). variety_area_links arrives with migration
+// 0138; until it is applied, footprints come from row assignments alone and
+// linksAvailable tells the page why a legacy variety shows as unlinked.
+yieldEntriesRouter.get("/yield-analytics/area-footprints", canYieldView, async (req, res) => {
+  const organizationId = req.organizationId;
+
+  const [groupsResult, rowsResult, sectionsResult, assignmentsResult, linksResult] = await Promise.all([
+    supabase.from("greenhouse_groups").select("id, name").eq("organization_id", organizationId),
+    fetchAllGreenhouseRows(organizationId),
+    supabase.from("greenhouse_row_sections").select("id, width_meters, length_meters").eq("organization_id", organizationId),
+    supabase
+      .from("greenhouse_variety_assignments")
+      .select("group_id, variety_id, start_row, end_row, assignment_pattern")
+      .eq("organization_id", organizationId),
+    supabase
+      .from("variety_area_links")
+      .select("variety_id, successor_variety_id, greenhouse_group_id")
+      .eq("organization_id", organizationId)
+  ]);
+
+  for (const [label, result] of [
+    ["groups", groupsResult],
+    ["rows", rowsResult],
+    ["sections", sectionsResult],
+    ["assignments", assignmentsResult]
+  ] as const) {
+    if (result.error) {
+      return sendSafeError(res, 500, "Failed to load growing areas.", `Yield analytics area footprints - ${label} error:`, result.error);
+    }
+  }
+
+  // 42P01: relation does not exist (migration 0138 not applied yet).
+  const linksAvailable = !linksResult.error;
+  if (linksResult.error && linksResult.error.code !== "42P01" && linksResult.error.code !== "PGRST205") {
+    return sendSafeError(res, 500, "Failed to load growing areas.", "Yield analytics area footprints - links error:", linksResult.error);
+  }
+
+  const footprints = resolveVarietyFootprints({
+    groups: groupsResult.data ?? [],
+    rows: rowsResult.data ?? [],
+    sections: sectionsResult.data ?? [],
+    assignments: assignmentsResult.data ?? [],
+    links: linksAvailable ? linksResult.data ?? [] : []
+  });
+
+  return res.json({ ...footprints, linksAvailable });
 });
 
 yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res) => {
