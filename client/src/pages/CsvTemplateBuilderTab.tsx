@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { apiFetch } from "../lib/api";
@@ -319,6 +319,12 @@ const IMPORT_URL = "/api/csv-templates/import";
 const YIELD_SIZES_URL = "/api/yield-sizes";
 const PENDING_URL = "/api/csv-templates/pending";
 const WEEKLY_CARDS_URL = "/api/csv-templates/pending/weekly-cards";
+
+// Which action raised the shared 429 notice. "pending" is the read-only
+// weekly-cards list; it is included so a rate-limited page load explains
+// itself with a countdown instead of a bare error the user reflexively
+// retries.
+type RateLimitSource = "preview" | "save" | "pending";
 const RESOLVE_LABELS_URL = "/api/csv-templates/pending/resolve-labels";
 const IMPORT_WEEK_URL = "/api/csv-templates/pending/import-week";
 const pendingImportUrl = (id: string) => `/api/agent-pending-imports/${id}`;
@@ -442,7 +448,7 @@ export function CsvTemplateBuilderTab() {
   // Single shared 429 notice for BOTH preview and save — whichever action
   // hits its rate limit, this is the only place the message renders, so it
   // never shows up twice (once from previewError, once from saveStatus).
-  const [rateLimitNotice, setRateLimitNotice] = useState<{ message: string; retryAt: number; source: "preview" | "save" } | null>(null);
+  const [rateLimitNotice, setRateLimitNotice] = useState<{ message: string; retryAt: number; source: RateLimitSource } | null>(null);
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [restoredNotice, setRestoredNotice] = useState(false);
 
@@ -495,30 +501,32 @@ export function CsvTemplateBuilderTab() {
   const lastPreviewPayloadRef = useRef<string | null>(null);
   const savingRef = useRef(false);
 
-  useEffect(() => {
-    void (async () => {
-      const res = await apiFetch(YIELD_SIZES_URL);
-      if (!res.ok) return;
-      const body = (await res.json()) as YieldSizeOption[];
-      setYieldSizes(body);
-    })();
-    void fetchPendingItems();
-    void fetchTemplates();
+  // Pending-list request lifecycle. fetchPendingItems is invoked from eight
+  // call sites (mount, both Refresh buttons, and after import / remove /
+  // resolve-labels / reprocess), several of which can overlap — an import
+  // that finishes while a Refresh is still in flight used to issue a second
+  // identical GET. Both of these guard that:
+  //   pendingInFlightRef  — the in-flight promise, returned to every caller
+  //                         so overlapping calls coalesce into one request
+  //                         instead of each spending a rate-limit token.
+  //   pendingAbortRef     — aborted on unmount so a request that outlives
+  //                         the tab never lands in setState.
+  // The Refresh buttons' disabled={loading} only ever covered the two button
+  // call sites; the programmatic ones bypassed it entirely.
+  const pendingInFlightRef = useRef<Promise<void> | null>(null);
+  const pendingAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
-    // Restore any in-progress mapping work — e.g. after a refresh that
-    // followed a failed/rate-limited save — so it is never silently lost.
-    const persisted = loadPersistedBuilderState();
-    if (persisted) {
-      setParsed(persisted.parsed);
-      setDraft(persisted.draft);
-      setColumnAssignments(new Map(persisted.columnAssignments));
-      setRowIgnoreSelections(new Set(persisted.rowIgnoreSelections));
-      setPackDateFormat(persisted.packDateFormat);
-      setTemplateName(persisted.templateName);
-      setCloseMatchChoice(persisted.closeMatchChoice);
-      setRestoredNotice(true);
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      pendingAbortRef.current?.abort();
+      pendingAbortRef.current = null;
+      pendingInFlightRef.current = null;
+    };
   }, []);
+
 
   const isBuildingDraft =
     parsed !== null &&
@@ -557,43 +565,71 @@ export function CsvTemplateBuilderTab() {
     return () => clearInterval(interval);
   }, [rateLimitNotice]);
 
-  async function fetchPendingItems() {
-    setPendingLoading(true);
-    setPendingError(null);
-    try {
-      const res = await apiFetch(WEEKLY_CARDS_URL);
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { message?: string } | null;
-        throw new Error(body?.message ?? `Failed to load pending CSV imports (${res.status})`);
-      }
-      const body = (await res.json()) as { cards: WeeklyCard[]; unmatched: UnmatchedPendingItem[] };
-      setWeeklyCards(body.cards);
-      // The needs-template review flow (Set up CSV Template / Reprocess with
-      // saved template) is unchanged — only files that DID match a template
-      // are now grouped into weekly cards instead of one-card-per-file.
-      setPendingItems(
-        body.unmatched.map((u) => ({
-          id: u.id,
-          sourceFilename: u.sourceFilename,
-          sourceFileId: u.sourceFileId,
-          uploadedAt: u.uploadedAt,
-          needsTemplate: true,
-          templateId: null,
-          templateName: null,
-          templateVersion: null,
-          matchKind: u.matchKind,
-          preview: null,
-          error: u.error
-        }))
-      );
-    } catch (err) {
-      setPendingError(err instanceof Error ? err.message : "Failed to load pending CSV imports.");
-    } finally {
-      setPendingLoading(false);
-    }
-  }
+  // Deduplicated + cancellable. Every caller awaits the SAME in-flight
+  // promise, so N overlapping calls produce exactly one GET (and spend one
+  // rate-limit token) rather than N. Deliberately has no automatic retry:
+  // a 429 here previously surfaced as a bare error string, which invited the
+  // user to keep hammering Refresh and burn the remaining budget. It now
+  // raises the shared rate-limit notice with its live countdown instead.
+  const fetchPendingItems = useCallback((): Promise<void> => {
+    if (pendingInFlightRef.current) return pendingInFlightRef.current;
 
-  async function fetchTemplates() {
+    const controller = new AbortController();
+    pendingAbortRef.current = controller;
+
+    const run = (async () => {
+      setPendingLoading(true);
+      setPendingError(null);
+      try {
+        const res = await apiFetch(WEEKLY_CARDS_URL, { signal: controller.signal });
+        if (res.status === 429) {
+          await handleRateLimited(res, "pending");
+          // No retry, no backoff loop: the countdown tells the user when the
+          // window reopens and the next attempt is an explicit user action.
+          return;
+        }
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { message?: string } | null;
+          throw new Error(body?.message ?? `Failed to load pending CSV imports (${res.status})`);
+        }
+        const body = (await res.json()) as { cards: WeeklyCard[]; unmatched: UnmatchedPendingItem[] };
+        if (controller.signal.aborted || !mountedRef.current) return;
+        setWeeklyCards(body.cards);
+        // The needs-template review flow (Set up CSV Template / Reprocess with
+        // saved template) is unchanged — only files that DID match a template
+        // are now grouped into weekly cards instead of one-card-per-file.
+        setPendingItems(
+          body.unmatched.map((u) => ({
+            id: u.id,
+            sourceFilename: u.sourceFilename,
+            sourceFileId: u.sourceFileId,
+            uploadedAt: u.uploadedAt,
+            needsTemplate: true,
+            templateId: null,
+            templateName: null,
+            templateVersion: null,
+            matchKind: u.matchKind,
+            preview: null,
+            error: u.error
+          }))
+        );
+      } catch (err) {
+        // An abort is an expected unmount/navigation outcome, not an error.
+        if (controller.signal.aborted || (err as { name?: string })?.name === "AbortError") return;
+        if (!mountedRef.current) return;
+        setPendingError(err instanceof Error ? err.message : "Failed to load pending CSV imports.");
+      } finally {
+        if (mountedRef.current && !controller.signal.aborted) setPendingLoading(false);
+        if (pendingAbortRef.current === controller) pendingAbortRef.current = null;
+        pendingInFlightRef.current = null;
+      }
+    })();
+
+    pendingInFlightRef.current = run;
+    return run;
+  }, []);
+
+  const fetchTemplates = useCallback(async () => {
     setTemplatesLoading(true);
     setTemplatesError(null);
     try {
@@ -608,7 +644,35 @@ export function CsvTemplateBuilderTab() {
     } finally {
       setTemplatesLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const res = await apiFetch(YIELD_SIZES_URL);
+      if (!res.ok) return;
+      const body = (await res.json()) as YieldSizeOption[];
+      setYieldSizes(body);
+    })();
+    void fetchPendingItems();
+    void fetchTemplates();
+
+    // Restore any in-progress mapping work — e.g. after a refresh that
+    // followed a failed/rate-limited save — so it is never silently lost.
+    const persisted = loadPersistedBuilderState();
+    if (persisted) {
+      setParsed(persisted.parsed);
+      setDraft(persisted.draft);
+      setColumnAssignments(new Map(persisted.columnAssignments));
+      setRowIgnoreSelections(new Set(persisted.rowIgnoreSelections));
+      setPackDateFormat(persisted.packDateFormat);
+      setTemplateName(persisted.templateName);
+      setCloseMatchChoice(persisted.closeMatchChoice);
+      setRestoredNotice(true);
+    }
+    // Both fetchers are useCallback([]) — stable for the component's lifetime.
+    // Listing them here is honest about the dependency without reintroducing
+    // the churn that an inline function would cause on every render.
+  }, [fetchPendingItems, fetchTemplates]);
 
   function resetVisualState() {
     setColumnAssignments(new Map());
@@ -959,9 +1023,13 @@ export function CsvTemplateBuilderTab() {
   // and records ONE shared notice — this is the single place a rate-limit
   // message is ever shown, so preview and save hitting 429 back-to-back
   // never renders the same message twice.
-  async function handleRateLimited(res: Response, source: "preview" | "save") {
+  async function handleRateLimited(res: Response, source: RateLimitSource) {
     const body = (await res.json().catch(() => null)) as { message?: string; retryAfterSeconds?: number } | null;
-    const retryAfterSeconds = body?.retryAfterSeconds ?? Number(res.headers.get("retry-after")) ?? 60;
+    // Number(null) is 0 and Number("") is 0, so ?? never falls through to 60 —
+    // parse the header explicitly and only use it when it is a real number.
+    const headerValue = Number(res.headers.get("retry-after"));
+    const headerSeconds = Number.isFinite(headerValue) && headerValue > 0 ? headerValue : null;
+    const retryAfterSeconds = body?.retryAfterSeconds ?? headerSeconds ?? 60;
     setRateLimitNotice({
       message: body?.message ?? "Too many requests. Please wait before retrying.",
       retryAt: Date.now() + retryAfterSeconds * 1000,
@@ -1702,7 +1770,9 @@ export function CsvTemplateBuilderTab() {
             {" "}
             {rateLimitNotice.source === "save"
               ? "Nothing was cleared — your mappings are exactly as you left them."
-              : "The grid is unaffected — your mappings are unchanged."}
+              : rateLimitNotice.source === "pending"
+                ? "The pending list below may be out of date until then. Nothing was imported or lost."
+                : "The grid is unaffected — your mappings are unchanged."}
           </p>
           {rateLimitCountdown === 0 && (
             <button type="button" onClick={() => setRateLimitNotice(null)}>Dismiss</button>
