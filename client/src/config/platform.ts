@@ -19,6 +19,12 @@ export const MOBILE_BASE = "/mobile";
 // The mobile app's own home/index route.
 export const MOBILE_HOME = MOBILE_BASE;
 
+// The desktop app's home: the authenticated Dashboard (routes.tsx index route).
+// Served from index.html with the desktop manifest; /mobile* is served from
+// mobile.html (vite.config.ts, the service worker and the Caddyfile). Only the
+// web/PWA build has it: the native router (nativeRoutes.tsx) has no desktop.
+export const DESKTOP_HOME = "/";
+
 // Builds an absolute link to a mobile route from a path relative to the
 // mobile app's root, e.g. mobilePath("/daily-yield") -> "/mobile/daily-yield".
 // Existing callers keep working unchanged; new mobile-internal links can

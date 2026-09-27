@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
 import { MembershipProvider } from "../../contexts/MembershipContext";
 import { usePermissions } from "../../hooks/usePermissions";
 import { Unauthorized } from "../auth/RequirePermission";
@@ -6,7 +7,7 @@ import { OfflineBanner } from "../mobile/OfflineBanner";
 import { SyncStatusBar } from "../mobile/SyncStatusBar";
 import { useOfflineQueue } from "../../hooks/useOfflineQueue";
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "../../pages/maintenance/access";
-import { MOBILE_HOME } from "../../config/platform";
+import { DESKTOP_HOME, MOBILE_HOME } from "../../config/platform";
 
 const MOBILE_PERMISSIONS = [
   "mobile:access",
@@ -31,10 +32,13 @@ const MOBILE_PERMISSIONS = [
 function MobileLayoutInner() {
   const { loading, canAny } = usePermissions();
   const { queuePending, queueFailed, failureReasons, syncStatus, clearFailed } = useOfflineQueue();
+  // The iOS/Android apps have no desktop: there the button isn't rendered at
+  // all and the bar keeps its single-button layout.
+  const showDesktop = !Capacitor.isNativePlatform();
 
   const nav = (
     <nav
-      className="mobile-bottom-nav mobile-bottom-nav-single"
+      className={`mobile-bottom-nav ${showDesktop ? "mobile-bottom-nav-pair" : "mobile-bottom-nav-single"}`}
       aria-label="Mobile navigation"
     >
       <NavLink
@@ -46,6 +50,19 @@ function MobileLayoutInner() {
       >
         Home
       </NavLink>
+      {showDesktop ? (
+        // A full document navigation, not React Router: the server then serves
+        // index.html with the desktop shell and manifest. Same origin, so the
+        // Supabase session in localStorage (and the membership-derived
+        // organization) carries over; no target, so it stays in this tab.
+        <a href={DESKTOP_HOME} className="mobile-bottom-link mobile-bottom-link-desktop" aria-label="Open GrowLink Desktop">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+            <rect x="2.5" y="3.5" width="15" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+            <path d="M7 17h6M10 13.5V17" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+          Desktop
+        </a>
+      ) : null}
     </nav>
   );
 
