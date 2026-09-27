@@ -14,6 +14,7 @@ import autoTable from "jspdf-autotable";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { ExpandChartButton, FullscreenChartOverlay, useFullscreenChart } from "../components/charts/FullscreenChart";
+import { formatWeekAxisTick } from "../components/charts/weekAxis";
 import { computeFarmKgPerM2, type AreaFootprints } from "../lib/yieldAnalytics/farmKgPerM2";
 
 type YieldSize = {
@@ -187,7 +188,7 @@ function TrendChart({
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={points} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
         <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
-        <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} tickLine={false} axisLine={{ stroke: "var(--border)" }} minTickGap={16} />
+        <XAxis dataKey="label" tickFormatter={formatWeekAxisTick} tick={{ fill: "var(--text-muted)", fontSize: 12 }} tickLine={false} axisLine={{ stroke: "var(--border)" }} minTickGap={16} />
         <YAxis
           tick={{ fill: "var(--text-muted)", fontSize: 12 }}
           tickLine={false}

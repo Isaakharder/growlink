@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { usePermissions } from "../../hooks/usePermissions";
 import { usePlatformAdmin } from "../../hooks/usePlatformAdmin";
@@ -270,6 +270,15 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
           >
             {isLoggingOut ? "Logging out..." : "Log out"}
           </button>
+          {/* In-app navigation: same tab, same session, and Back returns here.
+              /mobile is part of this router (routes.tsx), so no reload. */}
+          <Link to="/mobile" className="sidebar-mobile-link" aria-label="Open GrowLink Mobile" onClick={onCloseMobile}>
+            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+              <rect x="5.5" y="2.5" width="9" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M8.5 14.5h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            Mobile
+          </Link>
         </div>
       </aside>
 

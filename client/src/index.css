@@ -152,6 +152,41 @@ body.native-shell #root {
   opacity: 0.7;
 }
 
+/* Sidebar footer controls share one size: full width, 44 px touch target. */
+.sidebar-footer .sidebar-logout,
+.sidebar-footer .sidebar-mobile-link {
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+/* Navigation, not an account action: GrowLink mint instead of the neutral Log out. */
+.sidebar-mobile-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px solid #bfe3d4;
+  border-radius: 10px;
+  background: var(--brand-soft);
+  color: #0a5e4c;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.55rem 0.7rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sidebar-mobile-link:hover {
+  border-color: var(--brand);
+}
+
+.sidebar-mobile-link:focus-visible {
+  outline: 3px solid rgba(15, 118, 96, 0.4);
+  outline-offset: 2px;
+}
+
 .nav-link,
 .nav-group-trigger,
 .nav-sublink {
