@@ -25,45 +25,40 @@ import {
   type ApiResult,
   apiFetch
 } from "../lib/api";
-
-type GroupType = "phase" | "zone" | "color";
-type StatusType = "active" | "inactive";
-
-type IrrigationGroup = {
-  id: string;
-  type: GroupType;
-  name: string;
-  status: StatusType;
-  created_at?: string;
-};
-
-type ExistingLog = {
-  id: string;
-  log_date: string;
-  tracking_mode: GroupType;
-  group_id: string | null;
-  group_key: string;
-  group_name: string;
-  feed_valve_ids: string[];
-  drain_bucket_ids: string[];
-  feed_ph: number | null;
-  feed_ec: number | null;
-  drain_ph: number | null;
-  drain_ec: number | null;
-  feed_valve_readings?: Array<{ id: string; name: string; volume_ml: number | null; dripper_count?: number | null }>;
-  drain_bucket_readings?: Array<{ id: string; name: string; volume_ml: number | null; dripper_count?: number | null }>;
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-};
+import { roundTo } from "../lib/roundTo";
+import {
+  TRACKING_LABELS,
+  formatSnapshotNumber,
+  getAvgFeedMl,
+  getDrainPercent,
+  getLastReadingDate,
+  pairGreenhouseSnapshots,
+  selectGreenhouseSnapshotGroups,
+  type IrrigationGroup,
+  type IrrigationGroupType,
+  type IrrigationLogRecord
+} from "../lib/dashboard/greenhouseSnapshots";
+import {
+  COLOR_ORDER,
+  buildColorYieldSummary,
+  buildYieldPieSlices,
+  buildYieldTrendPoints,
+  formatColorKgPerM2,
+  normalizeColorCaseEntries,
+  normalizeYieldEntries,
+  type ColorYieldEntry,
+  type ColorYieldSummary,
+  type ColorYieldVariety,
+  type VarietyColor,
+  type YieldPieSlice,
+  type YieldTrendPoint
+} from "../lib/dashboard/yieldByColor";
 
 type ServiceState = {
   loading: boolean;
   status: "connected" | "disconnected";
   response: ApiResult | null;
 };
-
-type VarietyColor = "red" | "orange" | "yellow" | "green";
 
 type DashboardOtherSectionKey =
   | "backendStatus"
@@ -99,54 +94,6 @@ type SetupResponse = {
   groups: IrrigationGroup[];
 };
 
-type IrrigationLogRecord = ExistingLog;
-
-type YieldEntryRecord = {
-  variety_id: string;
-  year: number;
-  week: number;
-  total_kg: number;
-};
-
-type VarietyRecord = {
-  id: string;
-  color: VarietyColor | string | null;
-  area_m2: number;
-  status: StatusType;
-};
-
-type ColorYieldSummary = {
-  color: VarietyColor;
-  totalKg: number;
-  totalAreaM2: number;
-  harvestedKgPerM2: number | null;
-  exportedKg: number;
-  exportedKgPerM2: number | null;
-};
-
-type ColorCaseEntryRecord = {
-  color: VarietyColor | string | null;
-  total_cases: number;
-  case_weight_kg: number;
-  total_kg: number;
-};
-
-type YieldTrendPoint = {
-  label: string;
-  sortKey: number;
-  red: number;
-  orange: number;
-  yellow: number;
-  green: number;
-};
-
-type YieldPieSlice = {
-  color: VarietyColor;
-  kg: number;
-  percent: number;
-};
-
-
 const INITIAL_SERVICE_STATE: ServiceState = {
   loading: true,
   status: "disconnected",
@@ -170,13 +117,6 @@ function getDashboardStorageKey(organizationId: string): string {
   return `growlink.dashboard.layout:${organizationId}`;
 }
 
-const TRACKING_LABELS: Record<GroupType, string> = {
-  phase: "Phase",
-  zone: "Zone",
-  color: "Color"
-};
-
-const COLOR_ORDER: VarietyColor[] = ["red", "orange", "yellow", "green"];
 const COLOR_STROKES: Record<VarietyColor, string> = {
   red: "#dc2626",
   orange: "#d97706",
@@ -201,38 +141,6 @@ const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
 
 function statusColor(status: ServiceState["status"]) {
   return status === "connected" ? "#0f7660" : "#b42318";
-}
-
-function resolveTrackingMode(groups: IrrigationGroup[]): GroupType | null {
-  if (groups.length === 0) {
-    return null;
-  }
-
-  const counts = new Map<GroupType, number>();
-  const firstSeenOrder: GroupType[] = [];
-
-  for (const group of groups) {
-    const current = counts.get(group.type) ?? 0;
-    counts.set(group.type, current + 1);
-
-    if (current === 0) {
-      firstSeenOrder.push(group.type);
-    }
-  }
-
-  let selectedType = firstSeenOrder[0];
-  let selectedCount = counts.get(selectedType) ?? 0;
-
-  for (const type of firstSeenOrder) {
-    const count = counts.get(type) ?? 0;
-
-    if (count > selectedCount) {
-      selectedType = type;
-      selectedCount = count;
-    }
-  }
-
-  return selectedType;
 }
 
 /**
@@ -317,134 +225,12 @@ function WeeklyKgByColorChart({
   );
 }
 
-function roundTo(value: number, decimals: number) {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
-
 function formatSampleTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
   const datePart = date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
   const timePart = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   return `${datePart} at ${timePart}`;
-}
-
-function normalizeColor(value: unknown): VarietyColor | null {
-  const color = typeof value === "string" ? value.trim().toLowerCase() : "";
-
-  if (color === "red" || color === "orange" || color === "yellow" || color === "green") {
-    return color;
-  }
-
-  return null;
-}
-
-function readNumberField(
-  record: Record<string, unknown>,
-  keys: string[]
-): number | null {
-  for (const key of keys) {
-    const raw = record[key];
-    const parsed = typeof raw === "number" ? raw : Number(raw);
-
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-
-  return null;
-}
-
-function readStringField(
-  record: Record<string, unknown>,
-  keys: string[]
-): string | null {
-  for (const key of keys) {
-    const raw = record[key];
-
-    if (typeof raw === "string" && raw.trim().length > 0) {
-      return raw.trim();
-    }
-  }
-
-  return null;
-}
-
-function normalizeYieldEntries(input: unknown): YieldEntryRecord[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  const result: YieldEntryRecord[] = [];
-
-  for (const rawEntry of input) {
-    if (!rawEntry || typeof rawEntry !== "object") {
-      continue;
-    }
-
-    const entry = rawEntry as Record<string, unknown>;
-    const varietyId = readStringField(entry, ["variety_id", "varietyId"]);
-    const totalKg = readNumberField(entry, ["total_kg", "totalKg"]);
-    const week = readNumberField(entry, ["week", "iso_week", "weekNumber"]);
-    const year = readNumberField(entry, ["year", "iso_year"]);
-
-    if (!varietyId || totalKg === null || week === null || year === null) {
-      continue;
-    }
-
-    if (totalKg < 0) {
-      continue;
-    }
-
-    const normalizedWeek = Math.trunc(week);
-    const normalizedYear = Math.trunc(year);
-
-    if (normalizedWeek < 1 || normalizedWeek > 53) {
-      continue;
-    }
-
-    result.push({
-      variety_id: varietyId,
-      total_kg: totalKg,
-      week: normalizedWeek,
-      year: normalizedYear
-    });
-  }
-
-  return result;
-}
-
-function normalizeColorCaseEntries(input: unknown): ColorCaseEntryRecord[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  const result: ColorCaseEntryRecord[] = [];
-
-  for (const rawEntry of input) {
-    if (!rawEntry || typeof rawEntry !== "object") {
-      continue;
-    }
-
-    const entry = rawEntry as Record<string, unknown>;
-    const totalCases = readNumberField(entry, ["total_cases", "totalCases"]);
-    const caseWeightKg = readNumberField(entry, ["case_weight_kg", "caseWeightKg"]);
-    const totalKg = readNumberField(entry, ["total_kg", "totalKg"]) ?? 0;
-
-    if (totalCases === null || caseWeightKg === null || totalCases < 0 || caseWeightKg < 0) {
-      continue;
-    }
-
-    result.push({
-      color: (entry.color as VarietyColor | string | null) ?? null,
-      total_cases: totalCases,
-      case_weight_kg: caseWeightKg,
-      total_kg: totalKg
-    });
-  }
-
-  return result;
 }
 
 function readDashboardPreferences(organizationId: string): DashboardPreferences {
@@ -698,15 +484,15 @@ export function DashboardPage() {
   const [irrigationLoading, setIrrigationLoading] = useState(true);
   const [irrigationError, setIrrigationError] = useState<string | null>(null);
   const [irrigationGroups, setIrrigationGroups] = useState<IrrigationGroup[]>([]);
-  const [trackingMode, setTrackingMode] = useState<GroupType | null>(null);
+  const [trackingMode, setTrackingMode] = useState<IrrigationGroupType | null>(null);
   const [latestLogsByGroupId, setLatestLogsByGroupId] = useState<Map<string, IrrigationLogRecord>>(
     new Map()
   );
   const [yieldLoading, setYieldLoading] = useState(true);
   const [yieldError, setYieldError] = useState<string | null>(null);
   const [colorYieldSummary, setColorYieldSummary] = useState<ColorYieldSummary[]>([]);
-  const [yieldEntries, setYieldEntries] = useState<YieldEntryRecord[]>([]);
-  const [varieties, setVarieties] = useState<VarietyRecord[]>([]);
+  const [yieldEntries, setYieldEntries] = useState<ColorYieldEntry[]>([]);
+  const [varieties, setVarieties] = useState<ColorYieldVariety[]>([]);
   const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
   const [preferences, setPreferences] = useState<DashboardPreferences>(() =>
     readDashboardPreferences(organizationId)
@@ -834,23 +620,11 @@ export function DashboardPage() {
 
         const setupData = (await setupRes.json()) as SetupResponse;
         const irrigationLogs = (await logsRes.json()) as IrrigationLogRecord[];
-        const activeGroups = (setupData.groups ?? []).filter(
-          (group) => group.status === "active"
-        );
-        const mode = resolveTrackingMode(activeGroups);
-        const displayGroups =
-          mode === null ? [] : activeGroups.filter((group) => group.type === mode);
-        const nextLatestLogsByGroupId = new Map<string, IrrigationLogRecord>();
-
-        for (const log of irrigationLogs ?? []) {
-          const groupId = typeof log.group_key === "string" ? log.group_key : "";
-
-          if (!groupId || nextLatestLogsByGroupId.has(groupId)) {
-            continue;
-          }
-
-          nextLatestLogsByGroupId.set(groupId, log);
-        }
+        const {
+          trackingMode: mode,
+          groups: displayGroups,
+          latestLogsByGroupId: nextLatestLogsByGroupId
+        } = selectGreenhouseSnapshotGroups(setupData.groups, irrigationLogs);
 
         if (active) {
           setIrrigationGroups(displayGroups);
@@ -895,82 +669,10 @@ export function DashboardPage() {
 
         const entriesRaw = (await entriesRes.json()) as unknown;
         const entries = normalizeYieldEntries(entriesRaw);
-        const varieties = (await varietiesRes.json()) as VarietyRecord[];
+        const varieties = (await varietiesRes.json()) as ColorYieldVariety[];
         const colorCaseEntriesRaw = (await colorCaseEntriesRes.json()) as unknown;
         const colorCaseEntries = normalizeColorCaseEntries(colorCaseEntriesRaw);
-        const activeVarieties = (varieties ?? []).filter(
-          (variety) => variety.status === "active"
-        );
-        const varietyById = new Map<string, VarietyRecord>();
-        const totalsByColor = new Map<
-          VarietyColor,
-          { totalKg: number; exportedKg: number; totalAreaM2: number }
-        >();
-
-        for (const color of COLOR_ORDER) {
-          totalsByColor.set(color, { totalKg: 0, exportedKg: 0, totalAreaM2: 0 });
-        }
-
-        for (const variety of activeVarieties) {
-          const color = normalizeColor(variety.color);
-          if (!color) {
-            continue;
-          }
-
-          varietyById.set(variety.id, variety);
-          const bucket = totalsByColor.get(color)!;
-          bucket.totalAreaM2 +=
-            Number.isFinite(Number(variety.area_m2)) && Number(variety.area_m2) > 0
-              ? Number(variety.area_m2)
-              : 0;
-        }
-
-        for (const entry of entries ?? []) {
-          const variety = varietyById.get(entry.variety_id);
-          const color = normalizeColor(variety?.color);
-          const totalKg = Number(entry.total_kg);
-
-          if (!color || !Number.isFinite(totalKg) || totalKg < 0) {
-            continue;
-          }
-
-          const bucket = totalsByColor.get(color)!;
-          bucket.totalKg += totalKg;
-        }
-
-        for (const entry of colorCaseEntries ?? []) {
-          const color = normalizeColor(entry.color);
-          const totalCases = Number(entry.total_cases);
-          const caseWeightKg = Number(entry.case_weight_kg);
-
-          if (!color || !Number.isFinite(totalCases) || !Number.isFinite(caseWeightKg)) {
-            continue;
-          }
-
-          if (totalCases < 0 || caseWeightKg < 0) {
-            continue;
-          }
-
-          const bucket = totalsByColor.get(color)!;
-          bucket.exportedKg += entry.total_kg;
-        }
-
-        const nextSummary = COLOR_ORDER.map((color) => {
-          const bucket = totalsByColor.get(color)!;
-          const harvestedKgPerM2 =
-            bucket.totalAreaM2 > 0 ? bucket.totalKg / bucket.totalAreaM2 : null;
-          const exportedKgPerM2 =
-            bucket.totalAreaM2 > 0 ? bucket.exportedKg / bucket.totalAreaM2 : null;
-
-          return {
-            color,
-            totalKg: bucket.totalKg,
-            totalAreaM2: bucket.totalAreaM2,
-            harvestedKgPerM2,
-            exportedKg: bucket.exportedKg,
-            exportedKgPerM2
-          };
-        });
+        const nextSummary = buildColorYieldSummary(entries, varieties ?? [], colorCaseEntries);
 
         if (active) {
           setYieldEntries(entries);
@@ -992,11 +694,7 @@ export function DashboardPage() {
   }, []);
 
   const greenhouseSnapshots = useMemo(
-    () =>
-      irrigationGroups.map((group) => ({
-        group,
-        log: latestLogsByGroupId.get(group.id) ?? null
-      })),
+    () => pairGreenhouseSnapshots(irrigationGroups, latestLogsByGroupId),
     [irrigationGroups, latestLogsByGroupId]
   );
 
@@ -1061,82 +759,15 @@ export function DashboardPage() {
     [visibleGreenhouseSnapshots]
   );
 
-  const yieldTrendPoints = useMemo<YieldTrendPoint[]>(() => {
-    const varietyColorById = new Map<string, VarietyColor>();
+  const yieldTrendPoints = useMemo<YieldTrendPoint[]>(
+    () => buildYieldTrendPoints(yieldEntries, varieties),
+    [yieldEntries, varieties]
+  );
 
-    for (const variety of varieties) {
-      const color = normalizeColor(variety.color);
-      if (color) {
-        varietyColorById.set(variety.id, color);
-      }
-    }
-
-    const byWeek = new Map<string, YieldTrendPoint>();
-
-    for (const entry of yieldEntries) {
-      const color = varietyColorById.get(entry.variety_id);
-      const totalKg = Number(entry.total_kg);
-      const year = Number(entry.year);
-      const week = Number(entry.week);
-
-      if (!color || !Number.isFinite(totalKg) || !Number.isFinite(year) || !Number.isFinite(week)) {
-        continue;
-      }
-
-      const label = `W${week} ${year}`;
-      const sortKey = year * 100 + week;
-
-      if (!byWeek.has(label)) {
-        byWeek.set(label, {
-          label,
-          sortKey,
-          red: 0,
-          orange: 0,
-          yellow: 0,
-          green: 0
-        });
-      }
-
-      const point = byWeek.get(label)!;
-      point[color] += totalKg;
-    }
-
-    return Array.from(byWeek.values())
-      .sort((a, b) => a.sortKey - b.sortKey)
-      .map((point) => ({
-        ...point,
-        red: roundTo(point.red, 2),
-        orange: roundTo(point.orange, 2),
-        yellow: roundTo(point.yellow, 2),
-        green: roundTo(point.green, 2)
-      }));
-  }, [yieldEntries, varieties]);
-
-  const yieldPieSlices = useMemo<YieldPieSlice[]>(() => {
-    const colorTotals = new Map<VarietyColor, number>();
-
-    for (const color of COLOR_ORDER) {
-      colorTotals.set(color, 0);
-    }
-
-    for (const entry of colorYieldSummary) {
-      colorTotals.set(entry.color, entry.totalKg);
-    }
-
-    const greenhouseTotalKg = Array.from(colorTotals.values()).reduce(
-      (sum, value) => sum + value,
-      0
-    );
-
-    return COLOR_ORDER.map((color) => {
-      const kg = colorTotals.get(color) ?? 0;
-      return {
-        color,
-        kg: roundTo(kg, 2),
-        percent: greenhouseTotalKg > 0 ? roundTo((kg / greenhouseTotalKg) * 100, 1) : 0
-      };
-    });
-  }, [colorYieldSummary]);
+  const yieldPieSlices = useMemo<YieldPieSlice[]>(
+    () => buildYieldPieSlices(colorYieldSummary),
+    [colorYieldSummary]
+  );
 
   const visibleTrendLineColors = useMemo(
     () => COLOR_ORDER.filter((color) => preferences.yieldTrends.lineColors[color] !== false),
@@ -1185,90 +816,6 @@ export function DashboardPage() {
   function saveCustomizeModal() {
     setPreferences(draftPreferences);
     setIsCustomizeOpen(false);
-  }
-
-  function formatNumber(val: number | null | undefined, decimals = 2) {
-    if (val === null || val === undefined || !Number.isFinite(val)) return "—";
-    return String(roundTo(Number(val), decimals));
-  }
-
-  function formatPercent(val: number | null | undefined, decimals = 2) {
-    if (val === null || val === undefined || !Number.isFinite(val)) return "—";
-    return `${roundTo(Number(val), decimals)}%`;
-  }
-
-  function getDrainPercent(log: ExistingLog | null) {
-    if (!log) return "—";
-
-    const feed = (log.feed_valve_readings ?? [])
-      .map((reading) => ({
-        volumeMl:
-          typeof reading.volume_ml === "number" &&
-          Number.isFinite(reading.volume_ml) &&
-          reading.volume_ml >= 0
-            ? reading.volume_ml
-            : null,
-        dripperCount:
-          Number(reading.dripper_count) > 0 ? Number(reading.dripper_count) : 1
-      }))
-      .filter(
-        (reading): reading is { volumeMl: number; dripperCount: number } =>
-          reading.volumeMl !== null
-      );
-    const drain = (log.drain_bucket_readings ?? [])
-      .map((reading) => ({
-        volumeMl:
-          typeof reading.volume_ml === "number" &&
-          Number.isFinite(reading.volume_ml) &&
-          reading.volume_ml >= 0
-            ? reading.volume_ml
-            : null,
-        dripperCount:
-          Number(reading.dripper_count) > 0 ? Number(reading.dripper_count) : 1
-      }))
-      .filter(
-        (reading): reading is { volumeMl: number; dripperCount: number } =>
-          reading.volumeMl !== null
-      );
-
-    if (!feed.length || !drain.length) return "—";
-
-    // Normalise each reading by its own dripper count, then average.
-    // Averaging raw volumes and dripper counts separately gives a wrong result
-    // when readings have different dripper counts.
-    const avgFeedPerDripper =
-      feed.reduce((sum, r) => sum + r.volumeMl / r.dripperCount, 0) / feed.length;
-    const avgDrainPerDripper =
-      drain.reduce((sum, r) => sum + r.volumeMl / r.dripperCount, 0) / drain.length;
-
-    if (!Number.isFinite(avgFeedPerDripper) || avgFeedPerDripper <= 0) return "—";
-    if (!Number.isFinite(avgDrainPerDripper) || avgDrainPerDripper < 0) return "—";
-
-    return formatPercent((avgDrainPerDripper / avgFeedPerDripper) * 100, 2);
-  }
-
-  function getAvgFeedMl(log: ExistingLog | null) {
-    if (!log) return "—";
-
-    const values = (log.feed_valve_readings ?? [])
-      .map((reading) =>
-        typeof reading.volume_ml === "number" &&
-        Number.isFinite(reading.volume_ml) &&
-        reading.volume_ml >= 0
-          ? reading.volume_ml
-          : null
-      )
-      .filter((value): value is number => value !== null);
-
-    if (!values.length) return "—";
-
-    const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
-    return String(Math.round(avg));
-  }
-
-  function getLastReadingDate(log: ExistingLog | null) {
-    if (!log) return "No readings yet";
-    return log.log_date || "—";
   }
 
   return (
@@ -1430,14 +977,14 @@ export function DashboardPage() {
                           <div className="dashboard-snapshot-metric">
                             <span className="dashboard-snapshot-label">Feed EC</span>
                             <span className="dashboard-snapshot-value">
-                              {formatNumber(log?.feed_ec, 2)}
+                              {formatSnapshotNumber(log?.feed_ec, 2)}
                             </span>
                           </div>
 
                           <div className="dashboard-snapshot-metric">
                             <span className="dashboard-snapshot-label">Feed pH</span>
                             <span className="dashboard-snapshot-value">
-                              {formatNumber(log?.feed_ph, 2)}
+                              {formatSnapshotNumber(log?.feed_ph, 2)}
                             </span>
                           </div>
                         </div>
@@ -1446,14 +993,14 @@ export function DashboardPage() {
                           <div className="dashboard-snapshot-metric">
                             <span className="dashboard-snapshot-label">Drain EC</span>
                             <span className="dashboard-snapshot-value">
-                              {formatNumber(log?.drain_ec, 2)}
+                              {formatSnapshotNumber(log?.drain_ec, 2)}
                             </span>
                           </div>
 
                           <div className="dashboard-snapshot-metric">
                             <span className="dashboard-snapshot-label">Drain pH</span>
                             <span className="dashboard-snapshot-value">
-                              {formatNumber(log?.drain_ph, 2)}
+                              {formatSnapshotNumber(log?.drain_ph, 2)}
                             </span>
                           </div>
                         </div>
@@ -1579,18 +1126,14 @@ export function DashboardPage() {
                     <div className="dashboard-yield-color-metric">
                       <span className="dashboard-yield-color-metric-label">Harvested</span>
                       <span className="dashboard-yield-color-metric-value">
-                        {entry.harvestedKgPerM2 === null
-                          ? "—"
-                          : `${roundTo(entry.harvestedKgPerM2, 2)} kg/m2`}
+                        {formatColorKgPerM2(entry.harvestedKgPerM2)}
                       </span>
                     </div>
 
                     <div className="dashboard-yield-color-metric">
                       <span className="dashboard-yield-color-metric-label">Shipped (kg/m²)</span>
                       <span className="dashboard-yield-color-metric-value">
-                        {entry.exportedKgPerM2 === null
-                          ? "—"
-                          : `${roundTo(entry.exportedKgPerM2, 2)} kg/m2`}
+                        {formatColorKgPerM2(entry.exportedKgPerM2)}
                       </span>
                     </div>
                   </div>
