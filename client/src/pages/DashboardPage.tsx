@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { usePermissions } from "../hooks/usePermissions";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { ExpandChartButton, FullscreenChartOverlay, useFullscreenChart } from "../components/charts/FullscreenChart";
+import { formatWeekAxisTick } from "../components/charts/weekAxis";
 import {
   CartesianGrid,
   Cell,
@@ -257,6 +258,7 @@ function WeeklyKgByColorChart({
         <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
         <XAxis
           dataKey="label"
+          tickFormatter={formatWeekAxisTick}
           tick={{ fill: "var(--text-muted)", fontSize: 12 }}
           tickLine={false}
           axisLine={{ stroke: "var(--border)" }}
