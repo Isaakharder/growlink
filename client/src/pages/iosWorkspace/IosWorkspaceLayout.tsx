@@ -4,6 +4,7 @@ import { MembershipProvider } from "../../contexts/MembershipContext";
 import { usePermissions } from "../../hooks/usePermissions";
 import { MOBILE_HOME } from "../../config/platform";
 import { isNativeIos } from "../../native/platformIos";
+import { WorkspaceDataProvider } from "./workspaceData";
 import { rememberWorkspacePath, WORKSPACE_SECTIONS, type WorkspaceSectionId } from "./workspaceNav";
 
 // The compact management workspace of the native iOS app: a left icon rail
@@ -94,7 +95,9 @@ export default function IosWorkspaceLayout() {
   if (!isNativeIos()) return <Navigate to={MOBILE_HOME} replace />;
   return (
     <MembershipProvider>
-      <IosWorkspaceInner />
+      <WorkspaceDataProvider>
+        <IosWorkspaceInner />
+      </WorkspaceDataProvider>
     </MembershipProvider>
   );
 }
