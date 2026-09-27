@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -120,7 +120,9 @@ describe.each([
     renderMobile();
     expect(screen.queryByRole("link", { name: "Open GrowLink Desktop" })).toBeNull();
     expect(document.querySelector(".mobile-bottom-link-desktop")).toBeNull();
-    expect(screen.queryByText("Desktop")).toBeNull();
+    // (Native iOS has its own header button to the in-app workspace; see
+    // pages/iosWorkspace/__tests__. None of that is in the bottom bar.)
+    expect(within(nav()).queryByText("Desktop")).toBeNull();
     // No empty slot: exactly the original markup, one Home link in one column.
     expect(nav().className).toBe("mobile-bottom-nav mobile-bottom-nav-single");
     expect(nav().children).toHaveLength(1);

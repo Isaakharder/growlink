@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { Capacitor } from "@capacitor/core";
 import { MembershipProvider } from "../../contexts/MembershipContext";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -8,6 +8,7 @@ import { SyncStatusBar } from "../mobile/SyncStatusBar";
 import { useOfflineQueue } from "../../hooks/useOfflineQueue";
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "../../pages/maintenance/access";
 import { DESKTOP_HOME, MOBILE_HOME } from "../../config/platform";
+import { isNativeIos } from "../../native/platformIos";
 
 const MOBILE_PERMISSIONS = [
   "mobile:access",
@@ -35,6 +36,9 @@ function MobileLayoutInner() {
   // The iOS/Android apps have no desktop: there the button isn't rendered at
   // all and the bar keeps its single-button layout.
   const showDesktop = !Capacitor.isNativePlatform();
+  // The native iOS app instead gets the in-app compact workspace, opened
+  // from the header (an in-app route, never Safari).
+  const showWorkspace = isNativeIos();
 
   const nav = (
     <nav
@@ -68,8 +72,17 @@ function MobileLayoutInner() {
 
   return (
     <div className="mobile-layout">
-      <header className="mobile-header">
+      <header className={`mobile-header${showWorkspace ? " mobile-header-with-action" : ""}`}>
         <h1>GrowLink Mobile</h1>
+        {showWorkspace ? (
+          <Link to="/workspace" className="mobile-header-workspace" aria-label="Open Desktop workspace">
+            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+              <rect x="2.5" y="3.5" width="15" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M7 17h6M10 13.5V17" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            Desktop
+          </Link>
+        ) : null}
       </header>
 
       <main className="mobile-content">
