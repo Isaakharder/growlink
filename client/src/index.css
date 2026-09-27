@@ -609,6 +609,21 @@ body.native-shell #root {
   font-size: 0.98rem;
 }
 
+/* Only the Weekly kg by Color header: the Expand button sits at the right,
+   out of the flow, so the header (and the doughnut card sharing its row)
+   keeps exactly its original height. */
+.dashboard-trend-panel-header--with-action {
+  position: relative;
+  padding-right: 3rem;
+}
+
+.dashboard-trend-panel-header--with-action .chart-expand-button {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+}
+
 .dashboard-chart-wrapper {
   margin-top: 0.7rem;
 }
@@ -9880,75 +9895,14 @@ textarea.cleaning-checklist-response-input {
 
 /* Recharts makes the chart focusable for keyboard tooltips: show a branded
    ring for keyboard focus only, not after a mouse click or tap. */
-.ya-chart .recharts-wrapper svg:focus:not(:focus-visible),
-.ya-chart-fullscreen .recharts-wrapper svg:focus:not(:focus-visible) {
+.ya-chart .recharts-wrapper svg:focus:not(:focus-visible) {
   outline: none;
 }
 
-.ya-chart .recharts-wrapper svg:focus-visible,
-.ya-chart-fullscreen .recharts-wrapper svg:focus-visible {
+.ya-chart .recharts-wrapper svg:focus-visible {
   outline: 3px solid rgba(15, 118, 96, 0.4);
   outline-offset: 2px;
   border-radius: 6px;
-}
-
-/* Expand button in each chart card's header. */
-.ya-page .ya-chart-expand {
-  width: 40px;
-  min-height: 40px;
-  padding: 0;
-  flex: none;
-}
-
-/* Full-screen chart: a fixed full-viewport layer (portalled to <body>, so
-   it declares the button variables itself). 100dvh follows mobile Safari's
-   collapsing toolbars; safe-area padding clears the iPhone notch and home
-   indicator, in the browser and the installed PWA. */
-.ya-chart-fullscreen {
-  --csv-tb-brand-dark: #0a5e4c;
-  --csv-tb-focus: rgba(15, 118, 96, 0.4);
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 100vh;
-  height: 100dvh;
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  box-sizing: border-box;
-  padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1.25rem + env(safe-area-inset-right, 0px))
-    calc(1rem + env(safe-area-inset-bottom, 0px)) calc(1.25rem + env(safe-area-inset-left, 0px));
-  background: var(--surface);
-  overscroll-behavior: contain;
-}
-
-.ya-chart-fullscreen:focus {
-  outline: none;
-}
-
-.ya-chart-fullscreen-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex: none;
-}
-
-.ya-chart-fullscreen-head > div {
-  min-width: 0;
-}
-
-.ya-chart-close {
-  flex: none;
-}
-
-/* The chart takes every remaining pixel; ResponsiveContainer fills it. */
-.ya-chart-fullscreen-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
 }
 
 .ya-chart-placeholder {
@@ -10090,19 +10044,110 @@ textarea.cleaning-checklist-response-input {
     width: 100%;
   }
 
-  .ya-page .ya-chart-expand {
-    width: 44px;
-    min-height: 44px;
-  }
-
-  .ya-chart-fullscreen {
-    padding: calc(0.75rem + env(safe-area-inset-top, 0px)) calc(0.75rem + env(safe-area-inset-right, 0px))
-      calc(0.75rem + env(safe-area-inset-bottom, 0px)) calc(0.75rem + env(safe-area-inset-left, 0px));
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .ya-skeleton {
     animation: none;
+  }
+}
+
+/* ── Full-screen chart (components/charts/FullscreenChart.tsx) ─────────────
+   Shared by the Yield Analytics and Dashboard trend charts. A fixed
+   full-viewport layer portalled to <body>: 100dvh follows mobile Safari's
+   collapsing toolbars, safe-area padding clears the iPhone notch and home
+   indicator in the browser and the installed PWA. It declares the csv-tb-btn
+   variables itself, since it sits outside any page that defines them. */
+
+.chart-expand-button {
+  --csv-tb-focus: rgba(15, 118, 96, 0.4);
+  width: 40px;
+  min-height: 40px;
+  padding: 0;
+  flex: none;
+}
+
+.chart-fullscreen {
+  --csv-tb-brand-dark: #0a5e4c;
+  --csv-tb-focus: rgba(15, 118, 96, 0.4);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-sizing: border-box;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1.25rem + env(safe-area-inset-right, 0px))
+    calc(1rem + env(safe-area-inset-bottom, 0px)) calc(1.25rem + env(safe-area-inset-left, 0px));
+  background: var(--surface);
+  overscroll-behavior: contain;
+}
+
+.chart-fullscreen:focus {
+  outline: none;
+}
+
+.chart-fullscreen-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+}
+
+.chart-fullscreen-head > div {
+  min-width: 0;
+}
+
+.chart-fullscreen-title {
+  margin: 0;
+  font-size: 1.08rem;
+  color: var(--text);
+}
+
+.chart-fullscreen-description {
+  margin: 0.3rem 0 0;
+  max-width: 72ch;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.chart-fullscreen-close {
+  flex: none;
+}
+
+/* The chart takes every remaining pixel; ResponsiveContainer fills it. */
+.chart-fullscreen-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Charts are focusable for keyboard tooltips: ring for keyboard focus only. */
+.chart-fullscreen .recharts-wrapper svg:focus:not(:focus-visible),
+.dashboard-chart-wrapper .recharts-wrapper svg:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.chart-fullscreen .recharts-wrapper svg:focus-visible,
+.dashboard-chart-wrapper .recharts-wrapper svg:focus-visible {
+  outline: 3px solid rgba(15, 118, 96, 0.4);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@media (max-width: 640px) {
+  .chart-expand-button {
+    width: 44px;
+    min-height: 44px;
+  }
+
+  .chart-fullscreen {
+    padding: calc(0.75rem + env(safe-area-inset-top, 0px)) calc(0.75rem + env(safe-area-inset-right, 0px))
+      calc(0.75rem + env(safe-area-inset-bottom, 0px)) calc(0.75rem + env(safe-area-inset-left, 0px));
   }
 }

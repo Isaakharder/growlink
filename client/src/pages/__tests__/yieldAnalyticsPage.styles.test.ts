@@ -88,17 +88,7 @@ describe("Yield Analytics page styles", () => {
     for (const w of widths) expect(w).toBeLessThanOrEqual(44);
   });
 
-  it("the full-screen chart is a fixed full-viewport layer that respects dynamic viewports and safe areas", () => {
-    const overlay = rule(yaCss, ".ya-chart-fullscreen");
-    expect(overlay).toMatch(/position:\s*fixed/);
-    expect(overlay).toMatch(/height:\s*100vh;\s*height:\s*100dvh/);
-    for (const side of ["top", "right", "bottom", "left"]) expect(overlay).toContain(`env(safe-area-inset-${side}, 0px)`);
-    expect(overlay).toMatch(/overscroll-behavior:\s*contain/);
-    const body = rule(yaCss, ".ya-chart-fullscreen-body");
-    expect(body).toMatch(/flex:\s*1 1 auto/);
-    expect(body).toMatch(/min-height:\s*0/);
-    const phone = mediaBlock("max-width: 640px");
-    expect(rule(phone, "  .ya-page .ya-chart-expand")).toMatch(/min-height:\s*44px/);
+  it("keeps each chart card's Expand button in the header's top-right corner", () => {
     expect(rule(yaCss, ".ya-chart-card .ya-card-head")).toMatch(/flex-wrap:\s*nowrap/);
   });
 

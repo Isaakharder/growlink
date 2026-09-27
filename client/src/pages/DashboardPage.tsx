@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../hooks/usePermissions";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { ExpandChartButton, FullscreenChartOverlay, useFullscreenChart } from "../components/charts/FullscreenChart";
 import {
   CartesianGrid,
   Cell,
@@ -231,6 +232,87 @@ function resolveTrackingMode(groups: IrrigationGroup[]): GroupType | null {
   }
 
   return selectedType;
+}
+
+/**
+ * Weekly kg by Color, used by the card and its full-screen view so both show
+ * the same series. Lines only: no point markers, normal or active; the
+ * tooltip still follows the pointer and touch along the x axis.
+ */
+function WeeklyKgByColorChart({
+  points,
+  colors,
+  height
+}: {
+  points: YieldTrendPoint[];
+  colors: VarietyColor[];
+  height: number | "100%";
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart
+        data={points}
+        margin={{ top: 8, right: 12, bottom: 8, left: 0 }}
+      >
+        <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
+        <XAxis
+          dataKey="label"
+          tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+          tickLine={false}
+          axisLine={{ stroke: "var(--border)" }}
+        />
+        <YAxis
+          tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(value: number) => String(roundTo(value, 0))}
+          label={{
+            value: "total kg",
+            angle: -90,
+            position: "insideLeft",
+            offset: 12,
+            style: { fill: "var(--text-muted)", fontSize: 12 }
+          }}
+          width={64}
+        />
+        <Tooltip
+          contentStyle={{
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            fontSize: 13
+          }}
+          formatter={(value, name) => {
+            const color = String(name);
+            return [
+              `${roundTo(Number(value), 2)} kg`,
+              color.charAt(0).toUpperCase() + color.slice(1)
+            ];
+          }}
+          labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
+        />
+        <Legend
+          formatter={(value: string) =>
+            value.charAt(0).toUpperCase() + value.slice(1)
+          }
+          wrapperStyle={{ fontSize: 13, paddingTop: 8 }}
+        />
+        {colors.map((color) => (
+          <Line
+            key={color}
+            type="monotone"
+            dataKey={color}
+            stroke={COLOR_STROKES[color]}
+            strokeWidth={2.2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            dot={false}
+            activeDot={false}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
 }
 
 function roundTo(value: number, decimals: number) {
@@ -1082,6 +1164,8 @@ export function DashboardPage() {
   }, [pestTodos]);
 
   const hasYieldTrendData = yieldTrendPoints.length > 0;
+  /** Weekly kg by Color full-screen view; it renders the same memoised points as the card. */
+  const fullscreenChart = useFullscreenChart<"weeklyKgByColor">();
   const hasYieldPieData = visibleTrendPieSlices.some((slice) => slice.kg > 0);
   const showYieldTrendsSection =
     preferences.yieldTrends.showLineGraph || preferences.yieldTrends.showPieChart;
@@ -1532,8 +1616,15 @@ export function DashboardPage() {
             >
               {preferences.yieldTrends.showLineGraph ? (
                 <section className="dashboard-trend-panel dashboard-trend-panel-wide">
-                  <div className="dashboard-trend-panel-header">
+                  <div className="dashboard-trend-panel-header dashboard-trend-panel-header--with-action">
                     <h3>Weekly kg by Color</h3>
+                    {visibleTrendLineColors.length > 0 && hasYieldTrendData ? (
+                      <ExpandChartButton
+                        title="Weekly kg by Color"
+                        onClick={() => fullscreenChart.open("weeklyKgByColor")}
+                        buttonRef={fullscreenChart.buttonRef("weeklyKgByColor")}
+                      />
+                    ) : null}
                   </div>
 
                   {visibleTrendLineColors.length === 0 ? (
@@ -1542,70 +1633,16 @@ export function DashboardPage() {
                     <p>No yield data available yet.</p>
                   ) : (
                     <div className="dashboard-chart-wrapper">
-                      <ResponsiveContainer width="100%" height={280}>
-                        <LineChart
-                          data={yieldTrendPoints}
-                          margin={{ top: 8, right: 12, bottom: 8, left: 0 }}
-                        >
-                          <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
-                          <XAxis
-                            dataKey="label"
-                            tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                            tickLine={false}
-                            axisLine={{ stroke: "var(--border)" }}
-                          />
-                          <YAxis
-                            tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                            tickLine={false}
-                            axisLine={false}
-                            tickFormatter={(value: number) => String(roundTo(value, 0))}
-                            label={{
-                              value: "total kg",
-                              angle: -90,
-                              position: "insideLeft",
-                              offset: 12,
-                              style: { fill: "var(--text-muted)", fontSize: 12 }
-                            }}
-                            width={64}
-                          />
-                          <Tooltip
-                            contentStyle={{
-                              background: "var(--surface)",
-                              border: "1px solid var(--border)",
-                              borderRadius: 10,
-                              fontSize: 13
-                            }}
-                            formatter={(value, name) => {
-                              const color = String(name);
-                              return [
-                                `${roundTo(Number(value), 2)} kg`,
-                                color.charAt(0).toUpperCase() + color.slice(1)
-                              ];
-                            }}
-                            labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
-                          />
-                          <Legend
-                            formatter={(value: string) =>
-                              value.charAt(0).toUpperCase() + value.slice(1)
-                            }
-                            wrapperStyle={{ fontSize: 13, paddingTop: 8 }}
-                          />
-                          {visibleTrendLineColors.map((color) => (
-                            <Line
-                              key={color}
-                              type="monotone"
-                              dataKey={color}
-                              stroke={COLOR_STROKES[color]}
-                              strokeWidth={2.2}
-                              dot={{ r: 3 }}
-                              activeDot={{ r: 5 }}
-                            />
-                          ))}
-                        </LineChart>
-                      </ResponsiveContainer>
+                      <WeeklyKgByColorChart points={yieldTrendPoints} colors={visibleTrendLineColors} height={280} />
                     </div>
                   )}
                 </section>
+              ) : null}
+
+              {fullscreenChart.expanded === "weeklyKgByColor" ? (
+                <FullscreenChartOverlay title="Weekly kg by Color" onClose={fullscreenChart.close}>
+                  <WeeklyKgByColorChart points={yieldTrendPoints} colors={visibleTrendLineColors} height="100%" />
+                </FullscreenChartOverlay>
               ) : null}
 
               {preferences.yieldTrends.showPieChart ? (
