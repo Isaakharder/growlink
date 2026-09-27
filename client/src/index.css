@@ -3492,12 +3492,268 @@ body.native-shell #root {
 .iosws-page-title {
   margin: 0;
   font-size: 1.3em;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .iosws-page-note {
   margin: 0.5em 0 0;
   color: #51625d;
+}
+
+/* Workspace pages: header with Refresh, the data states, cards and lists.
+   Sized in em so they follow Dynamic Type; single column on narrow phones. */
+.iosws-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5em 0.75em;
+}
+
+/* Refresh drops below the title when they don't fit side by side, rather
+   than squeezing the title (large Dynamic Type on a 320pt phone). */
+.iosws-page-heading {
+  flex: 1 1 10em;
+  min-width: 0;
+}
+
+.iosws-refresh,
+.iosws-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 0.75em;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--brand);
+  font: inherit;
+  font-size: 0.9em;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.iosws-refresh:disabled {
+  color: #51625d;
+  opacity: 0.7;
+}
+
+.iosws-status {
+  margin: 0.4em 0 0;
+  min-height: 1.3em;
+  font-size: 0.85em;
+  color: #51625d;
+}
+
+.iosws-notice {
+  margin: 0.75em 0 0;
+  padding: 0.7em 0.85em;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.iosws-notice p {
+  margin: 0;
+}
+
+.iosws-notice .iosws-retry {
+  margin-top: 0.6em;
+}
+
+.iosws-notice-stale {
+  background: #fff8e6;
+  border-color: #f2d58a;
+  color: #6b4e00;
+}
+
+.iosws-notice-error {
+  background: #fdecea;
+  border-color: #f4b8b1;
+  color: #8a1c12;
+}
+
+.iosws-notice-forbidden {
+  background: #f1f4f3;
+  color: var(--text);
+}
+
+.iosws-body {
+  margin-top: 0.75em;
+}
+
+.iosws-body-stale {
+  opacity: 0.75;
+}
+
+.iosws-empty {
+  margin: 0;
+  padding: 1em;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: #51625d;
+}
+
+.iosws-section-title {
+  margin: 1em 0 0.5em;
+  font-size: 1em;
+}
+
+.iosws-body > .iosws-section-title:first-child {
+  margin-top: 0;
+}
+
+.iosws-card-list,
+.iosws-week-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6em;
+}
+
+.iosws-color-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11em), 1fr));
+}
+
+.iosws-card,
+.iosws-week {
+  min-width: 0;
+  padding: 0.8em 0.9em;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.iosws-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3em 0.5em;
+}
+
+.iosws-card-head .iosws-card-title {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+
+.iosws-card-title,
+.iosws-week-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 1em;
+  overflow-wrap: break-word;
+}
+
+.iosws-badge {
+  flex-shrink: 0;
+  padding: 0.15em 0.55em;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 0.75em;
+  font-weight: 600;
+}
+
+.iosws-metrics {
+  margin: 0.6em 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5em), 1fr));
+  gap: 0.5em 0.75em;
+}
+
+.iosws-metric {
+  min-width: 0;
+}
+
+.iosws-metric-wide {
+  grid-column: 1 / -1;
+}
+
+.iosws-metric dt,
+.iosws-card-foot span:first-child {
+  font-size: 0.75em;
+  color: #51625d;
+}
+
+.iosws-metric dd {
+  margin: 0.1em 0 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+}
+
+.iosws-card-foot {
+  margin: 0.6em 0 0;
+  padding-top: 0.5em;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25em 0.75em;
+  font-variant-numeric: tabular-nums;
+}
+
+.iosws-color-dot {
+  flex-shrink: 0;
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  background: var(--iosws-color, #51625d);
+}
+
+.iosws-color-red { --iosws-color: #dc2626; }
+.iosws-color-orange { --iosws-color: #d97706; }
+.iosws-color-yellow { --iosws-color: #ca8a04; }
+.iosws-color-green { --iosws-color: #0f7660; }
+
+.iosws-share {
+  margin-top: 0.6em;
+  height: 6px;
+  border-radius: 999px;
+  background: #eef2f0;
+  overflow: hidden;
+}
+
+.iosws-share span {
+  display: block;
+  height: 100%;
+  background: var(--iosws-color, var(--brand));
+}
+
+.iosws-week-values {
+  margin: 0.5em 0 0;
+  display: grid;
+  gap: 0.3em;
+}
+
+.iosws-week-value {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 0.75em;
+}
+
+.iosws-week-value dt {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+}
+
+.iosws-week-value dd {
+  margin: 0 0 0 auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .mobile-content {
