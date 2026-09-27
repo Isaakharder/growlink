@@ -3394,6 +3394,112 @@ body.native-shell #root {
   font-size: 1.2rem;
 }
 
+/* Native iOS only: the header's "Desktop" button to the compact workspace. */
+.mobile-header-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mobile-header-workspace {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+/* ── iOS compact workspace ──────────────────────────────────────────────
+   Only rendered in the native iOS app. `font: -apple-system-body` follows
+   the iOS text size setting (Dynamic Type), so everything inside is sized
+   in em to scale with it. */
+.iosws {
+  font: -apple-system-body;
+  font-family: inherit;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #f7f9f8;
+  color: var(--text);
+}
+
+.iosws-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5em;
+  padding: max(0.5em, env(safe-area-inset-top)) 0.35em max(0.5em, env(safe-area-inset-bottom));
+  padding-left: max(0.35em, env(safe-area-inset-left));
+  border-right: 1px solid var(--border);
+  background: #fff;
+  overflow-y: auto;
+}
+
+.iosws-rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.5em 0 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+
+.iosws-rail-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.25em;
+  border-radius: 12px;
+  color: #51625d;
+  text-decoration: none;
+}
+
+.iosws-rail-link[aria-current="page"] {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.iosws-rail-caption {
+  font-size: 0.65em;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.iosws-main {
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: max(1em, env(safe-area-inset-top)) max(1em, env(safe-area-inset-right)) max(1em, env(safe-area-inset-bottom)) 1em;
+}
+
+.iosws-page-title {
+  margin: 0;
+  font-size: 1.3em;
+  overflow-wrap: anywhere;
+}
+
+.iosws-page-note {
+  margin: 0.5em 0 0;
+  color: #51625d;
+}
+
 .mobile-content {
   padding: 1rem;
   padding-bottom: 5.5rem;

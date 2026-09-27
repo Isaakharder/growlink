@@ -6,6 +6,7 @@ import { SetPasswordPage } from "../pages/SetPasswordPage";
 import { AcceptInvitePage } from "../pages/AcceptInvitePage";
 import { NoAccessPage } from "../pages/NoAccessPage";
 import { mobileRouteChildren } from "./routes";
+import { workspaceRoute } from "../pages/iosWorkspace/workspaceRoutes";
 
 // The native iOS router's route config, kept as a plain array (rather than
 // only as the createBrowserRouter(...) call below) so tests can feed the
@@ -70,7 +71,12 @@ export const nativeRouteConfig = [
         path: "mobile",
         element: <MobileLayout />,
         children: mobileRouteChildren
-      }
+      },
+      // The compact management workspace behind Mobile's "Desktop" header
+      // button: lazy-loaded, native iOS only (it redirects to "/mobile"
+      // elsewhere), and built from its own compact pages, not the desktop
+      // ones above.
+      workspaceRoute
     ]
   },
   {
