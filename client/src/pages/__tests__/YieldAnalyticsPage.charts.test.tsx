@@ -72,7 +72,7 @@ describe("Yield Analytics trend charts — full-screen view", () => {
     await renderPage();
     for (const title of TITLES) {
       const button = within(card(title)).getByRole("button", { name: `Expand ${title} graph` });
-      expect(button).toHaveClass("csv-tb-btn", "ya-chart-expand");
+      expect(button).toHaveClass("csv-tb-btn", "chart-expand-button");
     }
     expect(screen.getAllByRole("button", { name: /^Expand .* graph$/ })).toHaveLength(2);
   });
@@ -81,7 +81,7 @@ describe("Yield Analytics trend charts — full-screen view", () => {
     const user = await renderPage();
     await user.click(within(card(title)).getByRole("button", { name: `Expand ${title} graph` }));
     const dialog = await screen.findByRole("dialog", { name: title });
-    expect(dialog).toHaveClass("ya-chart-fullscreen");
+    expect(dialog).toHaveClass("chart-fullscreen");
     // Portalled to <body>, outside the page layout, so it covers the viewport.
     expect(dialog.closest(".ya-page")).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Close full-screen graph" })).toBeInTheDocument();
@@ -91,7 +91,7 @@ describe("Yield Analytics trend charts — full-screen view", () => {
     expect(dialog.querySelectorAll(".recharts-line")).toHaveLength(2);
     // The chart fills the overlay's body at full size.
     const container = within(dialog).getByTestId("responsive-container");
-    expect(container.parentElement).toHaveClass("ya-chart-fullscreen-body");
+    expect(container.parentElement).toHaveClass("chart-fullscreen-body");
     expect(container).toHaveAttribute("data-width", "100%");
     expect(container).toHaveAttribute("data-height", "100%");
   });

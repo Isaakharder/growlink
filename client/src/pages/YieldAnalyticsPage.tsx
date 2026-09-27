@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
 import {
   Legend,
   LineChart,
@@ -14,6 +13,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { ExpandChartButton, FullscreenChartOverlay, useFullscreenChart } from "../components/charts/FullscreenChart";
 import { computeFarmKgPerM2, type AreaFootprints } from "../lib/yieldAnalytics/farmKgPerM2";
 
 type YieldSize = {
@@ -223,22 +223,6 @@ function TrendChart({
         ))}
       </LineChart>
     </ResponsiveContainer>
-  );
-}
-
-function ExpandIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
-      <path d="M12 3.5h4.5V8M8 16.5H3.5V12M16.5 3.5 11.5 8.5M3.5 16.5l5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg className="csv-tb-btn-icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
-      <path d="M5 5l10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
   );
 }
 
@@ -519,9 +503,8 @@ export function YieldAnalyticsPage() {
   const [toWeek, setToWeek] = useState<number>(getCurrentWeek(currentYear));
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportPreviewType, setExportPreviewType] = useState<ExportPreviewType | null>(null);
-  /** The graph open in the full-screen overlay; it renders the same memoised data as its card. */
-  const [expandedChart, setExpandedChart] = useState<ChartId | null>(null);
-  const expandButtonRefs = useRef<Partial<Record<ChartId, HTMLButtonElement | null>>>({});
+  /** The graph open full-screen; it renders the same memoised data as its card. */
+  const fullscreen = useFullscreenChart<ChartId>();
   /** Bumped by the error panel's Retry to re-run the same load. */
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -925,13 +908,6 @@ export function YieldAnalyticsPage() {
   function openExportPreview(type: ExportPreviewType) {
     setIsExportMenuOpen(false);
     setExportPreviewType(type);
-  }
-
-  function closeExpandedChart() {
-    const returnTo = expandedChart ? expandButtonRefs.current[expandedChart] : null;
-    setExpandedChart(null);
-    // Explicit: Safari doesn't focus a button on click, so "previously focused" can't be relied on.
-    requestAnimationFrame(() => returnTo?.focus());
   }
 
   function closeExportPreview() {
@@ -1563,18 +1539,7 @@ export function YieldAnalyticsPage() {
                   <p className="ya-card-description">{chart.description}</p>
                 </div>
                 {!loading && !error && hasData ? (
-                  <button
-                    type="button"
-                    ref={(el) => {
-                      expandButtonRefs.current[chart.id] = el;
-                    }}
-                    className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm ya-chart-expand"
-                    aria-label={`Expand ${chart.title} graph`}
-                    title="Expand"
-                    onClick={() => setExpandedChart(chart.id)}
-                  >
-                    <ExpandIcon />
-                  </button>
+                  <ExpandChartButton title={chart.title} onClick={() => fullscreen.open(chart.id)} buttonRef={fullscreen.buttonRef(chart.id)} />
                 ) : null}
               </div>
 
@@ -1599,33 +1564,13 @@ export function YieldAnalyticsPage() {
         })}
       </div>
 
-      {expandedChart ? (() => {
-        const chart = CHARTS.find((c) => c.id === expandedChart)!;
+      {fullscreen.expanded ? (() => {
+        const chart = CHARTS.find((c) => c.id === fullscreen.expanded)!;
         const data = chart.id === "kgm2" ? { points: chartPoints, ids: varietyIds } : { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds };
-        return createPortal(
-          <ModalOverlay
-            onClose={closeExpandedChart}
-            contentClassName="ya-chart-fullscreen"
-            titleId="ya-chart-fullscreen-title"
-            trapFocus
-          >
-            <div className="ya-chart-fullscreen-head">
-              <div>
-                <h2 id="ya-chart-fullscreen-title" className="ya-card-title">
-                  {chart.title}
-                </h2>
-                <p className="ya-card-description">{chart.description}</p>
-              </div>
-              <button type="button" className="csv-tb-btn ya-chart-close" aria-label="Close full-screen graph" onClick={closeExpandedChart}>
-                <CloseIcon />
-                Close
-              </button>
-            </div>
-            <div className="ya-chart-fullscreen-body">
-              <TrendChart chart={chart} points={data.points} varietyIds={data.ids} varietyNameById={varietyNameById} />
-            </div>
-          </ModalOverlay>,
-          document.body
+        return (
+          <FullscreenChartOverlay title={chart.title} description={chart.description} onClose={fullscreen.close}>
+            <TrendChart chart={chart} points={data.points} varietyIds={data.ids} varietyNameById={varietyNameById} />
+          </FullscreenChartOverlay>
         );
       })() : null}
 
