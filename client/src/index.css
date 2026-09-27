@@ -9869,6 +9869,88 @@ textarea.cleaning-checklist-response-input {
   min-width: 0;
 }
 
+/* Chart card header: the Expand button stays in the top-right corner. */
+.ya-chart-card .ya-card-head {
+  flex-wrap: nowrap;
+}
+
+.ya-chart-card .ya-card-head > div {
+  min-width: 0;
+}
+
+/* Recharts makes the chart focusable for keyboard tooltips: show a branded
+   ring for keyboard focus only, not after a mouse click or tap. */
+.ya-chart .recharts-wrapper svg:focus:not(:focus-visible),
+.ya-chart-fullscreen .recharts-wrapper svg:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.ya-chart .recharts-wrapper svg:focus-visible,
+.ya-chart-fullscreen .recharts-wrapper svg:focus-visible {
+  outline: 3px solid rgba(15, 118, 96, 0.4);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Expand button in each chart card's header. */
+.ya-page .ya-chart-expand {
+  width: 40px;
+  min-height: 40px;
+  padding: 0;
+  flex: none;
+}
+
+/* Full-screen chart: a fixed full-viewport layer (portalled to <body>, so
+   it declares the button variables itself). 100dvh follows mobile Safari's
+   collapsing toolbars; safe-area padding clears the iPhone notch and home
+   indicator, in the browser and the installed PWA. */
+.ya-chart-fullscreen {
+  --csv-tb-brand-dark: #0a5e4c;
+  --csv-tb-focus: rgba(15, 118, 96, 0.4);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-sizing: border-box;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1.25rem + env(safe-area-inset-right, 0px))
+    calc(1rem + env(safe-area-inset-bottom, 0px)) calc(1.25rem + env(safe-area-inset-left, 0px));
+  background: var(--surface);
+  overscroll-behavior: contain;
+}
+
+.ya-chart-fullscreen:focus {
+  outline: none;
+}
+
+.ya-chart-fullscreen-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+}
+
+.ya-chart-fullscreen-head > div {
+  min-width: 0;
+}
+
+.ya-chart-close {
+  flex: none;
+}
+
+/* The chart takes every remaining pixel; ResponsiveContainer fills it. */
+.ya-chart-fullscreen-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
 .ya-chart-placeholder {
   display: flex;
   flex-direction: column;
@@ -9986,11 +10068,6 @@ textarea.cleaning-checklist-response-input {
     height: 300px;
   }
 
-  /* Weekly dots crowd a phone-width chart; the lines carry the trend. */
-  .ya-page .ya-chart .recharts-line-dots {
-    display: none;
-  }
-
   .ya-page .ya-table-scroll::after {
     content: "Swipe sideways to see every column.";
     position: sticky;
@@ -10011,6 +10088,16 @@ textarea.cleaning-checklist-response-input {
 
   .ya-alert .csv-tb-btn {
     width: 100%;
+  }
+
+  .ya-page .ya-chart-expand {
+    width: 44px;
+    min-height: 44px;
+  }
+
+  .ya-chart-fullscreen {
+    padding: calc(0.75rem + env(safe-area-inset-top, 0px)) calc(0.75rem + env(safe-area-inset-right, 0px))
+      calc(0.75rem + env(safe-area-inset-bottom, 0px)) calc(0.75rem + env(safe-area-inset-left, 0px));
   }
 }
 

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Legend,
   LineChart,
@@ -124,6 +125,120 @@ function TableSkeleton({ rows = 5 }: { rows?: number }) {
         <span key={i} className="ya-skeleton ya-skeleton--row" />
       ))}
     </div>
+  );
+}
+
+type ChartId = "kgm2" | "afw";
+
+type ChartDefinition = {
+  id: ChartId;
+  title: string;
+  description: string;
+  emptyTitle: string;
+  emptyBody: string;
+  axisLabel: string;
+  tickDecimals: number;
+  valueDecimals: number;
+  unit: string;
+};
+
+const CHARTS: ChartDefinition[] = [
+  {
+    id: "kgm2",
+    title: "kg / m² Over Time",
+    description: "Weekly kg/m² per variety across all recorded weeks. Not affected by the filters.",
+    emptyTitle: "No kg/m² data yet",
+    emptyBody: "Add entries in Yield Data Entry to see this chart.",
+    axisLabel: "kg / m²",
+    tickDecimals: 2,
+    valueDecimals: 3,
+    unit: " kg/m²"
+  },
+  {
+    id: "afw",
+    title: "Average Fruit Weight Over Time",
+    description: "Average fruit weight (g) by week across all varieties. Not affected by the filters.",
+    emptyTitle: "No average fruit weight data yet",
+    emptyBody: "It appears once entries include an average fruit weight.",
+    axisLabel: "Avg fruit weight (g)",
+    tickDecimals: 1,
+    valueDecimals: 1,
+    unit: " g"
+  }
+];
+
+/**
+ * One trend chart, used by both the card and its full-screen view so they
+ * always show the same series. Lines only: no point markers (normal or
+ * active); the tooltip still follows the pointer/touch along the x axis.
+ */
+function TrendChart({
+  chart,
+  points,
+  varietyIds,
+  varietyNameById
+}: {
+  chart: ChartDefinition;
+  points: ChartPoint[];
+  varietyIds: string[];
+  varietyNameById: Record<string, string>;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={points} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+        <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
+        <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} tickLine={false} axisLine={{ stroke: "var(--border)" }} minTickGap={16} />
+        <YAxis
+          tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(v: number) => String(roundTo(v, chart.tickDecimals))}
+          label={{ value: chart.axisLabel, angle: -90, position: "insideLeft", offset: 12, style: { fill: "var(--text-muted)", fontSize: 12 } }}
+          width={64}
+        />
+        <Tooltip
+          contentStyle={CHART_TOOLTIP_STYLE}
+          formatter={(value, name) => [
+            typeof value === "number" ? `${roundTo(value, chart.valueDecimals)}${chart.unit}` : String(value),
+            typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
+          ]}
+          labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+        />
+        <Legend formatter={(value: string) => varietyNameById[value] ?? value} iconType="circle" iconSize={8} wrapperStyle={CHART_LEGEND_STYLE} />
+        {varietyIds.map((varietyId, index) => (
+          <Line
+            key={varietyId}
+            type="monotone"
+            dataKey={varietyId}
+            name={varietyId}
+            stroke={LINE_COLORS[index % LINE_COLORS.length]}
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            dot={false}
+            activeDot={false}
+            connectNulls={false}
+            isAnimationActive={!prefersReducedMotion}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+      <path d="M12 3.5h4.5V8M8 16.5H3.5V12M16.5 3.5 11.5 8.5M3.5 16.5l5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg className="csv-tb-btn-icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+      <path d="M5 5l10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -404,6 +519,9 @@ export function YieldAnalyticsPage() {
   const [toWeek, setToWeek] = useState<number>(getCurrentWeek(currentYear));
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportPreviewType, setExportPreviewType] = useState<ExportPreviewType | null>(null);
+  /** The graph open in the full-screen overlay; it renders the same memoised data as its card. */
+  const [expandedChart, setExpandedChart] = useState<ChartId | null>(null);
+  const expandButtonRefs = useRef<Partial<Record<ChartId, HTMLButtonElement | null>>>({});
   /** Bumped by the error panel's Retry to re-run the same load. */
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -807,6 +925,13 @@ export function YieldAnalyticsPage() {
   function openExportPreview(type: ExportPreviewType) {
     setIsExportMenuOpen(false);
     setExportPreviewType(type);
+  }
+
+  function closeExpandedChart() {
+    const returnTo = expandedChart ? expandButtonRefs.current[expandedChart] : null;
+    setExpandedChart(null);
+    // Explicit: Safari doesn't focus a button on click, so "previously focused" can't be relied on.
+    requestAnimationFrame(() => returnTo?.focus());
   }
 
   function closeExportPreview() {
@@ -1425,168 +1550,84 @@ export function YieldAnalyticsPage() {
       </section>
 
       <div className="ya-chart-grid">
-        <section className="ya-card" aria-labelledby="ya-kgm2-heading">
-          <div className="ya-card-head">
-            <div>
-              <h2 id="ya-kgm2-heading" className="ya-card-title">
-                kg / m² Over Time
-              </h2>
-              <p className="ya-card-description">Weekly kg/m² per variety across all recorded weeks. Not affected by the filters.</p>
-            </div>
-          </div>
-
-          {loading ? <div className="ya-chart-placeholder ya-skeleton" aria-hidden="true" /> : null}
-
-          {error ? <p className="ya-unavailable">Chart unavailable until the data loads.</p> : null}
-
-          {!loading && !error && chartPoints.length === 0 ? (
-            <div className="ya-chart-placeholder ya-empty" role="status">
-              <p className="ya-empty-title">No kg/m² data yet</p>
-              <p className="ya-empty-body">Add entries in Yield Data Entry to see this chart.</p>
-            </div>
-          ) : null}
-
-          {!loading && !error && chartPoints.length > 0 ? (
-            <div className="yield-analytics-chart-wrapper ya-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartPoints} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
-                  <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={{ stroke: "var(--border)" }}
-                    minTickGap={16}
-                  />
-                  <YAxis
-                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v: number) => String(roundTo(v, 2))}
-                    label={{
-                      value: "kg / m²",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 12,
-                      style: { fill: "var(--text-muted)", fontSize: 12 }
+        {CHARTS.map((chart) => {
+          const data = chart.id === "kgm2" ? { points: chartPoints, ids: varietyIds } : { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds };
+          const hasData = data.points.length > 0;
+          return (
+            <section key={chart.id} className="ya-card ya-chart-card" aria-labelledby={`ya-${chart.id}-heading`}>
+              <div className="ya-card-head">
+                <div>
+                  <h2 id={`ya-${chart.id}-heading`} className="ya-card-title">
+                    {chart.title}
+                  </h2>
+                  <p className="ya-card-description">{chart.description}</p>
+                </div>
+                {!loading && !error && hasData ? (
+                  <button
+                    type="button"
+                    ref={(el) => {
+                      expandButtonRefs.current[chart.id] = el;
                     }}
-                    width={64}
-                  />
-                  <Tooltip
-                    contentStyle={CHART_TOOLTIP_STYLE}
-                    formatter={(value, name) => [
-                      typeof value === "number" ? `${roundTo(value, 3)} kg/m²` : String(value),
-                      typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
-                    ]}
-                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                  />
-                  <Legend
-                    formatter={(value: string) => varietyNameById[value] ?? value}
-                    iconType="circle"
-                    iconSize={8}
-                    wrapperStyle={CHART_LEGEND_STYLE}
-                  />
-                  {varietyIds.map((varietyId, index) => (
-                    <Line
-                      key={varietyId}
-                      type="monotone"
-                      dataKey={varietyId}
-                      name={varietyId}
-                      stroke={LINE_COLORS[index % LINE_COLORS.length]}
-                      strokeWidth={2}
-                      dot={{ r: 3 }}
-                      activeDot={{ r: 5 }}
-                      connectNulls={false}
-                      isAnimationActive={!prefersReducedMotion}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          ) : null}
-        </section>
+                    className="csv-tb-btn csv-tb-btn--quiet csv-tb-btn--sm ya-chart-expand"
+                    aria-label={`Expand ${chart.title} graph`}
+                    title="Expand"
+                    onClick={() => setExpandedChart(chart.id)}
+                  >
+                    <ExpandIcon />
+                  </button>
+                ) : null}
+              </div>
 
-        <section className="ya-card" aria-labelledby="ya-afw-heading">
-          <div className="ya-card-head">
-            <div>
-              <h2 id="ya-afw-heading" className="ya-card-title">
-                Average Fruit Weight Over Time
-              </h2>
-              <p className="ya-card-description">Average fruit weight (g) by week across all varieties. Not affected by the filters.</p>
-            </div>
-          </div>
+              {loading ? <div className="ya-chart-placeholder ya-skeleton" aria-hidden="true" /> : null}
 
-          {loading ? <div className="ya-chart-placeholder ya-skeleton" aria-hidden="true" /> : null}
+              {error ? <p className="ya-unavailable">Chart unavailable until the data loads.</p> : null}
 
-          {error ? <p className="ya-unavailable">Chart unavailable until the data loads.</p> : null}
+              {!loading && !error && !hasData ? (
+                <div className="ya-chart-placeholder ya-empty" role="status">
+                  <p className="ya-empty-title">{chart.emptyTitle}</p>
+                  <p className="ya-empty-body">{chart.emptyBody}</p>
+                </div>
+              ) : null}
 
-          {!loading && !error && fruitWeightChartPoints.length === 0 ? (
-            <div className="ya-chart-placeholder ya-empty" role="status">
-              <p className="ya-empty-title">No average fruit weight data yet</p>
-              <p className="ya-empty-body">It appears once entries include an average fruit weight.</p>
-            </div>
-          ) : null}
-
-          {!loading && !error && fruitWeightChartPoints.length > 0 ? (
-            <div className="yield-analytics-chart-wrapper ya-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={fruitWeightChartPoints} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
-                  <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={{ stroke: "var(--border)" }}
-                    minTickGap={16}
-                  />
-                  <YAxis
-                    tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v: number) => String(roundTo(v, 1))}
-                    label={{
-                      value: "Avg fruit weight (g)",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 12,
-                      style: { fill: "var(--text-muted)", fontSize: 12 }
-                    }}
-                    width={64}
-                  />
-                  <Tooltip
-                    contentStyle={CHART_TOOLTIP_STYLE}
-                    formatter={(value, name) => [
-                      typeof value === "number" ? `${roundTo(value, 1)} g` : String(value),
-                      typeof name === "string" ? (varietyNameById[name] ?? name) : String(name)
-                    ]}
-                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                  />
-                  <Legend
-                    formatter={(value: string) => varietyNameById[value] ?? value}
-                    iconType="circle"
-                    iconSize={8}
-                    wrapperStyle={CHART_LEGEND_STYLE}
-                  />
-                  {fruitWeightVarietyIds.map((varietyId, index) => (
-                    <Line
-                      key={varietyId}
-                      type="monotone"
-                      dataKey={varietyId}
-                      name={varietyId}
-                      stroke={LINE_COLORS[index % LINE_COLORS.length]}
-                      strokeWidth={2}
-                      dot={{ r: 3 }}
-                      activeDot={{ r: 5 }}
-                      connectNulls={false}
-                      isAnimationActive={!prefersReducedMotion}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          ) : null}
-        </section>
+              {!loading && !error && hasData ? (
+                <div className="yield-analytics-chart-wrapper ya-chart">
+                  <TrendChart chart={chart} points={data.points} varietyIds={data.ids} varietyNameById={varietyNameById} />
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
       </div>
+
+      {expandedChart ? (() => {
+        const chart = CHARTS.find((c) => c.id === expandedChart)!;
+        const data = chart.id === "kgm2" ? { points: chartPoints, ids: varietyIds } : { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds };
+        return createPortal(
+          <ModalOverlay
+            onClose={closeExpandedChart}
+            contentClassName="ya-chart-fullscreen"
+            titleId="ya-chart-fullscreen-title"
+            trapFocus
+          >
+            <div className="ya-chart-fullscreen-head">
+              <div>
+                <h2 id="ya-chart-fullscreen-title" className="ya-card-title">
+                  {chart.title}
+                </h2>
+                <p className="ya-card-description">{chart.description}</p>
+              </div>
+              <button type="button" className="csv-tb-btn ya-chart-close" aria-label="Close full-screen graph" onClick={closeExpandedChart}>
+                <CloseIcon />
+                Close
+              </button>
+            </div>
+            <div className="ya-chart-fullscreen-body">
+              <TrendChart chart={chart} points={data.points} varietyIds={data.ids} varietyNameById={varietyNameById} />
+            </div>
+          </ModalOverlay>,
+          document.body
+        );
+      })() : null}
 
       {exportPreviewType ? (
         <ModalOverlay
