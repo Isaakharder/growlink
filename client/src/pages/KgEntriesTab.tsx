@@ -1,8 +1,23 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { roundTo } from "../lib/roundTo";
+import { createWeekOptions, getCurrentWeek, localIsoDate } from "../lib/yieldEntries/weekOptions";
+import {
+  buildManualKgEntryPayload,
+  findExistingWeekEntry,
+  kgPerM2For,
+  manualKgEntrySaveTarget,
+  sortYieldSizes,
+  sumSizeKg,
+  totalCasesFor,
+  weekEntriesUrl,
+  zeroSizeKgFields,
+  type ManualKgEntryForm,
+  type ManualKgEntryPayload,
+  type YieldSizeOption
+} from "../lib/yieldEntries/manualKgEntry";
 
-type YieldSizeStatus = "active" | "inactive";
 type VarietyStatus = "active" | "inactive";
 type VarietyColor = "red" | "orange" | "yellow" | "green";
 
@@ -13,13 +28,6 @@ type VarietyOption = {
   case_kg: number;
   status: VarietyStatus;
   color: VarietyColor;
-};
-
-type YieldSizeOption = {
-  id: string;
-  name: string;
-  sort_order: number;
-  status: YieldSizeStatus;
 };
 
 type DailyBreakdown = {
@@ -50,20 +58,6 @@ type RecentEntriesResponse = {
   entries: YieldEntry[];
   nextCursor: string | null;
   hasMore: boolean;
-};
-
-type YieldEntryFormState = {
-  variety_id: string;
-  year: string;
-  week: string;
-  packed_date: string;
-  average_fruit_weight_g: string;
-  size_kg: Record<string, string>;
-};
-
-type WeekOption = {
-  value: number;
-  label: string;
 };
 
 const OPTIONS_URL = "/api/yield-entry-options";
@@ -277,66 +271,6 @@ function hasUnresolvedSizes(files: PdfPreviewFile[]): boolean {
 
 const KNOWN_SIZE_ORDER = ["Small", "Medium", "Large", "SXL", "XL", "XXL"];
 
-function getWeekStartSunday(year: number, week: number) {
-  const jan1 = new Date(year, 0, 1);
-  const start = new Date(jan1);
-  start.setDate(jan1.getDate() - jan1.getDay() + (week - 1) * 7);
-  return start;
-}
-
-function formatMonthDay(date: Date) {
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "2-digit"
-  });
-}
-
-function createWeekOptions(year: number): WeekOption[] {
-  const options: WeekOption[] = [];
-
-  for (let week = 1; week <= 53; week += 1) {
-    const start = getWeekStartSunday(year, week);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-
-    options.push({
-      value: week,
-      label: `Week ${week} - ${formatMonthDay(start)} to ${formatMonthDay(end)}`
-    });
-  }
-
-  return options;
-}
-
-function getCurrentWeek(year: number) {
-  const now = new Date();
-  const jan1 = new Date(year, 0, 1);
-  const weekOneStart = new Date(jan1);
-  weekOneStart.setDate(jan1.getDate() - jan1.getDay());
-
-  const diffMs = now.getTime() - weekOneStart.getTime();
-  const week = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
-
-  return Math.min(Math.max(week, 1), 53);
-}
-
-function roundTo(value: number, decimals: number) {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
-
-function localIsoDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function numberOrZero(value: string) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function sortSizeNames(a: string, b: string): number {
   const ia = KNOWN_SIZE_ORDER.indexOf(a);
   const ib = KNOWN_SIZE_ORDER.indexOf(b);
@@ -388,14 +322,7 @@ export function KgEntriesTab() {
     varietyName: string;
     week: number;
     year: number;
-    payload: {
-      variety_id: string;
-      year: number;
-      week: number;
-      packed_date: string | null;
-      size_kg: Record<string, number>;
-      average_fruit_weight_g: number | null;
-    };
+    payload: ManualKgEntryPayload;
   } | null>(null);
   const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
   const [pdfPreviewUploading, setPdfPreviewUploading] = useState(false);
@@ -436,7 +363,7 @@ export function KgEntriesTab() {
   const [sizeSetupExiting, setSizeSetupExiting] = useState(false);
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<YieldEntryFormState>({
+  const [form, setForm] = useState<ManualKgEntryForm>({
     variety_id: "",
     year: String(currentYear),
     week: String(getCurrentWeek(currentYear)),
@@ -452,32 +379,11 @@ export function KgEntriesTab() {
 
   const weekOptions = useMemo(() => createWeekOptions(Number(form.year)), [form.year]);
 
-  const totalKg = useMemo(
-    () => Object.values(form.size_kg).reduce((sum, value) => sum + numberOrZero(value), 0),
-    [form.size_kg]
-  );
+  const totalKg = useMemo(() => sumSizeKg(form.size_kg), [form.size_kg]);
 
-  const kgPerM2 = useMemo(() => {
-    if (!selectedVariety || selectedVariety.area_m2 <= 0) {
-      return null;
-    }
-    return totalKg / selectedVariety.area_m2;
-  }, [selectedVariety, totalKg]);
+  const kgPerM2 = useMemo(() => kgPerM2For(totalKg, selectedVariety), [selectedVariety, totalKg]);
 
-  const totalCases = useMemo(() => {
-    if (!selectedVariety || selectedVariety.case_kg <= 0) {
-      return 0;
-    }
-    return totalKg / selectedVariety.case_kg;
-  }, [selectedVariety, totalKg]);
-
-  function resetSizeKgFields(sizes: YieldSizeOption[]) {
-    const next: Record<string, string> = {};
-    for (const size of sizes) {
-      next[size.id] = "0";
-    }
-    return next;
-  }
+  const totalCases = useMemo(() => totalCasesFor(totalKg, selectedVariety), [selectedVariety, totalKg]);
 
   async function fetchOptionsAndEntries() {
     setLoading(true);
@@ -495,9 +401,7 @@ export function KgEntriesTab() {
         yieldSizes: YieldSizeOption[];
       };
 
-      const sortedSizes = [...optionsData.yieldSizes].sort(
-        (a, b) => a.sort_order - b.sort_order
-      );
+      const sortedSizes = sortYieldSizes(optionsData.yieldSizes);
 
       setVarieties(optionsData.varieties);
       setYieldSizes(sortedSizes);
@@ -514,10 +418,10 @@ export function KgEntriesTab() {
             : (optionsData.varieties[0]?.id ?? ""),
           size_kg: Object.keys(current.size_kg).length
             ? {
-                ...resetSizeKgFields(sortedSizes),
+                ...zeroSizeKgFields(sortedSizes),
                 ...current.size_kg
               }
-            : resetSizeKgFields(sortedSizes)
+            : zeroSizeKgFields(sortedSizes)
         };
       });
     } catch (fetchError) {
@@ -536,7 +440,7 @@ export function KgEntriesTab() {
   // organization history.
   async function fetchWeekEntries(year: number, week: number) {
     try {
-      const res = await apiFetch(`${ENTRIES_URL}?year=${year}&week=${week}`);
+      const res = await apiFetch(weekEntriesUrl(year, week));
       if (!res.ok) return;
       const data = (await res.json()) as YieldEntry[];
       setWeekEntries(data);
@@ -551,10 +455,10 @@ export function KgEntriesTab() {
     week: number
   ): Promise<YieldEntry | null> {
     try {
-      const res = await apiFetch(`${ENTRIES_URL}?year=${year}&week=${week}`);
+      const res = await apiFetch(weekEntriesUrl(year, week));
       if (!res.ok) return null;
       const data = (await res.json()) as YieldEntry[];
-      return data.find((e) => e.variety_id === varietyId) ?? null;
+      return findExistingWeekEntry(data, varietyId);
     } catch {
       return null;
     }
@@ -933,19 +837,11 @@ export function KgEntriesTab() {
     void fetchWeekEntries(year, week);
   }, [form.year, form.week]);
 
-  async function executeSubmit(submitPayload: {
-    variety_id: string;
-    year: number;
-    week: number;
-    packed_date: string | null;
-    size_kg: Record<string, number>;
-    average_fruit_weight_g: number | null;
-  }) {
+  async function executeSubmit(submitPayload: ManualKgEntryPayload) {
     setSaving(true);
 
     try {
-      const method = editingId ? "PUT" : "POST";
-      const url = editingId ? `${ENTRIES_URL}/${editingId}` : ENTRIES_URL;
+      const { method, url } = manualKgEntrySaveTarget(editingId);
 
       const response = await apiFetch(url, {
         method,
@@ -980,7 +876,7 @@ export function KgEntriesTab() {
       setForm((current) => ({
         ...current,
         average_fruit_weight_g: "",
-        size_kg: resetSizeKgFields(yieldSizes)
+        size_kg: zeroSizeKgFields(yieldSizes)
       }));
       setIsEntryModalOpen(false);
 
@@ -1004,50 +900,12 @@ export function KgEntriesTab() {
     setError(null);
     setSuccessMessage(null);
 
-    if (!form.variety_id) {
-      setError("Variety is required.");
+    const built = buildManualKgEntryPayload(form, yieldSizes);
+    if (!built.ok) {
+      setError(built.error);
       return;
     }
-
-    const payloadSizeKg: Record<string, number> = {};
-    for (const size of yieldSizes) {
-      const kg = numberOrZero(form.size_kg[size.id] ?? "0");
-      if (kg < 0) {
-        setError("Kg values must be 0 or greater.");
-        return;
-      }
-      payloadSizeKg[size.id] = kg;
-    }
-
-    const submitPayload = {
-      variety_id: form.variety_id,
-      year: Number(form.year),
-      week: Number(form.week),
-      packed_date: form.packed_date || null,
-      size_kg: payloadSizeKg,
-      average_fruit_weight_g:
-        form.average_fruit_weight_g.trim() === ""
-          ? null
-          : Number(form.average_fruit_weight_g)
-    };
-
-    if (!Number.isInteger(submitPayload.year)) {
-      setError("Year is required.");
-      return;
-    }
-
-    if (!Number.isInteger(submitPayload.week)) {
-      setError("Week is required.");
-      return;
-    }
-
-    if (
-      submitPayload.average_fruit_weight_g !== null &&
-      (!Number.isFinite(submitPayload.average_fruit_weight_g) || submitPayload.average_fruit_weight_g < 0)
-    ) {
-      setError("Average fruit weight must be 0 or greater.");
-      return;
-    }
+    const submitPayload = built.payload;
 
     // For new entries, check if a weekly entry already exists and ask for confirmation.
     // Fetched fresh (rather than relying on the reactive weekEntries state) so a
@@ -1072,7 +930,7 @@ export function KgEntriesTab() {
   }
 
   function beginEdit(entry: YieldEntry) {
-    const nextSizeKg = resetSizeKgFields(yieldSizes);
+    const nextSizeKg = zeroSizeKgFields(yieldSizes);
     for (const [sizeId, kg] of Object.entries(entry.size_kg ?? {})) {
       nextSizeKg[sizeId] = String(kg);
     }
@@ -1100,7 +958,7 @@ export function KgEntriesTab() {
       week: String(getCurrentWeek(currentYear)),
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
-      size_kg: resetSizeKgFields(yieldSizes)
+      size_kg: zeroSizeKgFields(yieldSizes)
     });
     setIsEntryModalOpen(true);
   }
@@ -1115,7 +973,7 @@ export function KgEntriesTab() {
       week: String(getCurrentWeek(currentYear)),
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
-      size_kg: resetSizeKgFields(yieldSizes)
+      size_kg: zeroSizeKgFields(yieldSizes)
     });
   }
 

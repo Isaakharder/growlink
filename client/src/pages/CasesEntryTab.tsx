@@ -1,6 +1,16 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { roundTo } from "../lib/roundTo";
+import {
+  CASE_COLORS,
+  buildCaseEntryYearOptions,
+  buildWeeklyCaseCards,
+  formatCaseTotal,
+  getVisibleColorRows,
+  requestDocklinkCaseSync,
+  weeklyCaseTotal
+} from "../lib/yieldEntries/caseTotals";
 
 type VarietyColor = "red" | "orange" | "yellow" | "green";
 
@@ -33,17 +43,6 @@ type WeekOption = {
   label: string;
 };
 
-type WeeklyDocklinkCaseCard = {
-  year: number;
-  week: number;
-  totals: Record<VarietyColor, number>;
-};
-
-type WeeklyDocklinkColorRow = {
-  color: VarietyColor;
-  total: number;
-};
-
 type VarietySetting = {
   color: VarietyColor | string | null;
   area_m2: number;
@@ -59,7 +58,6 @@ type ColorVarietyStats = {
 const OPTIONS_URL = "/api/case-entry-options";
 const ENTRIES_URL = "/api/color-case-entries";
 const VARIETIES_URL = "/api/varieties";
-const CASE_COLORS: VarietyColor[] = ["red", "orange", "yellow", "green"];
 
 function getWeekStartSunday(year: number, week: number) {
   const jan1 = new Date(year, 0, 1);
@@ -102,25 +100,6 @@ function getCurrentWeek(year: number) {
   const week = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
 
   return Math.min(Math.max(week, 1), 53);
-}
-
-function roundTo(value: number, decimals: number) {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
-
-function formatCaseTotal(value: number) {
-  const rounded = roundTo(value, 3);
-  if (Number.isInteger(rounded)) {
-    return String(rounded);
-  }
-  return rounded.toFixed(3).replace(/\.?0+$/, "");
-}
-
-function getVisibleColorRows(totals: Record<VarietyColor, number>): WeeklyDocklinkColorRow[] {
-  return CASE_COLORS.map((color) => ({ color, total: Number(totals[color]) }))
-    .filter((row) => Number.isFinite(row.total) && row.total > 0)
-    .map((row) => ({ ...row, total: roundTo(row.total, 3) }));
 }
 
 function normalizeColor(value: unknown): VarietyColor | null {
@@ -180,17 +159,10 @@ export function CasesEntryTab() {
     [form.total_cases, form.case_weight_kg]
   );
 
-  const caseEntryYearOptions = useMemo(() => {
-    const years = new Set<number>([currentYear]);
-
-    for (const entry of entries) {
-      if (Number.isInteger(entry.year)) {
-        years.add(entry.year);
-      }
-    }
-
-    return Array.from(years).sort((a, b) => b - a);
-  }, [currentYear, entries]);
+  const caseEntryYearOptions = useMemo(
+    () => buildCaseEntryYearOptions(entries, currentYear),
+    [currentYear, entries]
+  );
 
   useEffect(() => {
     const selected = Number(selectedSummaryYear);
@@ -199,53 +171,10 @@ export function CasesEntryTab() {
     }
   }, [currentYear, caseEntryYearOptions, selectedSummaryYear]);
 
-  const weeklyCaseCards = useMemo(() => {
-    const selectedYear = Number(selectedSummaryYear);
-
-    if (!Number.isInteger(selectedYear)) {
-      return [] as WeeklyDocklinkCaseCard[];
-    }
-
-    const byWeek = new Map<number, Record<VarietyColor, number>>();
-
-    for (const entry of entries) {
-      if (entry.year !== selectedYear) {
-        continue;
-      }
-
-      if (!Number.isInteger(entry.week) || entry.week < 1 || entry.week > 53) {
-        continue;
-      }
-
-      if (!CASE_COLORS.includes(entry.color)) {
-        continue;
-      }
-
-      const totalCases = Number(entry.total_cases);
-      if (!Number.isFinite(totalCases)) {
-        continue;
-      }
-
-      const totals = byWeek.get(entry.week) ?? {
-        red: 0,
-        orange: 0,
-        yellow: 0,
-        green: 0
-      };
-
-      totals[entry.color] += totalCases;
-      byWeek.set(entry.week, totals);
-    }
-
-    return Array.from(byWeek.entries())
-      .map(([week, totals]) => ({
-        year: selectedYear,
-        week,
-        totals
-      }))
-      .filter((card) => CASE_COLORS.some((color) => card.totals[color] > 0))
-      .sort((a, b) => b.week - a.week);
-  }, [entries, selectedSummaryYear]);
+  const weeklyCaseCards = useMemo(
+    () => buildWeeklyCaseCards(entries, Number(selectedSummaryYear)),
+    [entries, selectedSummaryYear]
+  );
 
   const recentWeekKeys = useMemo(() => {
     const seen = new Set<string>();
@@ -621,24 +550,7 @@ export function CasesEntryTab() {
     setError(null);
 
     try {
-      const response = await apiFetch("/api/integrations/docklink/sync-color-cases", {
-        method: "POST"
-      });
-
-      if (!response.ok) {
-        let message = "Sync failed";
-
-        try {
-          const responseBody = (await response.json()) as { message?: string };
-          if (responseBody.message) {
-            message = responseBody.message;
-          }
-        } catch {
-          // Ignore
-        }
-
-        throw new Error(message);
-      }
+      await requestDocklinkCaseSync();
 
       const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
@@ -827,7 +739,7 @@ export function CasesEntryTab() {
           <div className="weekly-docklink-cards">
             {weeklyCaseCards.map((card) => {
               const visibleColorRows = getVisibleColorRows(card.totals);
-              const weekTotal = visibleColorRows.reduce((sum, row) => sum + row.total, 0);
+              const weekTotal = weeklyCaseTotal(visibleColorRows);
 
               return (
                 <article key={`${card.year}-${card.week}`} className="weekly-docklink-card">
