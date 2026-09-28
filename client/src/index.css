@@ -3397,9 +3397,16 @@ body.native-shell #root {
 /* Native iOS only: the header's "Desktop" button to the compact workspace. */
 .mobile-header-with-action {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
+}
+
+/* With large text on a narrow phone the Desktop button moves below the
+   title instead of pushing the page wider than the screen. */
+.mobile-header-with-action h1 {
+  min-width: 0;
 }
 
 .mobile-header-workspace {
@@ -3805,6 +3812,111 @@ body.native-shell #root {
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--text-muted);
+}
+
+/* ── Mobile Home task cards ──────────────────────────────────────────────
+   Scoped to .mobile-home so no other mobile card changes. Sized in rem so
+   the cards grow with larger text; the label wraps rather than overflowing. */
+.mobile-home-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.65rem;
+  container-type: inline-size;
+}
+
+.mobile-home-task {
+  --task-tint: #eef2f0;
+  --task-ink: #4b5b63;
+  display: flex;
+  align-items: center;
+  /* Spacing and the icon grow with text up to a cap, leaving the width to
+     the label on a narrow phone at large text sizes. */
+  gap: min(0.9rem, 16px);
+  min-height: 64px;
+  padding: 0.8rem min(0.9rem, 16px) 0.8rem min(0.8rem, 14px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  color: var(--text);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.mobile-home-task:active {
+  background: #f3f6f5;
+  border-color: #cdd9d3;
+}
+
+.mobile-home-task:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.mobile-home-task-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: min(2.75rem, 52px);
+  height: min(2.75rem, 52px);
+  border-radius: 12px;
+  background: var(--task-tint);
+  color: var(--task-ink);
+}
+
+.mobile-home-task-icon svg {
+  width: min(1.5rem, 28px);
+  height: min(1.5rem, 28px);
+}
+
+.mobile-home-task-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.3;
+  /* A long word hyphenates rather than widening the page. */
+  overflow-wrap: anywhere;
+  -webkit-hyphens: auto;
+  hyphens: auto;
+}
+
+.mobile-home-task-chevron {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  color: #9aa8a3;
+}
+
+.mobile-home-task--yield { --task-tint: #e3f2ec; --task-ink: #0f7660; }
+.mobile-home-task--quality { --task-tint: #fbf1dc; --task-ink: #8a5d00; }
+.mobile-home-task--irrigation { --task-tint: #e4f0f8; --task-ink: #1f6fa8; }
+.mobile-home-task--pest { --task-tint: #f8e9e3; --task-ink: #a4462b; }
+.mobile-home-task--food-safety { --task-tint: #e0f2f5; --task-ink: #0e6f86; }
+.mobile-home-task--calibration { --task-tint: #ecebf7; --task-ink: #5b53a6; }
+.mobile-home-task--maintenance { --task-tint: #eceff1; --task-ink: #4b5b63; }
+
+/* Very large text on a narrow phone (the list is under ~12 characters wide):
+   drop the chevron and shrink the icon so labels keep whole words. The card
+   is still the whole tap target. */
+@container (max-width: 12em) {
+  .mobile-home-task-chevron {
+    display: none;
+  }
+
+  .mobile-home-task-icon {
+    width: min(2.25rem, 40px);
+    height: min(2.25rem, 40px);
+    border-radius: 10px;
+  }
+
+  .mobile-home-task-icon svg {
+    width: min(1.25rem, 24px);
+    height: min(1.25rem, 24px);
+  }
 }
 
 .mobile-bottom-nav {

@@ -153,7 +153,7 @@ describe("Native router (mounted at \"/mobile\", matching the web router)", () =
 
     renderNativeRouterAt(["/"]);
 
-    expect(await screen.findByText("Mobile Logging")).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "Tasks" })).toBeInTheDocument();
     expect(screen.getByText("Daily Yield")).toBeInTheDocument();
   });
 
@@ -163,7 +163,7 @@ describe("Native router (mounted at \"/mobile\", matching the web router)", () =
     renderNativeRouterAt(["/"]);
 
     await waitFor(() => expect(screen.getByLabelText(/email/i)).toBeInTheDocument());
-    expect(screen.queryByText("Mobile Logging")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Tasks" })).not.toBeInTheDocument();
   });
 
   it("still enforces mobile:access — a user with no mobile permission at all sees the Unauthorized fallback, not the feature list", async () => {
@@ -174,7 +174,7 @@ describe("Native router (mounted at \"/mobile\", matching the web router)", () =
     renderNativeRouterAt(["/mobile"]);
 
     expect(await screen.findByText(/don't have access/i)).toBeInTheDocument();
-    expect(screen.queryByText("Mobile Logging")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Tasks" })).not.toBeInTheDocument();
   });
 });
 
@@ -190,7 +190,7 @@ describe("Native router — unknown/unmatched routes", () => {
 
     renderNativeRouterAt(["/yield/analytics"]);
 
-    expect(await screen.findByText("Mobile Logging")).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "Tasks" })).toBeInTheDocument();
   });
 
   it("sends an unmatched path nested under /mobile (e.g. a typo'd feature) to Mobile Home too", async () => {
@@ -199,7 +199,7 @@ describe("Native router — unknown/unmatched routes", () => {
 
     renderNativeRouterAt(["/mobile/does-not-exist"]);
 
-    expect(await screen.findByText("Mobile Logging")).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "Tasks" })).toBeInTheDocument();
   });
 });
 
@@ -224,12 +224,12 @@ describe("Native router — every Mobile Home destination navigates to its real 
       mockAuthorizedOwner();
 
       renderNativeRouterAt(["/mobile"]);
-      await screen.findByText("Mobile Logging");
+      await screen.findByRole("navigation", { name: "Tasks" });
 
       await userEvent.click(screen.getByRole("link", { name: link }));
 
       expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
-      expect(screen.queryByText("Mobile Logging")).not.toBeInTheDocument();
+      expect(screen.queryByRole("navigation", { name: "Tasks" })).not.toBeInTheDocument();
     });
   }
 
@@ -240,12 +240,12 @@ describe("Native router — every Mobile Home destination navigates to its real 
     listSetupResource.mockResolvedValue([]);
 
     renderNativeRouterAt(["/mobile"]);
-    await screen.findByText("Mobile Logging");
+    await screen.findByRole("navigation", { name: "Tasks" });
 
     await userEvent.click(screen.getByRole("link", { name: "Maintenance" }));
 
     expect(await screen.findByText("No equipment found yet.")).toBeInTheDocument();
-    expect(screen.queryByText("Mobile Logging")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Tasks" })).not.toBeInTheDocument();
   });
 });
 
@@ -274,7 +274,7 @@ describe("Native router — Maintenance equipment details (the reported bug)", (
 
     await waitFor(() => expect(getEquipment).toHaveBeenCalledWith("eq-1"));
     expect(await screen.findByText("SPRAY-001")).toBeInTheDocument();
-    expect(screen.queryByText("Mobile Logging")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Tasks" })).not.toBeInTheDocument();
     expect(screen.queryByText("No equipment found yet.")).not.toBeInTheDocument();
   });
 });
@@ -309,7 +309,7 @@ describe("Native router — browser/back navigation", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Test: go back" }));
 
-    expect(await screen.findByText("Mobile Logging")).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "Tasks" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Daily Yield" })).not.toBeInTheDocument();
   });
 });

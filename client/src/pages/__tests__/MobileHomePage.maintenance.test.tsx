@@ -76,7 +76,7 @@ describe("MobileHomePage — Maintenance card visibility (real permission chain)
   it("3. a user without any Maintenance access sees no card", async () => {
     mockMembership({ role: "member", permissions: { "yield:view": true } });
     renderAppShell("/mobile");
-    await waitFor(() => expect(screen.queryByRole("heading", { name: /mobile logging/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("navigation", { name: "Tasks" })).toBeInTheDocument());
     expect(screen.queryByRole("link", { name: "Maintenance" })).not.toBeInTheDocument();
   });
 
@@ -114,7 +114,7 @@ describe("MobileHomePage — Maintenance card visibility (real permission chain)
     it.each(scenarios)("$name: card presence matches route accessibility", async ({ fixture, expectAccess }) => {
       mockMembership(fixture);
       const { unmount } = renderAppShell("/mobile");
-      await waitFor(() => expect(screen.queryByRole("heading", { name: /mobile logging/i })).toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole("navigation", { name: "Tasks" })).toBeInTheDocument());
       const cardVisible = screen.queryByRole("link", { name: "Maintenance" }) !== null;
       unmount();
 
