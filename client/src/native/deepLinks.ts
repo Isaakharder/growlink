@@ -29,8 +29,9 @@ export function registerDeepLinkHandling(router: DataRouter): void {
 // (growlink://maintenance/equipment/123 — a mobile-relative path is all a
 // custom scheme needs) or an https universal link that mirrors the web
 // site's own URL structure
-// (https://growlinkclient-production.up.railway.app/mobile/maintenance —
-// already "/mobile"-prefixed, same as any other mobile link on web).
+// (https://growlink.lltech.io/mobile/maintenance, or the same path on the
+// original Railway address — already "/mobile"-prefixed, same as any other
+// mobile link on web). Only the path is used, so either web address works.
 // The native router mounts the mobile tree at "/mobile", identically to
 // web (see router/nativeRoutes.tsx), so an already-prefixed path is
 // passed through unchanged rather than having "/mobile" stripped off.

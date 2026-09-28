@@ -42,35 +42,17 @@ import { yieldProjectionsRouter } from "./routes/yieldProjections";
 import { yieldSizesRouter } from "./routes/yieldSizes";
 import { flowMasterSizeRulesRouter } from "./routes/flowMasterSizeRules";
 import { csvMappingTemplatesRouter } from "./routes/csvMappingTemplates";
+import { isAllowedOrigin, parseAllowedOrigins } from "./config/corsOrigins";
 import { maintenanceRouter } from "./routes/maintenance";
 
-const DEV_ORIGINS = [
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:5174",
-  // The Capacitor iOS app (client/capacitor.config.ts) loads its bundle
-  // from this origin — not a browser page, but WKWebView still sends a
-  // real Origin header, so it's still subject to this same allowlist.
-  // Listed here (dev-only) so the iOS app can be pointed at a local dev
-  // server; the production server's origin support for it is added via
-  // the CORS_ORIGINS env var below, deliberately NOT hardcoded here, so
-  // enabling it in production is its own explicit, reviewable change
-  // rather than something that ships silently with this file.
-  "capacitor://localhost",
-];
-
-function buildAllowedOrigins(): Set<string> {
-  const origins = new Set(DEV_ORIGINS);
-  const env = process.env.CORS_ORIGINS ?? "";
-  for (const raw of env.split(",")) {
-    const origin = raw.trim();
-    if (origin) origins.add(origin);
-  }
-  return origins;
+// Allowed browser origins: DEV_ORIGINS (local dev and the native iOS app's
+// capacitor://localhost) plus the CORS_ORIGINS env var — each web address
+// the app is served from, e.g. both the Railway URL and the custom domain.
+// See config/corsOrigins.ts for how entries are normalised.
+const { origins: allowedOrigins, invalid: invalidCorsOrigins } = parseAllowedOrigins(process.env.CORS_ORIGINS);
+if (invalidCorsOrigins.length > 0) {
+  console.warn("CORS_ORIGINS: ignoring entries that are not origins (scheme://host[:port]):", invalidCorsOrigins);
 }
-
-const allowedOrigins = buildAllowedOrigins();
 
 // See ./middleware/rateLimiters.ts for the limiter configurations and why
 // preview/save use separate buckets. Factories (not shared singletons) so
@@ -96,7 +78,7 @@ app.use(
         return;
       }
 
-      if (allowedOrigins.has(requestOrigin)) {
+      if (isAllowedOrigin(allowedOrigins, requestOrigin)) {
         callback(null, true);
       } else {
         // Return false rather than an Error so Express error handling is not

@@ -334,6 +334,14 @@ describe("native/deepLinks.ts — extractInAppPath normalizes to the /mobile-mou
     );
   });
 
+  it("treats links on the custom domain and the old Railway address the same", () => {
+    for (const host of ["https://growlink.lltech.io", "https://growlinkclient-production.up.railway.app"]) {
+      expect(extractInAppPath(`${host}/mobile/maintenance`)).toBe("/mobile/maintenance");
+      expect(extractInAppPath(`${host}/`)).toBe("/mobile");
+      expect(extractInAppPath(`${host}/mobile/calibration?deviceId=abc`)).toBe("/mobile/calibration?deviceId=abc");
+    }
+  });
+
   it("returns null for an unparseable URL rather than throwing", () => {
     expect(extractInAppPath("not a url")).toBeNull();
   });
