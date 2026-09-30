@@ -5,6 +5,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
 import { AcceptInvitePage } from "../pages/AcceptInvitePage";
 import { NoAccessPage } from "../pages/NoAccessPage";
+import { PrivacyPolicyPage } from "../pages/PrivacyPolicyPage";
 import { mobileRouteChildren } from "./routes";
 import { workspaceRoute } from "../pages/iosWorkspace/workspaceRoutes";
 
@@ -43,6 +44,10 @@ import { workspaceRoute } from "../pages/iosWorkspace/workspaceRoutes";
 // redirects to "/mobile" rather than being a second, competing mount
 // point for the mobile tree.
 export const nativeRouteConfig = [
+  {
+    path: "/privacy",
+    element: <PrivacyPolicyPage />
+  },
   {
     path: "/login",
     element: <LoginPage />

@@ -121,6 +121,7 @@ assert_no_redirect() {
 
 assert_contains "desktop root serves desktop shell"        "$BASE/"                              '<title>GrowLink</title>'
 assert_contains "desktop root links desktop manifest"       "$BASE/"                              'manifest.webmanifest'
+assert_contains "/privacy direct load serves SPA shell"      "$BASE/privacy"                      '<title>GrowLink</title>'
 assert_contains "/mobile serves mobile shell"                "$BASE/mobile"                        '<title>GrowLink Mobile</title>'
 assert_contains "/mobile links mobile manifest"              "$BASE/mobile"                        'manifest-mobile.webmanifest'
 assert_contains "/mobile has viewport-fit=cover"             "$BASE/mobile"                        'viewport-fit=cover'

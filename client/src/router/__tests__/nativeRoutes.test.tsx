@@ -64,6 +64,7 @@ import { RequireAuth } from "../../components/auth/RequireAuth";
 import { MobileLayout } from "../../components/layout/MobileLayout";
 import { NoAccessPage } from "../../pages/NoAccessPage";
 import { LoginPage } from "../../pages/LoginPage";
+import { PrivacyPolicyPage } from "../../pages/PrivacyPolicyPage";
 import { mobileRouteChildren } from "../routes";
 import { extractInAppPath } from "../../native/deepLinks";
 
@@ -109,6 +110,7 @@ const EQUIPMENT_DETAIL = {
 function NativeRouterTree() {
   return (
     <Routes>
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<RequireAuth />}>
         <Route index element={<Navigate to="/mobile" replace />} />
@@ -164,6 +166,17 @@ describe("Native router (mounted at \"/mobile\", matching the web router)", () =
 
     await waitFor(() => expect(screen.getByLabelText(/email/i)).toBeInTheDocument());
     expect(screen.queryByRole("navigation", { name: "Tasks" })).not.toBeInTheDocument();
+  });
+
+  it("shows the privacy policy without an authenticated session", async () => {
+    getSession.mockResolvedValue({ data: { session: null }, error: null });
+
+    renderNativeRouterAt(["/privacy"]);
+
+    expect(await screen.findByRole("heading", { name: "Privacy Policy" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Information We Collect" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "support@lltech.io" })).toHaveAttribute("href", "mailto:support@lltech.io");
+    expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument();
   });
 
   it("still enforces mobile:access — a user with no mobile permission at all sees the Unauthorized fallback, not the feature list", async () => {

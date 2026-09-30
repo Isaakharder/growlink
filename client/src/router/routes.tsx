@@ -46,6 +46,7 @@ import { MobileFoodSafetyLocationPage } from "../pages/MobileFoodSafetyLocationP
 import { MobilePestCalibrationPage } from "../pages/MobilePestCalibrationPage";
 import { MobilePestCalibrationDeviceCompletePage } from "../pages/MobilePestCalibrationDeviceCompletePage";
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "../pages/maintenance/access";
+import { PrivacyPolicyPage } from "../pages/PrivacyPolicyPage";
 
 // Maintenance (Equipment/Inventory/Reports/Setup tabs and their sheets) is
 // the single largest module in the app and is only ever reached by users
@@ -163,6 +164,10 @@ export const mobileRouteChildren = [
 // Kept as a plain array (rather than only as the createBrowserRouter(...) call below) so tests can
 // feed the identical config into createMemoryRouter — same pattern as nativeRoutes.tsx.
 export const appRouteConfig: RouteObject[] = [
+  {
+    path: "/privacy",
+    element: <PrivacyPolicyPage />
+  },
   {
     path: "/login",
     element: <LoginPage />
