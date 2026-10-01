@@ -1033,72 +1033,6 @@ export function DashboardPage() {
         </div>
       ) : null}
 
-      {yieldProjection?.hasProjection ? (
-        <div className="coming-soon-card dashboard-daily-yield-projection-card">
-          <h2>Daily Yield Projection</h2>
-          <p className="dashboard-section-subtitle">
-            Estimated cases from mobile bin sampling — Week {yieldProjection.sessionWeek}, {yieldProjection.sessionYear}.
-            Not recorded/actual yield.
-          </p>
-
-          <div className="dashboard-daily-yield-projection-grid">
-            {yieldProjection.byVariety.map((entry) => {
-              const isProjectionReady = entry.sampledRowCount >= RECOMMENDED_MINIMUM_SAMPLE_COUNT;
-              const rowsNeeded = RECOMMENDED_MINIMUM_SAMPLE_COUNT - entry.sampledRowCount;
-
-              return (
-                <div
-                  key={entry.varietyId}
-                  className="dyp-card"
-                  style={{ borderLeftColor: COLOR_STROKES[entry.color as VarietyColor] ?? "#5c6b66" }}
-                >
-                  <div className="dyp-card-header">
-                    <span className={`color-badge ${entry.color}`}>{entry.varietyName}</span>
-                    <span className="dyp-card-sample-count">
-                      {entry.sampledRowCount} sampled {entry.sampledRowCount === 1 ? "row" : "rows"}
-                    </span>
-                  </div>
-
-                  <div className="dyp-card-metrics">
-                    <div className="dyp-card-metric">
-                      <span className="dyp-card-metric-value">
-                        {Math.round(entry.projectedKg).toLocaleString()} kg
-                      </span>
-                      <span className="dyp-card-metric-label">Projected kg</span>
-                    </div>
-                    <div className="dyp-card-metric">
-                      <span className="dyp-card-metric-value">
-                        {Math.round(entry.projectedCases).toLocaleString()} cases
-                      </span>
-                      <span className="dyp-card-metric-label">Projected cases</span>
-                    </div>
-                  </div>
-
-                  {isProjectionReady ? (
-                    <p className="dyp-card-status dyp-card-status-ready">✓ Projection Ready</p>
-                  ) : (
-                    <p className="dyp-card-status dyp-card-status-preliminary">
-                      ⚠ Preliminary Projection
-                      <br />
-                      Sample {rowsNeeded} more {rowsNeeded === 1 ? "row" : "rows"} for a more reliable estimate.
-                    </p>
-                  )}
-
-                  <p className="dyp-card-meta">
-                    Last sample: {entry.lastUpdatedAt ? formatSampleTimestamp(entry.lastUpdatedAt) : "—"}
-                    {entry.lastEnteredByName ? ` · ${entry.lastEnteredByName}` : ""}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-
-          <Link className="dashboard-daily-yield-view-samples-link" to="/yield/daily-yield-samples">
-            View Samples →
-          </Link>
-        </div>
-      ) : null}
-
       {visibleColorYieldSummary.length > 0 ? (
         <div className="coming-soon-card dashboard-yield-card">
           <h2>Yield by Color</h2>
@@ -1294,6 +1228,72 @@ export function DashboardPage() {
               </span>
             )}
           </p>
+        </div>
+      ) : null}
+
+      {yieldProjection?.hasProjection ? (
+        <div className="coming-soon-card dashboard-daily-yield-projection-card">
+          <h2>Daily Yield Projection</h2>
+          <p className="dashboard-section-subtitle">
+            Estimated cases from mobile bin sampling — Week {yieldProjection.sessionWeek}, {yieldProjection.sessionYear}.
+            Not recorded/actual yield.
+          </p>
+
+          <div className="dashboard-daily-yield-projection-grid">
+            {yieldProjection.byVariety.map((entry) => {
+              const isProjectionReady = entry.sampledRowCount >= RECOMMENDED_MINIMUM_SAMPLE_COUNT;
+              const rowsNeeded = RECOMMENDED_MINIMUM_SAMPLE_COUNT - entry.sampledRowCount;
+
+              return (
+                <div
+                  key={entry.varietyId}
+                  className="dyp-card"
+                  style={{ borderLeftColor: COLOR_STROKES[entry.color as VarietyColor] ?? "#5c6b66" }}
+                >
+                  <div className="dyp-card-header">
+                    <span className={`color-badge ${entry.color}`}>{entry.varietyName}</span>
+                    <span className="dyp-card-sample-count">
+                      {entry.sampledRowCount} sampled {entry.sampledRowCount === 1 ? "row" : "rows"}
+                    </span>
+                  </div>
+
+                  <div className="dyp-card-metrics">
+                    <div className="dyp-card-metric">
+                      <span className="dyp-card-metric-value">
+                        {Math.round(entry.projectedKg).toLocaleString()} kg
+                      </span>
+                      <span className="dyp-card-metric-label">Projected kg</span>
+                    </div>
+                    <div className="dyp-card-metric">
+                      <span className="dyp-card-metric-value">
+                        {Math.round(entry.projectedCases).toLocaleString()} cases
+                      </span>
+                      <span className="dyp-card-metric-label">Projected cases</span>
+                    </div>
+                  </div>
+
+                  {isProjectionReady ? (
+                    <p className="dyp-card-status dyp-card-status-ready">✓ Projection Ready</p>
+                  ) : (
+                    <p className="dyp-card-status dyp-card-status-preliminary">
+                      ⚠ Preliminary Projection
+                      <br />
+                      Sample {rowsNeeded} more {rowsNeeded === 1 ? "row" : "rows"} for a more reliable estimate.
+                    </p>
+                  )}
+
+                  <p className="dyp-card-meta">
+                    Last sample: {entry.lastUpdatedAt ? formatSampleTimestamp(entry.lastUpdatedAt) : "—"}
+                    {entry.lastEnteredByName ? ` · ${entry.lastEnteredByName}` : ""}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+
+          <Link className="dashboard-daily-yield-view-samples-link" to="/yield/daily-yield-samples">
+            View Samples →
+          </Link>
         </div>
       ) : null}
 
