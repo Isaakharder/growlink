@@ -480,6 +480,24 @@ body.native-shell #root {
   gap: 1rem;
 }
 
+.dashboard-page-shell {
+  padding-top: 0.65rem;
+}
+
+.dashboard-page-shell .dashboard-header {
+  align-items: center;
+  margin: 0 0 0.35rem;
+}
+
+.dashboard-page-shell .dashboard-header h1 {
+  font-size: 1.42rem;
+  line-height: 1.25;
+}
+
+.dashboard-page-shell > .dashboard-header + .coming-soon-card {
+  margin-top: 0.55rem;
+}
+
 .dashboard-edit-button {
   border: 1px solid var(--border);
   border-radius: 10px;
