@@ -139,12 +139,16 @@ describe("desktop manual kg entry — pinned behaviour", () => {
       }
     ]);
     // Then refreshes the week and the recent entries.
-    await waitFor(() => expect(calls.map((c) => c.path)).toEqual([
+    // The Weekly kg by Variety card's read-only reload is the only addition;
+    // the kg entry's own requests are unchanged and in the same order.
+    const weekly = (c: Call) => c.path.startsWith("/api/yield-entries/weekly-by-variety");
+    await waitFor(() => expect(calls.filter((c) => !weekly(c)).map((c) => c.path)).toEqual([
       "/api/yield-entries?year=2026&week=33",
       "/api/yield-entries",
       "/api/yield-entries?year=2026&week=33",
       "/api/yield-entries/recent?limit=7"
     ]));
+    await waitFor(() => expect(calls.filter(weekly).map((c) => [c.method, c.path])).toEqual([["GET", "/api/yield-entries/weekly-by-variety"]]));
   });
 
   it("sends null for a blank average fruit weight and a cleared packed date", async () => {
