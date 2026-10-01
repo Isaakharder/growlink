@@ -1837,7 +1837,7 @@ export function KgEntriesTab() {
 
           <div className="color-groups-container">
             {colorGroups.map((group) => (
-              <div key={group.color} className="color-group">
+                  <div key={group.color} className="color-group" data-color={group.color}>
                 <div className="color-group-header">
                   <span className="color-group-name">
                     {group.color.charAt(0).toUpperCase() + group.color.slice(1)}
@@ -1929,7 +1929,7 @@ export function KgEntriesTab() {
           {loadedRecentEntries.length > 0 && (
             <>
             <div className="varieties-table-wrapper yield-entry-table-wrapper">
-              <table className="varieties-table yield-entry-table">
+              <table className="varieties-table yield-entry-table yield-entry-table-kg">
                 <thead>
                   <tr>
                     <th>Variety</th>

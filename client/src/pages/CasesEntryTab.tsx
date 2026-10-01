@@ -617,7 +617,7 @@ export function CasesEntryTab() {
         {entries.length > 0 && displayedRecentEntries.length > 0 && (
           <>
           <div className="varieties-table-wrapper yield-entry-table-wrapper">
-            <table className="varieties-table yield-entry-table">
+            <table className="varieties-table yield-entry-table yield-entry-table-cases">
               <thead>
                 <tr>
                   <th>Color</th>

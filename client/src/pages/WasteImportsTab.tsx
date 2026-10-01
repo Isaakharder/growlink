@@ -169,7 +169,7 @@ export function WasteImportsTab() {
 
         {!loading && entries.length > 0 && (
           <div className="varieties-table-wrapper yield-entry-table-wrapper">
-            <table className="varieties-table yield-entry-table">
+            <table className="varieties-table yield-entry-table yield-entry-table-waste">
               <thead>
                 <tr>
                   <th>Variety</th>
