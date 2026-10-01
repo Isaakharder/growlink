@@ -946,6 +946,254 @@ body.native-shell #root {
   margin-top: 1.25rem;
 }
 
+.yield-data-entry-page {
+  padding-top: 0.55rem;
+}
+
+.yield-data-entry-page > .yield-data-entry-heading {
+  margin: 0;
+  padding: 0;
+}
+
+.yield-data-entry-page .yield-data-entry-heading h1 {
+  margin: 0;
+  color: #20352f;
+  font-size: 1.42rem;
+  line-height: 1.25;
+}
+
+.yield-data-entry-page .yield-data-entry-tabs {
+  max-width: 100%;
+  margin-top: 0.4rem;
+  gap: 0.18rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid #cddbd4;
+  scrollbar-width: thin;
+  scrollbar-color: #aac8ba transparent;
+}
+
+.yield-data-entry-page .yield-data-entry-tabs .tab-button {
+  min-height: 38px;
+  flex: 0 0 auto;
+  margin: 0 0 -1px;
+  padding: 0.48rem 0.78rem;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 7px 7px 0 0;
+  color: #596a63;
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+
+.yield-data-entry-page .yield-data-entry-tabs .tab-button:hover:not(.active) {
+  background: #f0f6f3;
+  color: #215b49;
+}
+
+.yield-data-entry-page .yield-data-entry-tabs .tab-button.active {
+  border-color: #d5e6dd;
+  border-bottom-color: #187253;
+  background: #e8f4ed;
+  color: #145f45;
+  font-weight: 700;
+}
+
+.yield-data-entry-page .yield-data-entry-tabs .tab-button:focus-visible {
+  outline: 2px solid #438b6b;
+  outline-offset: -2px;
+}
+
+.yield-data-entry-page .yield-data-entry-panel {
+  min-width: 0;
+  margin-top: 0.65rem;
+}
+
+.yield-data-entry-page .yield-data-entry-tab:not(.yield-data-entry-tab-csvTemplates) .coming-soon-card {
+  margin-top: 0.8rem;
+  border-radius: 9px;
+  box-shadow: 0 3px 12px rgba(31, 42, 46, 0.045);
+  padding: 0.9rem;
+}
+
+.yield-data-entry-page .color-share-card {
+  margin-top: 0.1rem;
+  padding: 0.85rem;
+}
+
+.yield-data-entry-page .color-share-card h2,
+.yield-data-entry-page .cases-entry-header h2,
+.yield-data-entry-page .recent-entries-header h2 {
+  color: #263a32;
+  font-size: 1rem;
+}
+
+.yield-data-entry-page .color-share-description {
+  margin-top: 0.28rem;
+  font-size: 0.82rem;
+}
+
+.yield-data-entry-page .color-groups-container {
+  margin-top: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 0.6rem;
+}
+
+.yield-data-entry-page .color-group {
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+  border-radius: 8px;
+  border-left-width: 3px;
+  background: #fbfdfc;
+}
+
+.yield-data-entry-page .color-group[data-color="green"] { border-left-color: #32815d; }
+.yield-data-entry-page .color-group[data-color="yellow"] { border-left-color: #d2aa37; }
+.yield-data-entry-page .color-group[data-color="orange"] { border-left-color: #d47b35; }
+.yield-data-entry-page .color-group[data-color="red"] { border-left-color: #bf5b55; }
+
+.yield-data-entry-page .color-group-header {
+  margin-bottom: 0.38rem;
+  padding-bottom: 0.35rem;
+}
+
+.yield-data-entry-page .color-group-name,
+.yield-data-entry-page .color-group-total {
+  font-size: 0.86rem;
+}
+
+.yield-data-entry-page .color-group[data-color="yellow"] .color-group-name { color: #92700c; }
+.yield-data-entry-page .color-group[data-color="orange"] .color-group-name { color: #a5571e; }
+.yield-data-entry-page .color-group[data-color="red"] .color-group-name { color: #99443f; }
+.yield-data-entry-page .color-group[data-color="green"] .color-group-name { color: #276b4c; }
+
+.yield-data-entry-page .color-group-varieties {
+  gap: 0.15rem;
+}
+
+.yield-data-entry-page .variety-share-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.45rem;
+  padding: 0.28rem 0;
+  border-bottom: 1px solid #edf1ef;
+  font-size: 0.8rem;
+}
+
+.yield-data-entry-page .variety-share-row:last-child {
+  border-bottom: 0;
+}
+
+.yield-data-entry-page .variety-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.yield-data-entry-page .variety-kg,
+.yield-data-entry-page .variety-percent,
+.yield-data-entry-page .yield-entry-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.yield-data-entry-page .yield-entry-table-wrapper {
+  max-width: 100%;
+  margin-top: 0.55rem;
+  overflow-x: auto;
+  border: 1px solid #dce6e1;
+  border-radius: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.yield-data-entry-page .yield-entry-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 760px;
+}
+
+.yield-data-entry-page .yield-entry-table th,
+.yield-data-entry-page .yield-entry-table td {
+  padding: 0.42rem 0.55rem;
+  border-bottom: 1px solid #e7eeea;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.yield-data-entry-page .yield-entry-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f6f3;
+  color: #42564d;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.yield-data-entry-page .yield-entry-table tbody tr:nth-child(even) td {
+  background: #f8fbf9;
+}
+
+.yield-data-entry-page .yield-entry-table tbody tr:hover td {
+  background: #eef6f1;
+}
+
+.yield-data-entry-page .yield-entry-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.yield-data-entry-page .yield-entry-table th:nth-child(2),
+.yield-data-entry-page .yield-entry-table td:nth-child(2),
+.yield-data-entry-page .yield-entry-table th:nth-child(3),
+.yield-data-entry-page .yield-entry-table td:nth-child(3) {
+  text-align: center;
+}
+
+.yield-data-entry-page .yield-entry-table-kg th:nth-child(n+5):not(:last-child),
+.yield-data-entry-page .yield-entry-table-kg td:nth-child(n+5):not(:last-child),
+.yield-data-entry-page .yield-entry-table-cases th:nth-child(n+4):nth-child(-n+7),
+.yield-data-entry-page .yield-entry-table-cases td:nth-child(n+4):nth-child(-n+7),
+.yield-data-entry-page .yield-entry-table-waste th:nth-child(4),
+.yield-data-entry-page .yield-entry-table-waste td:nth-child(4) {
+  text-align: right;
+}
+
+.yield-data-entry-page .yield-entry-table .row-actions {
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.yield-data-entry-page .yield-data-entry-tab:not(.yield-data-entry-tab-csvTemplates) .cases-entry-open-button,
+.yield-data-entry-page .yield-data-entry-tab:not(.yield-data-entry-tab-csvTemplates) .sync-button,
+.yield-data-entry-page .yield-data-entry-tab:not(.yield-data-entry-tab-csvTemplates) .recent-entries-toggle {
+  border-radius: 7px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .yield-data-entry-page {
+    padding-top: 0.35rem;
+  }
+
+  .yield-data-entry-page .yield-data-entry-heading h1 {
+    font-size: 1.28rem;
+  }
+
+  .yield-data-entry-page .yield-data-entry-tabs {
+    margin-top: 0.3rem;
+  }
+
+  .yield-data-entry-page .yield-data-entry-tabs .tab-button {
+    min-height: 40px;
+    padding-inline: 0.68rem;
+  }
+
+  .yield-data-entry-page .color-groups-container {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  }
+}
+
 .coming-soon-card {
   margin-top: 1.25rem;
   background: var(--surface);
