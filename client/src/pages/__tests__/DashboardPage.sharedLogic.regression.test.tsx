@@ -1,5 +1,5 @@
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,7 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 // against the code before any logic moved into shared modules, and required
 // to pass unchanged afterwards. Fixtures deliberately include the inputs the
 // calculations filter, coerce or tie-break on.
-const state = vi.hoisted(() => ({ groups: null as unknown }));
+const state = vi.hoisted(() => ({ groups: null as unknown, projection: null as unknown }));
 vi.mock("../../lib/api", () => ({
   getBackendHealth: () => Promise.resolve({ success: true }),
   getForecastingStatus: () => Promise.resolve({ success: true }),
@@ -108,7 +108,7 @@ function route(path: string) {
   if (path === "/api/yield-entries") return ENTRIES;
   if (path === "/api/varieties") return VARIETIES;
   if (path === "/api/color-case-entries") return CASE_ENTRIES;
-  if (path === "/api/mobile/daily-yield/today-projection") return { status: "no_data" };
+  if (path === "/api/mobile/daily-yield/today-projection") return state.projection ?? { status: "no_data" };
   return [];
 }
 
@@ -125,6 +125,7 @@ beforeEach(() => {
   localStorage.clear();
   chartData.length = 0;
   state.groups = null;
+  state.projection = null;
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -251,5 +252,49 @@ describe("desktop Yield by Color — pinned values", () => {
     await renderDashboard();
     expect(markup(card("Yield by Color"))).toMatchSnapshot();
     expect(markup(card("Yield Trends"))).toMatchSnapshot();
+  });
+});
+
+describe("desktop Daily Yield Projection placement", () => {
+  it("renders after all other dashboard cards and preserves the projection details and samples link", async () => {
+    state.projection = {
+      hasProjection: true,
+      sessionYear: 2026,
+      sessionWeek: 38,
+      sampledRowCount: 14,
+      byVariety: [
+        {
+          varietyId: "variety-a",
+          varietyName: "Ruby Crown",
+          color: "red",
+          projectedKg: 1240,
+          projectedCases: 82,
+          sampledRowCount: 14,
+          lastSampleDate: "2026-09-21",
+          lastUpdatedAt: "2026-09-21T14:30:00Z",
+          lastEnteredByName: "Alex Green",
+          lastEnteredByInitials: "AG"
+        }
+      ],
+      byColor: [{ color: "red", totalCases: 82 }],
+      grandTotal: 82
+    };
+
+    await renderDashboard();
+
+    const projectionCard = card("Daily Yield Projection");
+    const allDashboardCards = Array.from(document.querySelectorAll(".coming-soon-card"));
+    expect(allDashboardCards.at(-1)).toBe(projectionCard);
+    expect(projectionCard).toHaveTextContent("Week 38, 2026");
+    expect(projectionCard).toHaveTextContent("Not recorded/actual yield.");
+    expect(projectionCard).toHaveTextContent("Ruby Crown");
+    expect(projectionCard).toHaveTextContent("1,240 kg");
+    expect(projectionCard).toHaveTextContent("82 cases");
+    expect(projectionCard).toHaveTextContent("14 sampled rows");
+    expect(projectionCard).toHaveTextContent("Projection Ready");
+    expect(within(projectionCard).getByRole("link", { name: /View Samples/ })).toHaveAttribute(
+      "href",
+      "/yield/daily-yield-samples"
+    );
   });
 });

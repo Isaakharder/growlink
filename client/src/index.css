@@ -499,67 +499,77 @@ body.native-shell #root {
 
 .dashboard-daily-yield-projection-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 0.6rem;
-  margin-top: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 0.55rem;
+  margin-top: 0.65rem;
   align-items: stretch;
 }
 
 .dyp-card {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  border-left: 3px solid transparent;
-  border-radius: 0 10px 10px 0;
+  border: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  border-radius: 14px;
   background: var(--surface-soft);
-  padding: 0.55rem 0.75rem;
+  padding: 0.55rem 0.65rem;
 }
 
 .dyp-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.35rem;
   flex-wrap: wrap;
 }
 
 .dyp-card-sample-count {
-  font-size: 0.74rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
 .dyp-card-metrics {
   display: flex;
-  gap: 1.25rem;
-  margin-top: 0.4rem;
+  gap: 0.8rem;
+  margin-top: 0.32rem;
 }
 
 .dyp-card-metric {
+  min-width: 0;
   display: flex;
   flex-direction: column-reverse;
-  gap: 0.1rem;
+  gap: 0.06rem;
 }
 
 .dyp-card-metric-label {
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .dyp-card-metric-value {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.08rem;
+  font-weight: 700;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .dyp-card-status {
-  margin: 0.45rem 0 0;
-  padding: 0.3rem 0.5rem;
-  border-radius: 6px;
-  font-size: 0.76rem;
+  margin: 0.34rem 0 0;
+  padding: 0.2rem 0.42rem;
+  border-radius: 5px;
+  font-size: 0.7rem;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.25;
+}
+
+.dyp-card-status-ready {
+  display: inline-flex;
+  align-self: flex-start;
+  width: fit-content;
 }
 
 .dyp-card-status-ready {
@@ -570,17 +580,20 @@ body.native-shell #root {
 .dyp-card-status-preliminary {
   color: #b45309;
   background: rgba(180, 83, 9, 0.1);
+  max-width: 100%;
 }
 
 .dyp-card-meta {
-  margin: 0.4rem 0 0;
-  font-size: 0.72rem;
+  margin: 0.28rem 0 0;
+  font-size: 0.68rem;
   color: var(--text-muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .dashboard-daily-yield-view-samples-link {
   display: inline-block;
-  margin-top: 0.9rem;
+  margin-top: 0.7rem;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--brand, #0f7660);
