@@ -819,11 +819,10 @@ export function DashboardPage() {
   }
 
   return (
-    <section className="page-shell">
+    <section className="page-shell dashboard-page-shell">
       <header className="dashboard-header">
         <div>
           <h1>Dashboard</h1>
-          <p>Greenhouse operations overview — irrigation, crop yield, and analytics.</p>
         </div>
 
         <button

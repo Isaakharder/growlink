@@ -157,6 +157,13 @@ const snapshotCards = () =>
   }));
 
 describe("desktop Greenhouse Snapshot — pinned values", () => {
+  it("uses the compact page heading without the removed descriptive subtitle", async () => {
+    await renderDashboard();
+    expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
+    expect(document.querySelector(".dashboard-page-shell")).not.toBeNull();
+    expect(screen.queryByText("Greenhouse operations overview — irrigation, crop yield, and analytics.")).not.toBeInTheDocument();
+  });
+
   it("shows the most common active group type, in setup order, each with its newest log's metrics", async () => {
     await renderDashboard();
     expect(card("Greenhouse Snapshot")).toHaveTextContent("Latest irrigation readings by zone.");
