@@ -79,6 +79,15 @@ function toFormState(c: Chemical): ChemicalFormState {
   };
 }
 
+export function formatInventoryQuantity(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  if (!Number.isFinite(value)) return String(value);
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  });
+}
+
 // Alphabetical base sort, then split into startsWith / contains when query is present.
 // Within each group items stay alphabetical.
 function filterAndSortChemicals(list: Chemical[], query: string): Chemical[] {
@@ -409,40 +418,32 @@ export function PestInventoryPage() {
     : null;
 
   return (
-    <section className="page-shell">
-      <header>
+    <section className="page-shell pest-inventory-page">
+      <header className="pest-inventory-heading">
         <h1>Pest Control Inventory</h1>
-        <p>Manage chemical inventory for spray planning.</p>
       </header>
 
       {error ? <p className="form-error">{error}</p> : null}
 
-      <div className="coming-soon-card">
-        <h2>Chemicals</h2>
-
-        <div className="varieties-toolbar">
-          <button type="button" onClick={openAddModal}>
-            + Add Chemical
-          </button>
+      <div className="coming-soon-card pest-inventory-card">
+        <div className="pest-inventory-section-header">
+          <h2>Chemicals</h2>
+          <div className="varieties-toolbar pest-inventory-toolbar">
+            <button type="button" className="pest-inventory-add-button" onClick={openAddModal}>
+              + Add Chemical
+            </button>
+          </div>
         </div>
 
         {/* ── Search / autocomplete ── */}
-        <div ref={searchContainerRef} style={{ position: "relative", margin: "0.75rem 0 0.5rem" }}>
+        <div ref={searchContainerRef} className="pest-inventory-search">
           <input
+            className="pest-inventory-search-input"
             type="search"
             placeholder="Search chemicals..."
             value={searchQuery}
             onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
             onFocus={() => { if (searchQuery.trim()) setSearchOpen(true); }}
-            style={{
-              width: "100%",
-              border: "1px solid var(--border)",
-              borderRadius: "10px",
-              background: "var(--surface)",
-              color: "var(--text)",
-              font: "inherit",
-              padding: "0.5rem 0.75rem",
-            }}
           />
 
           {searchOpen && searchQuery.trim() ? (
@@ -514,8 +515,8 @@ export function PestInventoryPage() {
         {!loading && chemicals.length === 0 ? <p>No chemicals added yet.</p> : null}
 
         {chemicals.length > 0 ? (
-          <div className="varieties-table-wrapper">
-            <table className="varieties-table">
+          <div className="varieties-table-wrapper pest-inventory-table-wrapper">
+            <table className="varieties-table pest-inventory-table">
               <thead>
                 <tr>
                   <th>Name</th>
@@ -542,7 +543,7 @@ export function PestInventoryPage() {
                     <td>{c.name}</td>
                     <td>
                       {c.chemical_type ? (
-                        <span className="status-badge active">
+                        <span className="status-badge active pest-inventory-badge">
                           {c.chemical_type.charAt(0).toUpperCase() +
                             c.chemical_type.slice(1)}
                         </span>
@@ -554,11 +555,11 @@ export function PestInventoryPage() {
                     <td>{c.phi || "—"}</td>
                     <td>{c.registration_number || "—"}</td>
                     <td>
-                      {c.inventory_qty} {c.inventory_unit}
+                      {formatInventoryQuantity(c.inventory_qty)} {c.inventory_unit}
                     </td>
                     <td>
                       <span
-                        className={c.active ? "status-badge active" : "status-badge inactive"}
+                        className={`status-badge pest-inventory-badge ${c.active ? "active" : "inactive"}`}
                       >
                         {c.active ? "Active" : "Inactive"}
                       </span>
@@ -567,8 +568,7 @@ export function PestInventoryPage() {
                       {c.label_pdf_path ? (
                         <button
                           type="button"
-                          className="secondary"
-                          style={{ fontSize: "0.8em", padding: "0.2rem 0.5rem" }}
+                          className="secondary pest-inventory-action pest-inventory-view-pdf-button"
                           disabled={labelLoading === c.id}
                           onClick={() => void viewLabel(c.id)}
                         >
@@ -580,15 +580,15 @@ export function PestInventoryPage() {
                     </td>
                     <td>
                       <div className="row-actions">
-                        <button type="button" onClick={() => openRestockModal(c)}>
+                        <button type="button" className="pest-inventory-action pest-inventory-restock-button" onClick={() => openRestockModal(c)}>
                           Restock
                         </button>
-                        <button type="button" onClick={() => beginEdit(c)}>
+                        <button type="button" className="pest-inventory-action pest-inventory-edit-button" onClick={() => beginEdit(c)}>
                           Edit
                         </button>
                         <button
                           type="button"
-                          className="danger"
+                          className="danger pest-inventory-action pest-inventory-delete-button"
                           onClick={() => void deleteChemical(c.id)}
                         >
                           Delete
@@ -880,7 +880,7 @@ export function PestInventoryPage() {
                 Current inventory
                 <input
                   type="text"
-                  value={`${restockChemical.inventory_qty} ${restockChemical.inventory_unit}`}
+                  value={`${formatInventoryQuantity(restockChemical.inventory_qty)} ${restockChemical.inventory_unit}`}
                   readOnly
                 />
               </label>

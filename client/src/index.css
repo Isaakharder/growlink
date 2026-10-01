@@ -5209,6 +5209,244 @@ body.keyboard-open .mobile-bottom-nav {
   }
 }
 
+.pest-inventory-page {
+  padding-top: 0.55rem;
+}
+
+.pest-inventory-page > .pest-inventory-heading {
+  margin: 0;
+}
+
+.pest-inventory-page > .pest-inventory-heading h1 {
+  margin: 0;
+  color: #20352f;
+  font-size: 1.42rem;
+  line-height: 1.25;
+}
+
+.pest-inventory-page > .pest-inventory-heading + .form-error {
+  margin-top: 0.55rem;
+}
+
+.pest-inventory-page > .pest-inventory-card {
+  min-width: 0;
+  margin-top: 0.7rem;
+  padding: 0.9rem;
+  border: 1px solid #dce6e1;
+  border-radius: 9px;
+  box-shadow: 0 3px 12px rgba(31, 42, 46, 0.045);
+}
+
+.pest-inventory-page .pest-inventory-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pest-inventory-page .pest-inventory-section-header h2 {
+  margin: 0;
+  color: #263a32;
+  font-size: 1rem;
+}
+
+.pest-inventory-page .pest-inventory-toolbar {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.pest-inventory-page .pest-inventory-add-button {
+  min-height: 36px;
+  padding: 0.42rem 0.75rem;
+  border: 1px solid #0f7660;
+  border-radius: 7px;
+  background: #0f7660;
+  color: #fff;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.pest-inventory-page .pest-inventory-add-button:hover {
+  border-color: #0a604d;
+  background: #0a604d;
+}
+
+.pest-inventory-page .pest-inventory-add-button:focus-visible,
+.pest-inventory-page .pest-inventory-action:focus-visible,
+.pest-inventory-page .pest-inventory-search-input:focus-visible {
+  outline: 2px solid #438b6b;
+  outline-offset: 2px;
+}
+
+.pest-inventory-page .pest-inventory-search {
+  position: relative;
+  margin: 0.65rem 0 0.45rem;
+}
+
+.pest-inventory-page .pest-inventory-search-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0.48rem 0.7rem;
+  border: 1px solid #cfdcd5;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.pest-inventory-page .pest-inventory-table-wrapper {
+  max-width: 100%;
+  margin-top: 0.55rem;
+  overflow-x: auto;
+  border: 1px solid #dce6e1;
+  border-radius: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pest-inventory-page .pest-inventory-table {
+  min-width: 1080px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.pest-inventory-page .pest-inventory-table th,
+.pest-inventory-page .pest-inventory-table td {
+  padding: 0.42rem 0.55rem;
+  border-bottom: 1px solid #e7eeea;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.pest-inventory-page .pest-inventory-table thead th {
+  background: #f1f6f3;
+  color: #42564d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pest-inventory-page .pest-inventory-table tbody tr:nth-child(even) td {
+  background: #f8fbf9;
+}
+
+.pest-inventory-page .pest-inventory-table tbody tr:hover td {
+  background: #eef6f1;
+}
+
+.pest-inventory-page .pest-inventory-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.pest-inventory-page .pest-inventory-table td:nth-child(6) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pest-inventory-page .pest-inventory-badge {
+  padding: 0.16rem 0.48rem;
+  border: 1px solid transparent;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.pest-inventory-page .pest-inventory-badge.active {
+  border-color: #c7e3d4;
+  background: #e8f4ed;
+  color: #145f45;
+}
+
+.pest-inventory-page .pest-inventory-badge.inactive {
+  border-color: #dbe2de;
+  background: #f1f4f2;
+  color: #5c6b66;
+}
+
+.pest-inventory-page .pest-inventory-table .row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.pest-inventory-page .pest-inventory-action {
+  min-height: 32px;
+  padding: 0.32rem 0.52rem;
+  border: 1px solid #cfe0d6;
+  border-radius: 6px;
+  background: #f3f8f5;
+  color: #245d47;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pest-inventory-page .pest-inventory-action:hover:not(:disabled) {
+  border-color: #91bba3;
+  background: #e8f4ed;
+}
+
+.pest-inventory-page .pest-inventory-view-pdf-button {
+  min-height: 30px;
+  padding: 0.28rem 0.48rem;
+}
+
+.pest-inventory-page .pest-inventory-delete-button {
+  border-color: #e7c9c5;
+  background: #fff8f7;
+  color: #a0443b;
+}
+
+.pest-inventory-page .pest-inventory-delete-button:hover:not(:disabled) {
+  border-color: #d9aaa4;
+  background: #fdf0ee;
+  color: #8e332c;
+}
+
+@media (max-width: 640px) {
+  .pest-inventory-page {
+    padding: 0.35rem 0.75rem 1rem;
+  }
+
+  .pest-inventory-page > .pest-inventory-heading h1 {
+    font-size: 1.28rem;
+  }
+
+  .pest-inventory-page > .pest-inventory-card {
+    padding: 0.7rem;
+  }
+
+  .pest-inventory-page .pest-inventory-add-button {
+    min-height: 42px;
+  }
+
+  .pest-inventory-page .pest-inventory-search-input {
+    min-height: 42px;
+  }
+
+  .pest-inventory-page .pest-inventory-table-wrapper {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .pest-inventory-page .pest-inventory-table th,
+  .pest-inventory-page .pest-inventory-table td {
+    padding: 0.42rem 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  .pest-inventory-page .pest-inventory-action {
+    min-height: 38px;
+  }
+}
+
 @media (max-width: 480px) {
   .week-day-grid {
     grid-template-columns: repeat(2, 1fr);
