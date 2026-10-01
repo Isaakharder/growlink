@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { loadWeeklyKgByVarietySource } from "../utils/weeklyKgByVariety";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 import { resolveVarietyFootprints } from "../utils/varietyAreaFootprints";
 
@@ -388,6 +389,28 @@ yieldEntriesRouter.get("/yield-entries/recent", canYieldView, async (req, res) =
     return res.json(result);
   } catch (error) {
     return sendSafeError(res, 500, "Failed to load recent yield entries.", "Recent yield entries fetch error:", error);
+  }
+});
+
+// Read-only source for the Kg Entries "Weekly kg by Variety" card and its
+// exports: every entry of one recorded harvest year (default: the latest
+// year with entries), read completely or not at all. See
+// utils/weeklyKgByVariety.ts.
+yieldEntriesRouter.get("/yield-entries/weekly-by-variety", canYieldView, async (req, res) => {
+  const organizationId = req.organizationId;
+  let requestedYear: number | null = null;
+  if (req.query.year !== undefined) {
+    const year = Number(req.query.year);
+    if (!Number.isInteger(year) || year < 1900 || year > 3000) {
+      return res.status(400).json({ message: "year must be a four-digit year." });
+    }
+    requestedYear = year;
+  }
+
+  try {
+    return res.json(await loadWeeklyKgByVarietySource(supabase, organizationId as string, requestedYear));
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to load weekly kg by variety.", "Weekly kg by variety fetch error:", error);
   }
 });
 

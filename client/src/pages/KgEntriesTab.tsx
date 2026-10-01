@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
+import { WeeklyKgByVarietyCard } from "./kgEntries/WeeklyKgByVarietyCard";
 import { roundTo } from "../lib/roundTo";
 import { createWeekOptions, getCurrentWeek, localIsoDate } from "../lib/yieldEntries/weekOptions";
 import {
@@ -464,10 +465,15 @@ export function KgEntriesTab() {
     }
   }
 
+  // Bumped with every Recent Entries refresh (after an entry is created,
+  // edited, deleted or imported) so Weekly kg by Variety reloads too.
+  const [weeklyKgRefreshKey, setWeeklyKgRefreshKey] = useState(0);
+
   // Re-fetches the Recent Entries table from the top, sized to whatever was
   // already loaded (at least the initial 7) so a create/update/delete is
   // reflected immediately without ever pulling the full org history.
   async function refreshRecentEntries() {
+    setWeeklyKgRefreshKey((key) => key + 1);
     const limit = Math.max(loadedRecentEntries.length, RECENT_ENTRIES_INITIAL_LIMIT);
 
     try {
@@ -2002,6 +2008,8 @@ export function KgEntriesTab() {
             </>
           )}
         </div>
+
+        <WeeklyKgByVarietyCard refreshKey={weeklyKgRefreshKey} />
       </div>
 
       {isPdfPreviewOpen && !isSizeSetupOpen ? (
