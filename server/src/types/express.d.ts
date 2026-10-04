@@ -10,6 +10,7 @@ declare global {
       dataSourceType?: string;
       integrationKeyId?: string;
       integrationName?: string;
+      integrationScopes?: string[];
     }
   }
 }

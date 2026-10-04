@@ -3,11 +3,13 @@ import { Request, Response, Router } from "express";
 import { requireAdminUser } from "../middleware/requireAdminUser";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
+import { isMissingColumnError } from "../middleware/requireIntegrationKey";
 
 const adminIntegrationKeysRouter = Router();
 
 const ALLOWED_INTEGRATIONS = ["croplink"] as const;
 type IntegrationName = typeof ALLOWED_INTEGRATIONS[number];
+const ALLOWED_SCOPES = ["harvest-actuals:read", "yield-detail:read"] as const;
 
 function hashIntegrationKey(rawKey: string): string {
   return createHash("sha256").update(rawKey).digest("hex");
@@ -17,10 +19,15 @@ adminIntegrationKeysRouter.get(
   "/admin/integration-keys",
   requireAdminUser,
   async (_req: Request, res: Response) => {
-    const { data: keys, error: keysError } = await supabase
+    const listKeys = (columns: string) => supabase
       .from("organization_integration_keys")
-      .select("id, organization_id, integration_name, label, status, created_at, last_used_at")
+      .select(columns)
       .order("created_at", { ascending: false });
+    // Before migration 0141 there is no scopes column; list without it.
+    let { data: keys, error: keysError } = await listKeys("id, organization_id, integration_name, label, scopes, status, created_at, last_used_at");
+    if (isMissingColumnError(keysError, "scopes")) {
+      ({ data: keys, error: keysError } = await listKeys("id, organization_id, integration_name, label, status, created_at, last_used_at"));
+    }
 
     if (keysError) {
       return sendSafeError(
@@ -32,7 +39,7 @@ adminIntegrationKeysRouter.get(
     }
 
     const organizationIds = Array.from(
-      new Set((keys ?? []).map(key => key.organization_id).filter(Boolean))
+      new Set(((keys ?? []) as unknown as Array<{ organization_id: string }>).map(key => key.organization_id).filter(Boolean))
     );
 
     const organizationsById = new Map<string, string>();
@@ -58,12 +65,13 @@ adminIntegrationKeysRouter.get(
 
     return res.json({
       success: true,
-      keys: (keys ?? []).map(key => ({
+      keys: ((keys ?? []) as unknown as Array<{ id: string; organization_id: string; integration_name: string; label: string; scopes?: string[] | null; status: string; created_at: string; last_used_at: string | null }>).map(key => ({
         id: key.id,
         organizationId: key.organization_id,
         organizationName: organizationsById.get(key.organization_id) ?? "Unknown",
         integrationName: key.integration_name,
         label: key.label,
+        scopes: key.scopes ?? ["harvest-actuals:read"],
         status: key.status,
         createdAt: key.created_at,
         lastUsedAt: key.last_used_at
@@ -76,7 +84,7 @@ adminIntegrationKeysRouter.post(
   "/admin/integration-keys",
   requireAdminUser,
   async (req: Request, res: Response) => {
-    const { organizationId, label, integrationName } = req.body as Record<string, unknown>;
+    const { organizationId, label, integrationName, scopes } = req.body as Record<string, unknown>;
 
     if (typeof organizationId !== "string" || !organizationId.trim()) {
       return res.status(400).json({ message: "organizationId is required." });
@@ -93,6 +101,15 @@ adminIntegrationKeysRouter.post(
       return res.status(400).json({
         message: `integrationName must be one of: ${ALLOWED_INTEGRATIONS.join(", ")}`
       });
+    }
+
+    let keyScopes: string[] = ["harvest-actuals:read"];
+    const scopesRequested = scopes !== undefined;
+    if (scopesRequested) {
+      if (!Array.isArray(scopes) || scopes.length === 0 || !scopes.every(s => typeof s === "string" && (ALLOWED_SCOPES as readonly string[]).includes(s))) {
+        return res.status(400).json({ message: `scopes must be a non-empty array of: ${ALLOWED_SCOPES.join(", ")}` });
+      }
+      keyScopes = Array.from(new Set(scopes as string[])).sort();
     }
 
     const orgId = organizationId.trim();
@@ -127,11 +144,17 @@ adminIntegrationKeysRouter.post(
         integration_name: integrationName,
         key_hash: keyHash,
         label: keyLabel,
+        // Omitted unless requested so key creation keeps working before
+        // migration 0141 (the column then defaults to harvest-actuals:read).
+        ...(scopesRequested ? { scopes: keyScopes } : {}),
         status: "active"
       })
       .select("id, label, created_at")
       .single();
 
+    if (scopesRequested && isMissingColumnError(insertError, "scopes")) {
+      return res.status(400).json({ message: "Key scopes need database migration 0141; create the key without scopes or apply the migration first." });
+    }
     if (insertError || !inserted) {
       return sendSafeError(
         res, 500,
@@ -142,7 +165,7 @@ adminIntegrationKeysRouter.post(
     }
 
     console.log(
-      `Admin integration key created: org=${orgId} integration=${integrationName} label="${keyLabel}" key_id=${inserted.id}`
+      `Admin integration key created: org=${orgId} integration=${integrationName} label="${keyLabel}" scopes=${keyScopes.join(",")} key_id=${inserted.id}`
     );
 
     return res.status(201).json({
@@ -151,6 +174,7 @@ adminIntegrationKeysRouter.post(
       organizationId: orgId,
       integrationName,
       label: inserted.label,
+      scopes: keyScopes,
       createdAt: inserted.created_at,
       key: rawKey
     });
