@@ -50,7 +50,13 @@ before(async () => {
     create policy organization_integration_keys_update on organization_integration_keys for update to public using (true) with check (true);
     create policy organization_integration_keys_delete on organization_integration_keys for delete to public using (true);
     alter table organization_integration_keys enable row level security;
-    grant all on table organization_integration_keys to anon, authenticated, service_role;
+    -- live production grants (preflight A2): anon/authenticated only REFERENCES, TRIGGER, TRUNCATE
+    grant references, trigger, truncate on table organization_integration_keys to anon, authenticated;
+    grant all on table organization_integration_keys to service_role;
+    create table organization_upload_keys (id uuid primary key default gen_random_uuid(), organization_id uuid, key_hash text, label text, status text default 'active');
+    alter table organization_upload_keys enable row level security;
+    grant references, trigger, truncate on table organization_upload_keys to anon, authenticated;
+    grant all on table organization_upload_keys to service_role;
     grant usage on schema public to anon, authenticated, service_role;
   `);
   await db.exec(migration("0140_rls_fix_integration_keys.sql"));
