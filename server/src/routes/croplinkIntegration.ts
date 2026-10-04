@@ -2,6 +2,10 @@ import { Request, Response, Router } from "express";
 import { supabase } from "../config/supabase";
 import { requireIntegrationKey } from "../middleware/requireIntegrationKey";
 import { sendSafeError } from "../utils/safeError";
+import { createCroplinkV2Router } from "./croplinkV2";
+import { supabaseCroplinkV2Store } from "./croplinkV2Store";
+import { YIELD_DETAIL_SCOPE } from "../lib/croplinkV2";
+import { DEFAULT_ORG_TIMEZONE } from "../config/orgTimezone";
 
 // Read-only API for CropLink. GrowLink is the single source of truth for
 // harvested kilograms by variety — CropLink consumes this instead of
@@ -115,6 +119,17 @@ croplinkIntegrationRouter.get(
 
     return res.json({ harvestActuals });
   }
+);
+
+// v2: yield detail (AFW, cases, size kg, daily packing breakdown, area,
+// settlement, deletions, ID manifests). Requires a CropLink key that has
+// been explicitly granted the yield-detail scope; v1 keys get 403.
+croplinkIntegrationRouter.use(
+  createCroplinkV2Router({
+    store: supabaseCroplinkV2Store,
+    authenticate: requireIntegrationKey("croplink", YIELD_DETAIL_SCOPE),
+    timeZone: DEFAULT_ORG_TIMEZONE
+  })
 );
 
 export { croplinkIntegrationRouter };

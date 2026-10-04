@@ -7,7 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test:pdf": "node --require tsx/cjs --test src/utils/__tests__/flowMasterPdfParser.test.ts"
+    "test:pdf": "node --require tsx/cjs --test src/utils/__tests__/flowMasterPdfParser.test.ts",
+    "test:croplink-v2": "node --require tsx/cjs --test src/lib/__tests__/croplinkV2.test.ts src/routes/__tests__/croplinkV2.http.test.ts src/__tests__/migration0141.pglite.test.ts src/utils/__tests__/averageFruitWeight.test.ts src/middleware/__tests__/requireIntegrationKey.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

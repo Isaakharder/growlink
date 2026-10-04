@@ -103,6 +103,9 @@ app.use("/api", apiLimiter);
 app.use("/api/agent/pdf-import", strictLimiter);
 app.use("/api/integrations/docklink/sync-color-cases", strictLimiter);
 app.use("/api/integrations/docklink/sync-waste", strictLimiter);
+// Only manifest creation (which pages every yield entry id) is strictly limited;
+// v2 list paging stays on the general apiLimiter so a full sync is never throttled.
+app.use("/api/integrations/croplink/v2/yield-week-manifests", strictLimiter);
 app.use("/api/pdf-import", strictLimiter);
 app.use("/api/csv-templates/preview", previewLimiter);
 app.use("/api/csv-templates", strictLimiter);
