@@ -61,6 +61,25 @@ before(async () => {
   `);
   await db.exec(migration("0140_rls_fix_integration_keys.sql"));
   await db.exec(migration("0141_croplink_v2_yield_detail.sql"));
+  // production default privileges also give new tables REFERENCES/TRIGGER/TRUNCATE to anon/authenticated
+  await db.exec(`grant references, trigger, truncate on integration_deletions, integration_manifests, yield_entry_revisions to anon, authenticated;
+    grant all on integration_deletions, integration_manifests, yield_entry_revisions to service_role;
+    grant usage, select on sequence yield_entry_revisions_id_seq to service_role;`);
+  await db.exec(migration("0142_revoke_v2_tables_from_api_roles.sql"));
+});
+
+test("0142: anon/authenticated hold no privilege on the v2 tables; service role and the audit triggers still work", async () => {
+  for (const t of ["integration_deletions", "integration_manifests", "yield_entry_revisions"]) {
+    for (const r of ["anon", "authenticated"]) {
+      for (const p of ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]) {
+        assert.equal((await one<{ h: boolean }>(`select has_table_privilege($1, $2, $3) h`, [r, `public.${t}`, p])).h, false, `${r} ${p} ${t}`);
+      }
+    }
+  }
+  try {
+    await db.exec("set role anon");
+    await assert.rejects(db.query("truncate yield_entry_revisions"), /permission denied/);
+  } finally { await db.exec("reset role"); }
 });
 
 test("0140: anon/authenticated can no longer read or mint integration keys; service role keeps access", async () => {
