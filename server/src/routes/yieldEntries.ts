@@ -4,6 +4,8 @@ import { sendSafeError } from "../utils/safeError";
 import { loadWeeklyKgByVarietySource } from "../utils/weeklyKgByVariety";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
 import { resolveVarietyFootprints } from "../utils/varietyAreaFootprints";
+import { writeSourceColumn } from "../utils/writeSource";
+import { mergeAverageFruitWeightG } from "../utils/averageFruitWeight";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -462,9 +464,15 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
         .from("yield_entries")
         .update({
           size_kg: mergedSizeKg,
-          average_fruit_weight_g: payload.average_fruit_weight_g,
+          average_fruit_weight_g: mergeAverageFruitWeightG(
+            Object.values(existingSizeKg).reduce((sum, kg) => sum + kg, 0),
+            existing.average_fruit_weight_g == null ? null : Number(existing.average_fruit_weight_g),
+            Object.values(payload.size_kg).reduce((sum, kg) => sum + kg, 0),
+            payload.average_fruit_weight_g
+          ),
           packed_date: mergedPackedDate,
           ...mergedTotals,
+          ...writeSourceColumn("manual_merge"),
           updated_at: new Date().toISOString()
         })
         .eq("id", existing.id)
@@ -503,7 +511,7 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
 
     const { data, error } = await supabase
       .from("yield_entries")
-      .insert({ ...payload, ...totals, organization_id: organizationId })
+      .insert({ ...payload, ...totals, organization_id: organizationId, ...writeSourceColumn("manual_create") })
       .select("*")
       .single();
 
@@ -552,7 +560,7 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
 
     const { data, error } = await supabase
       .from("yield_entries")
-      .update({ ...payload, ...totals, updated_at: new Date().toISOString() })
+      .update({ ...payload, ...totals, ...writeSourceColumn("manual_edit"), updated_at: new Date().toISOString() })
       .eq("id", id)
       .eq("organization_id", organizationId)
       .select("*")

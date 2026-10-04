@@ -16,6 +16,7 @@ import { requirePermission, requireAnyPermission } from "../middleware/requirePe
 import { isPdfBuffer } from "../utils/detectFileType";
 import { previewManualCsvUpload } from "./csvMappingTemplates";
 import type { NormalizedPreview } from "../utils/csvTemplateTypes";
+import { writeSourceColumn } from "../utils/writeSource";
 
 const pdfImportRouter = Router();
 
@@ -1016,6 +1017,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
         size_kg: mergedSizeKg,
         average_fruit_weight_g: mergedAverageFruitWeightG,
         ...mergedTotals,
+        ...writeSourceColumn("import_pdf"),
         updated_at: new Date().toISOString()
       })
       .eq("id", existingEntry.id)
@@ -1133,6 +1135,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       packed_date: payload.packedDate,
       size_kg: sizeKgById,
       average_fruit_weight_g: payload.averageFruitWeightG,
+      ...writeSourceColumn("import_pdf"),
       ...totals
     })
     .select("id, variety_id, year, week, total_kg")

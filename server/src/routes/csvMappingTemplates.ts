@@ -19,6 +19,7 @@ import type {
   ValidationIssue,
   ValueMapping
 } from "../utils/csvTemplateTypes";
+import { writeSourceColumn } from "../utils/writeSource";
 
 const csvMappingTemplatesRouter = Router();
 
@@ -1996,6 +1997,7 @@ export async function importCsvTemplateGroup(
             Object.values(sizeKgById).reduce((sum, v) => sum + v, 0)
           ),
           ...mergedTotals,
+          ...writeSourceColumn("import_csv"),
           updated_at: new Date().toISOString()
         })
         .eq("id", existingEntry.id)
@@ -2016,6 +2018,7 @@ export async function importCsvTemplateGroup(
           packed_date: freshGroup.packedDate,
           size_kg: sizeKgById,
           average_fruit_weight_g: freshGroup.averageFruitWeightG,
+          ...writeSourceColumn("import_csv"),
           ...totals
         })
         .select("id")
