@@ -45,8 +45,13 @@ describe("weekly case totals", () => {
 describe("requestDocklinkCaseSync", () => {
   it("POSTs the sync with no body", async () => {
     apiFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
-    await expect(requestDocklinkCaseSync()).resolves.toBeUndefined();
+    await expect(requestDocklinkCaseSync()).resolves.toBeNull();
     expect(apiFetch).toHaveBeenCalledWith("/api/integrations/docklink/sync-color-cases", { method: "POST" });
+  });
+
+  it("resolves with the server's summary message", async () => {
+    apiFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ message: "Synced DockLink cases: imported=5" }) });
+    await expect(requestDocklinkCaseSync()).resolves.toBe("Synced DockLink cases: imported=5");
   });
 
   it("throws the server's message, or 'Sync failed'", async () => {

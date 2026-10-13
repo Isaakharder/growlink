@@ -17,7 +17,7 @@ vi.mock("../../lib/api", () => ({
     if (method === "POST" && path === "/api/integrations/docklink/sync-color-cases") {
       if (state.syncFails) return Promise.resolve({ ok: false, status: 502, json: async () => ({ message: "DockLink is unreachable" }) });
       state.afterSync = true;
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ synced: 1 }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, message: "Synced DockLink cases: imported=1" }) });
     }
     return Promise.resolve({ ok: true, status: 200, json: async () => route(path) });
   }
@@ -128,7 +128,7 @@ describe("desktop Sync DockLink Cases — pinned behaviour", () => {
     expect(sync).toHaveTextContent("Sync DockLink Cases");
   });
 
-  it("on failure keeps the server's message, does not reload, and (as today) only shows it inside the Add Case Entry form", async () => {
+  it("on failure shows the server's message beside the button, and does not reload", async () => {
     state.syncFails = true;
     const user = await renderTab();
     calls.length = 0;
@@ -137,11 +137,16 @@ describe("desktop Sync DockLink Cases — pinned behaviour", () => {
     await waitFor(() => expect(sync).toBeEnabled());
     expect(calls.map((c) => c.path)).toEqual(["/api/integrations/docklink/sync-color-cases"]);
     expect(cards()[0].title).toBe("Week 33 · 2026");
-    // Pre-existing desktop behaviour, pinned rather than changed here: the
-    // tab's error is rendered only in the entry modal.
-    expect(screen.queryByText("DockLink is unreachable")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("DockLink is unreachable");
+    // Opening the entry form no longer hides the sync result.
     await user.click(screen.getByRole("button", { name: "Add Case Entry" }));
-    // Opening the form clears the error (openEntryModal → setError(null)).
-    expect(screen.queryByText("DockLink is unreachable")).toBeNull();
+    expect(screen.getByText("DockLink is unreachable")).toBeInTheDocument();
+  });
+
+  it("on success shows the server's summary beside the button", async () => {
+    const user = await renderTab();
+    await user.click(screen.getByRole("button", { name: "Sync DockLink Cases" }));
+    await waitFor(() => expect(cards()[0].title).toBe("Week 34 · 2026"));
+    expect(screen.getByRole("status")).toHaveTextContent("Synced DockLink cases: imported=1");
   });
 });
