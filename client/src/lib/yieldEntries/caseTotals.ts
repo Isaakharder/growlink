@@ -113,26 +113,29 @@ export function formatCaseTotal(value: number) {
 }
 
 /**
- * POSTs the DockLink colour case sync. Throws with the server's message
- * (or "Sync failed") when it is rejected; the caller reloads the entries.
+ * POSTs the DockLink colour case sync. Resolves with the server's summary
+ * message (or null), and throws with the server's message (or "Sync failed")
+ * when it is rejected; the caller reloads the entries.
  */
-export async function requestDocklinkCaseSync(): Promise<void> {
+export async function requestDocklinkCaseSync(): Promise<string | null> {
   const response = await apiFetch(DOCKLINK_CASE_SYNC_URL, {
     method: "POST"
   });
 
-  if (!response.ok) {
-    let message = "Sync failed";
+  let message: string | null = null;
 
-    try {
-      const responseBody = (await response.json()) as { message?: string };
-      if (responseBody.message) {
-        message = responseBody.message;
-      }
-    } catch {
-      // Ignore
+  try {
+    const responseBody = (await response.json()) as { message?: string };
+    if (typeof responseBody.message === "string" && responseBody.message) {
+      message = responseBody.message;
     }
-
-    throw new Error(message);
+  } catch {
+    // Ignore
   }
+
+  if (!response.ok) {
+    throw new Error(message ?? "Sync failed");
+  }
+
+  return message;
 }

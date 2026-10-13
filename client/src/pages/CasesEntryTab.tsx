@@ -142,6 +142,7 @@ export function CasesEntryTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CaseEntryFormState>({
@@ -547,10 +548,10 @@ export function CasesEntryTab() {
 
   async function syncDocklinkCases() {
     setSyncing(true);
-    setError(null);
+    setSyncStatus(null);
 
     try {
-      await requestDocklinkCaseSync();
+      const message = await requestDocklinkCaseSync();
 
       const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
@@ -559,10 +560,12 @@ export function CasesEntryTab() {
 
       const entriesData = (await entriesResponse.json()) as CaseEntry[];
       setEntries(entriesData);
+      setSyncStatus({ kind: "success", message: message ?? "DockLink cases synced" });
     } catch (syncError) {
-      setError(
-        syncError instanceof Error ? syncError.message : "Failed to sync DockLink cases"
-      );
+      setSyncStatus({
+        kind: "error",
+        message: syncError instanceof Error ? syncError.message : "Failed to sync DockLink cases"
+      });
     } finally {
       setSyncing(false);
     }
@@ -605,6 +608,15 @@ export function CasesEntryTab() {
             </button>
           </div>
         </div>
+
+        {syncStatus ? (
+          <p
+            className={`cases-sync-status cases-sync-status--${syncStatus.kind}`}
+            role={syncStatus.kind === "error" ? "alert" : "status"}
+          >
+            {syncStatus.message}
+          </p>
+        ) : null}
 
         {entries.length > 0 ? (
           <p className="recent-entries-helper-text">

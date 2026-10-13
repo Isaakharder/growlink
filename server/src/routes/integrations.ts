@@ -82,6 +82,19 @@ function getDocklinkConfigError(): string | null {
   return null;
 }
 
+// DockLink's Supabase rejects GrowLink's key when it has been rotated or
+// revoked there ("Unregistered API key", "Invalid API key", JWT errors).
+function getDocklinkKeyRejectedError(queryError: { message: string; code?: string }): HttpError | null {
+  const lower = queryError.message.toLowerCase();
+  if (lower.includes("api key") || lower.includes("jwt") || queryError.code === "PGRST301") {
+    return new HttpError(
+      502,
+      "DockLink rejected GrowLink's API key. Update DOCKLINK_SUPABASE_SERVICE_ROLE_KEY on the GrowLink server with DockLink's current secret key."
+    );
+  }
+  return null;
+}
+
 function getNumericField(row: Record<string, unknown>, fieldName: string): number | null {
   const rawValue = row[fieldName];
   if (rawValue === null || rawValue === undefined) {
@@ -185,6 +198,12 @@ async function fetchDocklinkWeeklyTotals(externalOrganizationId: string): Promis
     .eq("organization_id", externalOrganizationId);
 
   if (queryError) {
+    const keyRejected = getDocklinkKeyRejectedError(queryError);
+    if (keyRejected) {
+      console.error("DockLink weekly totals query rejected the API key:", queryError);
+      throw keyRejected;
+    }
+
     const lowerMessage = queryError.message.toLowerCase();
     if (lowerMessage.includes("does not exist") || lowerMessage.includes("not found")) {
       throw new Error(
@@ -536,6 +555,12 @@ async function fetchDocklinkWeeklyWaste(externalOrganizationId: string): Promise
     .eq("organization_id", externalOrganizationId);
 
   if (queryError) {
+    const keyRejected = getDocklinkKeyRejectedError(queryError);
+    if (keyRejected) {
+      console.error("DockLink weekly waste query rejected the API key:", queryError);
+      throw keyRejected;
+    }
+
     const lower = queryError.message.toLowerCase();
     if (lower.includes("does not exist") || lower.includes("not found")) {
       throw new Error(

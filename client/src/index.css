@@ -2850,6 +2850,22 @@ body.native-shell #root {
   cursor: not-allowed;
 }
 
+.cases-sync-status {
+  margin: 0;
+  font-size: 0.86rem;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.cases-sync-status--success {
+  color: var(--text-muted);
+}
+
+.cases-sync-status--error {
+  color: #b42318;
+  font-weight: 600;
+}
+
 .source-badge {
   display: inline-block;
   padding: 0.25rem 0.6rem;
