@@ -4,7 +4,6 @@ import {
   buildYieldPieSlices,
   buildYieldTrendPoints,
   formatColorKgPerM2,
-  normalizeColorCaseEntries,
   normalizeYieldEntries,
   type ColorYieldSummary,
   type ColorYieldVariety,
@@ -12,6 +11,7 @@ import {
   type YieldPieSlice,
   type YieldTrendPoint
 } from "../../lib/dashboard/yieldByColor";
+import { incompleteShippedTextFor, shippedKgByColor, shippedYieldUrl } from "../../lib/shippedYield";
 import { getWorkspaceJson, useWorkspaceResource } from "./workspaceData";
 import { WorkspacePageFrame } from "./WorkspacePageFrame";
 
@@ -22,17 +22,22 @@ import { WorkspacePageFrame } from "./WorkspacePageFrame";
 
 const RECENT_WEEKS = 6;
 
-type YieldByColorData = { summary: ColorYieldSummary[]; slices: YieldPieSlice[]; weeks: YieldTrendPoint[] };
+type YieldByColorData = { summary: ColorYieldSummary[]; slices: YieldPieSlice[]; weeks: YieldTrendPoint[]; shippedIncomplete: string | null };
 
 async function loadYieldByColor(): Promise<YieldByColorData> {
-  const [entriesRaw, varieties, caseEntriesRaw] = await Promise.all([
+  const [entriesRaw, varieties, shipped] = await Promise.all([
     getWorkspaceJson<unknown>("/api/yield-entries"),
     getWorkspaceJson<ColorYieldVariety[]>("/api/varieties"),
-    getWorkspaceJson<unknown>("/api/color-case-entries")
+    getWorkspaceJson<unknown>(shippedYieldUrl())
   ]);
   const entries = normalizeYieldEntries(entriesRaw);
-  const summary = buildColorYieldSummary(entries, varieties ?? [], normalizeColorCaseEntries(caseEntriesRaw));
-  return { summary, slices: buildYieldPieSlices(summary), weeks: buildYieldTrendPoints(entries, varieties ?? []) };
+  const summary = buildColorYieldSummary(entries, varieties ?? [], shippedKgByColor(shipped));
+  return {
+    summary,
+    slices: buildYieldPieSlices(summary),
+    weeks: buildYieldTrendPoints(entries, varieties ?? []),
+    shippedIncomplete: incompleteShippedTextFor(shipped)
+  };
 }
 
 const COLOR_LABELS: Record<VarietyColor, string> = { red: "Red", orange: "Orange", yellow: "Yellow", green: "Green" };
@@ -121,6 +126,7 @@ export default function YieldByColorPage() {
                 <ColorCard key={entry.color} entry={entry} slice={data.slices.find((s) => s.color === entry.color)!} />
               ))}
             </ul>
+            {data.shippedIncomplete ? <p className="iosws-note">Shipped: {data.shippedIncomplete}</p> : null}
             <h3 className="iosws-section-title">Recent weeks</h3>
             {recent.length === 0 ? (
               <p className="iosws-empty">No weekly kg recorded yet.</p>

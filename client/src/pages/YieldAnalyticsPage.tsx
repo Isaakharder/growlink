@@ -13,6 +13,8 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { downloadBlobFile } from "../lib/downloadFile";
 import { apiFetch } from "../lib/api";
+import { incompleteShippedText, type ShippedYieldResponse } from "../lib/shippedYield";
+import { fetchShippedYield } from "../lib/shippedYieldApi";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { ExpandChartButton, FullscreenChartOverlay, useFullscreenChart } from "../components/charts/FullscreenChart";
 import { formatWeekAxisTick } from "../components/charts/weekAxis";
@@ -76,18 +78,13 @@ type VarietyMeta = {
   case_kg: number;
 };
 
-type ColorCaseEntry = {
-  color: VarietyColor;
-  total_cases: number;
-};
-
 type ReconciliationRow = {
   color: VarietyColor;
   harvestedKg: number;
+  /** Single-colour shipping cases (mixed packs are counted once, separately). */
   shippedCases: number;
-  estimatedKgPerCase: number;
-  isKgPerCaseEstimated: boolean;
-  estimatedShippedKg: number;
+  /** From the shipped-yield calculation: measured cases only. */
+  shippedKg: number;
   remainingKg: number;
 };
 
@@ -229,7 +226,6 @@ function TrendChart({
 }
 
 const COLOR_ORDER: VarietyColor[] = ["red", "orange", "yellow", "green"];
-const DEFAULT_KG_PER_CASE = 11;
 
 function roundTo(value: number, decimals: number) {
   const factor = 10 ** decimals;
@@ -477,7 +473,9 @@ export function YieldAnalyticsPage() {
   const currentYear = new Date().getFullYear();
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [entries, setEntries] = useState<YieldEntry[]>([]);
-  const [colorCaseEntries, setColorCaseEntries] = useState<ColorCaseEntry[]>([]);
+  // Shipped totals for the selected period, from the one shipped-yield calculation.
+  const [shipped, setShipped] = useState<ShippedYieldResponse | null>(null);
+  const [shippedError, setShippedError] = useState<string | null>(null);
   const [varietyMeta, setVarietyMeta] = useState<VarietyMeta[]>([]);
   const [wasteImports, setWasteImports] = useState<WasteImport[]>([]);
   /** Physical growing-area footprints for farm-wide kg/m2; null when they could not be loaded. */
@@ -504,10 +502,9 @@ export function YieldAnalyticsPage() {
       setError(null);
 
       try {
-        const [summaryRes, entriesRes, colorCaseRes, varietiesRes, wasteRes, areasRes] = await Promise.all([
+        const [summaryRes, entriesRes, varietiesRes, wasteRes, areasRes] = await Promise.all([
           apiFetch("/api/yield-analytics/summary"),
           apiFetch("/api/yield-entries"),
-          apiFetch("/api/color-case-entries"),
           apiFetch("/api/varieties"),
           apiFetch("/api/waste-imports"),
           apiFetch("/api/yield-analytics/area-footprints")
@@ -522,11 +519,6 @@ export function YieldAnalyticsPage() {
 
         const summaryData = (await summaryRes.json()) as AnalyticsSummary;
         const entriesData = (await entriesRes.json()) as YieldEntry[];
-
-        let colorCaseData: ColorCaseEntry[] = [];
-        if (colorCaseRes.ok) {
-          colorCaseData = (await colorCaseRes.json()) as ColorCaseEntry[];
-        }
 
         let varietiesData: VarietyMeta[] = [];
         if (varietiesRes.ok) {
@@ -573,7 +565,6 @@ export function YieldAnalyticsPage() {
           setAreaFootprints(areasData);
           setSummary(summaryData);
           setEntries(entriesData);
-          setColorCaseEntries(colorCaseData);
           setVarietyMeta(varietiesData);
           setWasteImports(wasteData);
         }
@@ -1042,101 +1033,59 @@ export function YieldAnalyticsPage() {
     downloadBlobFile(pdfBlob, `${varietySummaryExportBaseName}.pdf`);
   }
 
+  // The analytics filter as an ISO week range for the shipped-yield calculation.
+  const shippedRange = useMemo(() => {
+    if (weekFilterMode === "single-week") return { fromYear: selectedYear, fromWeek: selectedWeek, toYear: selectedYear, toWeek: selectedWeek };
+    if (weekFilterMode === "week-range") {
+      return { fromYear: selectedYear, fromWeek: Math.min(fromWeek, toWeek), toYear: selectedYear, toWeek: Math.max(fromWeek, toWeek) };
+    }
+    return { fromYear: selectedYear, fromWeek: 1, toYear: selectedYear };
+  }, [selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]);
+
+  useEffect(() => {
+    let active = true;
+    setShippedError(null);
+    fetchShippedYield(shippedRange)
+      .then((result) => {
+        if (active) setShipped(result);
+      })
+      .catch((err: unknown) => {
+        if (active) setShippedError(err instanceof Error ? err.message : "Failed to load shipped totals.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [shippedRange, reloadKey]);
+
+  // Harvested kg by colour for the filtered weeks, against the same weeks' shipped cases and kg.
   const reconciliationRows = useMemo<ReconciliationRow[]>(() => {
-    const harvestedByColor: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
+    const harvestedByColor: Record<VarietyColor, number> = { red: 0, orange: 0, yellow: 0, green: 0 };
+    const colorByVarietyId = new Map(varietyMeta.map((v) => [v.id, v.color]));
 
-    const shippedCasesByColor: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-
-    const weightedCaseKgNumerator: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-
-    const weightedCaseKgDenominator: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-
-    const varietyById = new Map<string, VarietyMeta>();
-    for (const variety of varietyMeta) {
-      varietyById.set(variety.id, variety);
-    }
-
-    for (const row of summary?.rows ?? []) {
-      const harvestedKg = Number(row.total_kg);
-      if (!Number.isFinite(harvestedKg) || harvestedKg <= 0) {
-        continue;
-      }
-
-      const variety = varietyById.get(row.variety_id);
-      const color = variety?.color;
-      if (!color) {
-        continue;
-      }
-
+    for (const entry of filteredEntries) {
+      const harvestedKg = Number(entry.total_kg);
+      const color = colorByVarietyId.get(entry.variety_id);
+      if (!color || !Number.isFinite(harvestedKg) || harvestedKg <= 0) continue;
       harvestedByColor[color] += harvestedKg;
-
-      if (variety.case_kg > 0) {
-        weightedCaseKgNumerator[color] += harvestedKg * variety.case_kg;
-        weightedCaseKgDenominator[color] += harvestedKg;
-      }
-    }
-
-    for (const entry of colorCaseEntries) {
-      const color = normalizeColor(entry.color);
-      if (!color) {
-        continue;
-      }
-
-      const shippedCases = Number(entry.total_cases);
-      if (!Number.isFinite(shippedCases) || shippedCases < 0) {
-        continue;
-      }
-
-      shippedCasesByColor[color] += shippedCases;
     }
 
     return COLOR_ORDER.map((color) => {
-      const harvestedKg = harvestedByColor[color] ?? 0;
-      const shippedCases = shippedCasesByColor[color] ?? 0;
-      const denominator = weightedCaseKgDenominator[color] ?? 0;
-      const isKgPerCaseEstimated = denominator <= 0;
-      const estimatedKgPerCase = isKgPerCaseEstimated
-        ? DEFAULT_KG_PER_CASE
-        : weightedCaseKgNumerator[color] / denominator;
-      const estimatedShippedKg = shippedCases * estimatedKgPerCase;
-      const remainingKg = harvestedKg - estimatedShippedKg;
-
+      const harvestedKg = harvestedByColor[color];
+      const shippedKg = shipped?.totals.colors[color].kg ?? 0;
       return {
         color,
         harvestedKg,
-        shippedCases,
-        estimatedKgPerCase,
-        isKgPerCaseEstimated,
-        estimatedShippedKg,
-        remainingKg
+        shippedCases: shipped?.totals.colors[color].cases ?? 0,
+        shippedKg,
+        remainingKg: harvestedKg - shippedKg
       };
     });
-  }, [summary, colorCaseEntries, varietyMeta]);
+  }, [filteredEntries, shipped, varietyMeta]);
 
   const averageRow = filteredVarietySummary.averageRow;
   const hasSummaryRows = filteredVarietySummary.rows.length > 0;
   const activeFilterLabel = `${selectedYear} · ${varietySummaryWeekLabel}`;
-  const hasEstimatedKgPerCase = reconciliationRows.some((row) => row.isKgPerCaseEstimated);
+  const shippedIncomplete = shipped ? incompleteShippedText(shipped.totals) : null;
 
   return (
     <section className="page-shell yield-analytics-page ya-page">
@@ -1467,7 +1416,7 @@ export function YieldAnalyticsPage() {
             <h2 id="ya-harvest-heading" className="ya-card-title">
               Harvest vs Shipped
             </h2>
-            <p className="ya-card-description">Harvested kg by pepper colour against shipped cases, across all recorded data. Not affected by the filters.</p>
+            <p className="ya-card-description">Harvested kg by pepper colour against shipped cases and kg for the selected period ({activeFilterLabel}).</p>
           </div>
         </div>
 
@@ -1484,8 +1433,7 @@ export function YieldAnalyticsPage() {
                     <th scope="col">Color</th>
                     <th scope="col">Harvested kg</th>
                     <th scope="col">Shipped Cases</th>
-                    <th scope="col">Est. kg / Case</th>
-                    <th scope="col">Estimated Shipped kg</th>
+                    <th scope="col">Shipped kg</th>
                     <th scope="col">Remaining kg</th>
                   </tr>
                 </thead>
@@ -1498,17 +1446,20 @@ export function YieldAnalyticsPage() {
                       </th>
                       <td>{roundTo(row.harvestedKg, 1)}</td>
                       <td>{roundTo(row.shippedCases, 1)}</td>
-                      <td>{row.isKgPerCaseEstimated ? `~${roundTo(row.estimatedKgPerCase, 1)}` : roundTo(row.estimatedKgPerCase, 1)}</td>
-                      <td>{roundTo(row.estimatedShippedKg, 1)}</td>
+                      <td>{roundTo(row.shippedKg, 1)}</td>
                       <td>{roundTo(row.remainingKg, 1)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {hasEstimatedKgPerCase ? (
-              <p className="ya-footnote">~ Estimated with the default {DEFAULT_KG_PER_CASE} kg per case where no variety case weight is set.</p>
+            {shippedError ? <p className="ya-unavailable">{shippedError}</p> : null}
+            {shipped && shipped.totals.mixedCases > 0 ? (
+              <p className="ya-footnote">
+                Plus {roundTo(shipped.totals.mixedCases, 1)} mixed/rainbow cases, counted once — their kg is included in each colour above.
+              </p>
             ) : null}
+            {shippedIncomplete ? <p className="ya-footnote ya-footnote--warn">{shippedIncomplete}</p> : null}
           </>
         ) : null}
       </section>

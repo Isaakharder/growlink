@@ -96,18 +96,24 @@ const ENTRIES = [
   { varietyId: "vb", totalKg: 250, week: 32, year: 2026 }, // camelCase fields are accepted
   { variety_id: "vf", year: 2026, week: 31, total_kg: 99 } // variety without a colour
 ];
-const CASE_ENTRIES = [
-  { color: "RED", total_cases: 100, case_weight_kg: 5, total_kg: 500 },
-  { color: "green", total_cases: 10, case_weight_kg: 5 }, // no total_kg: counts as 0
-  { color: "orange", total_cases: -1, case_weight_kg: 5, total_kg: 40 }, // negative: dropped
-  { color: "red", total_cases: 5, case_weight_kg: null, total_kg: 25 } // null weight reads as 0, so it counts
-];
+// Shipped kg comes from the authoritative shipped-yield calculation (GET /api/shipped-yield).
+const colorTotals = (kg: Partial<Record<"red" | "orange" | "yellow" | "green", number>>) =>
+  Object.fromEntries((["red", "orange", "yellow", "green"] as const).map((c) => [c, { kg: kg[c] ?? 0, cases: 0 }]));
+const SHIPPED_YIELD = {
+  sync: null,
+  weeks: [],
+  totals: {
+    colors: colorTotals({ red: 525, green: 0 }),
+    mixedCases: 0, shippedCases: 110, measuredCases: 110, unmeasuredCases: 0, attentionCases: 0, kg: 525,
+    complete: true, nonPepper: [], weekCount: 2, packWeeks: 0, legacyWeeks: 2
+  }
+};
 function route(path: string) {
   if (path === "/api/irrigation-setup") return { groups: state.groups ?? GROUPS };
   if (path === "/api/irrigation/logs?days=365") return LOGS;
   if (path === "/api/yield-entries") return ENTRIES;
   if (path === "/api/varieties") return VARIETIES;
-  if (path === "/api/color-case-entries") return CASE_ENTRIES;
+  if (path.startsWith("/api/shipped-yield")) return SHIPPED_YIELD;
   if (path === "/api/mobile/daily-yield/today-projection") return state.projection ?? { status: "no_data" };
   return [];
 }
@@ -212,7 +218,7 @@ describe("desktop Greenhouse Snapshot — pinned values", () => {
 });
 
 describe("desktop Yield by Color — pinned values", () => {
-  it("totals active varieties' kg and area by colour, with shipped kg from case entries", async () => {
+  it("totals active varieties' kg and area by colour, with shipped kg from the shipped-yield calculation", async () => {
     await renderDashboard();
     const pills = Array.from(card("Yield by Color").querySelectorAll(".dashboard-yield-color-pill")).map((p) => [
       p.querySelector(".color-badge")!.textContent,

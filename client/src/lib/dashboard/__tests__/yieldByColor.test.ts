@@ -5,10 +5,10 @@ import {
   buildYieldTrendPoints,
   formatColorKgPerM2,
   normalizeColor,
-  normalizeColorCaseEntries,
   normalizeYieldEntries,
   type ColorYieldVariety
 } from "../yieldByColor";
+import { shippedKgByColor } from "../../shippedYield";
 
 const v = (id: string, color: string | null, area_m2: number | string, status: "active" | "inactive" = "active") =>
   ({ id, color, area_m2, status }) as ColorYieldVariety;
@@ -37,26 +37,17 @@ describe("normalizers", () => {
     ]);
   });
 
-  it("normalizeColorCaseEntries drops negative or missing cases/weights; a missing total kg is 0", () => {
-    expect(
-      normalizeColorCaseEntries([
-        { color: "RED", total_cases: 2, case_weight_kg: 5, total_kg: 10 },
-        { color: "green", totalCases: "3", caseWeightKg: 4 },
-        { color: "red", total_cases: -1, case_weight_kg: 5 },
-        { color: "red", total_cases: 1 },
-        { color: "red", total_cases: 1, case_weight_kg: null, total_kg: 7 }
-      ])
-    ).toEqual([
-      { color: "RED", total_cases: 2, case_weight_kg: 5, total_kg: 10 },
-      { color: "green", total_cases: 3, case_weight_kg: 4, total_kg: 0 },
-      // Number(null) is 0, so a null weight is kept (as the Dashboard always has).
-      { color: "red", total_cases: 1, case_weight_kg: 0, total_kg: 7 }
-    ]);
+  it("shippedKgByColor reads positive kg per colour from a shipped-yield body, and nothing from a malformed one", () => {
+    const colors = { red: { kg: 150, cases: 30 }, orange: { kg: 0, cases: 0 }, yellow: { kg: -2, cases: 0 }, green: { kg: "12.5", cases: 2 } };
+    expect(shippedKgByColor({ totals: { colors } })).toEqual({ red: 150, green: 12.5 });
+    expect(shippedKgByColor([])).toEqual({});
+    expect(shippedKgByColor(null)).toEqual({});
+    expect(shippedKgByColor({ totals: {} })).toEqual({});
   });
 });
 
 describe("buildColorYieldSummary", () => {
-  it("sums active varieties' kg and positive area by colour, and shipped kg from cases", () => {
+  it("sums active varieties' kg and positive area by colour; shipped kg comes from the shipped-yield calculation", () => {
     const varieties = [v("a", "red", 1000), v("b", "red", "500"), v("c", "orange", 0), v("d", "yellow", 800, "inactive"), v("e", "Green ", -3)];
     const entries = [
       { variety_id: "a", year: 2026, week: 1, total_kg: 1000 },
@@ -65,8 +56,7 @@ describe("buildColorYieldSummary", () => {
       { variety_id: "d", year: 2026, week: 1, total_kg: 300 },
       { variety_id: "e", year: 2026, week: 1, total_kg: 50 }
     ];
-    const cases = [{ color: "Red", total_cases: 1, case_weight_kg: 5, total_kg: 150 }];
-    expect(buildColorYieldSummary(entries, varieties, cases)).toEqual([
+    expect(buildColorYieldSummary(entries, varieties, { red: 150 })).toEqual([
       { color: "red", totalKg: 1500, totalAreaM2: 1500, harvestedKgPerM2: 1, exportedKg: 150, exportedKgPerM2: 0.1 },
       { color: "orange", totalKg: 200, totalAreaM2: 0, harvestedKgPerM2: null, exportedKg: 0, exportedKgPerM2: null },
       { color: "yellow", totalKg: 0, totalAreaM2: 0, harvestedKgPerM2: null, exportedKg: 0, exportedKgPerM2: null },

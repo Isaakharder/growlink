@@ -1,16 +1,30 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { roundTo } from "../lib/roundTo";
 import {
-  CASE_COLORS,
   buildCaseEntryYearOptions,
-  buildWeeklyCaseCards,
   formatCaseTotal,
-  getVisibleColorRows,
   requestDocklinkCaseSync,
-  weeklyCaseTotal
+  requestDocklinkPackSync
 } from "../lib/yieldEntries/caseTotals";
+import { fetchShippedYield } from "../lib/shippedYieldApi";
+import {
+  PEPPER_COLORS,
+  formatShippedKg,
+  WEEK_SOURCE_LABELS,
+  incompleteShippedText,
+  isPackWeek,
+  notCountedText,
+  type ShippedYieldResponse
+} from "../lib/shippedYield";
+import { LazyRoute } from "../components/LazyRoute";
+
+// The weekly pack panel is only used here; loading it on demand keeps it out of
+// the main bundle, which sits close to the PWA's 2 MiB precache limit.
+const PackShipmentsWeek = lazy(() => import("./PackShipmentsWeek").then((m) => ({ default: m.PackShipmentsWeek })));
+const RebuildRangesPanel = lazy(() => import("./RebuildRangesPanel").then((m) => ({ default: m.RebuildRangesPanel })));
+const ManualPackEntryModal = lazy(() => import("./ManualPackEntryModal").then((m) => ({ default: m.ManualPackEntryModal })));
 
 type VarietyColor = "red" | "orange" | "yellow" | "green";
 
@@ -43,21 +57,8 @@ type WeekOption = {
   label: string;
 };
 
-type VarietySetting = {
-  color: VarietyColor | string | null;
-  area_m2: number;
-  case_kg: number;
-  status?: "active" | "inactive";
-};
-
-type ColorVarietyStats = {
-  totalAreaM2: number;
-  avgCaseWeight: number | null;
-};
-
 const OPTIONS_URL = "/api/case-entry-options";
 const ENTRIES_URL = "/api/color-case-entries";
-const VARIETIES_URL = "/api/varieties";
 
 function getWeekStartSunday(year: number, week: number) {
   const jan1 = new Date(year, 0, 1);
@@ -135,10 +136,16 @@ export function CasesEntryTab() {
   const currentYear = new Date().getFullYear();
   const [colors, setColors] = useState<VarietyColor[]>([]);
   const [entries, setEntries] = useState<CaseEntry[]>([]);
-  const [varieties, setVarieties] = useState<VarietySetting[]>([]);
+  // The authoritative weekly shipped totals for the selected year (packs or colour totals per week).
+  const [shipped, setShipped] = useState<ShippedYieldResponse | null>(null);
+  const [shippedError, setShippedError] = useState<string | null>(null);
+  const [packRefreshKey, setPackRefreshKey] = useState(0);
   const [isRecentExpanded, setIsRecentExpanded] = useState(false);
   const [selectedSummaryYear, setSelectedSummaryYear] = useState(String(currentYear));
+  // Colour-total rows can still be corrected; new case entries are per Product Pack (ManualPackEntryModal).
   const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
+  const [isPackEntryOpen, setIsPackEntryOpen] = useState(false);
+  const [packEntryStatus, setPackEntryStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -160,10 +167,12 @@ export function CasesEntryTab() {
     [form.total_cases, form.case_weight_kg]
   );
 
-  const caseEntryYearOptions = useMemo(
-    () => buildCaseEntryYearOptions(entries, currentYear),
-    [currentYear, entries]
-  );
+  const caseEntryYearOptions = useMemo(() => {
+    const packYears = [shipped?.sync?.firstWeek?.isoYear, shipped?.sync?.lastWeek?.isoYear]
+      .filter((y): y is number => typeof y === "number")
+      .map((year) => ({ year }));
+    return buildCaseEntryYearOptions([...entries, ...packYears], currentYear);
+  }, [currentYear, entries, shipped]);
 
   useEffect(() => {
     const selected = Number(selectedSummaryYear);
@@ -172,9 +181,23 @@ export function CasesEntryTab() {
     }
   }, [currentYear, caseEntryYearOptions, selectedSummaryYear]);
 
+  const loadShipped = useCallback(async (year: number) => {
+    setShippedError(null);
+    try {
+      setShipped(await fetchShippedYield({ fromYear: year, toYear: year }));
+    } catch (loadError) {
+      setShippedError(loadError instanceof Error ? loadError.message : "Failed to load weekly totals");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadShipped(Number(selectedSummaryYear));
+  }, [loadShipped, selectedSummaryYear]);
+
+  // Newest week first; weeks with no pepper cases have no card.
   const weeklyCaseCards = useMemo(
-    () => buildWeeklyCaseCards(entries, Number(selectedSummaryYear)),
-    [entries, selectedSummaryYear]
+    () => [...(shipped?.weeks ?? [])].filter((w) => w.shippedCases > 0).sort((a, b) => b.isoWeek - a.isoWeek),
+    [shipped]
   );
 
   const recentWeekKeys = useMemo(() => {
@@ -241,102 +264,13 @@ export function CasesEntryTab() {
     }).slice(0, 7);
   }, [entries, isRecentExpanded, latestWeekKey, recentSixWeekKeys]);
 
-  const varietyStatsByColor = useMemo(() => {
-    const statsMap = new Map<VarietyColor, ColorVarietyStats>();
-
-    for (const color of CASE_COLORS) {
-      statsMap.set(color, {
-        totalAreaM2: 0,
-        avgCaseWeight: null
-      });
-    }
-
-    const weightedNumerator: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-    const weightedDenominator: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-    const simpleSum: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-    const simpleCount: Record<VarietyColor, number> = {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-
-    for (const variety of varieties) {
-      if (variety.status && variety.status !== "active") {
-        continue;
-      }
-
-      const color = normalizeColor(variety.color);
-      if (!color) {
-        continue;
-      }
-
-      const area = Number(variety.area_m2);
-      const caseKg = Number(variety.case_kg);
-
-      if (Number.isFinite(area) && area > 0) {
-        const current = statsMap.get(color);
-        if (current) {
-          current.totalAreaM2 += area;
-        }
-      }
-
-      if (!Number.isFinite(caseKg) || caseKg < 0) {
-        continue;
-      }
-
-      simpleSum[color] += caseKg;
-      simpleCount[color] += 1;
-
-      if (Number.isFinite(area) && area > 0) {
-        weightedNumerator[color] += caseKg * area;
-        weightedDenominator[color] += area;
-      }
-    }
-
-    for (const color of CASE_COLORS) {
-      const current = statsMap.get(color);
-      if (!current) {
-        continue;
-      }
-
-      if (weightedDenominator[color] > 0) {
-        current.avgCaseWeight = weightedNumerator[color] / weightedDenominator[color];
-      } else if (simpleCount[color] > 0) {
-        current.avgCaseWeight = simpleSum[color] / simpleCount[color];
-      } else {
-        current.avgCaseWeight = null;
-      }
-    }
-
-    return statsMap;
-  }, [varieties]);
 
   async function fetchOptionsAndEntries() {
     setLoading(true);
     setError(null);
 
     try {
-      const [optionsResponse, entriesResponse, varietiesResponse] = await Promise.all([
-        apiFetch(OPTIONS_URL),
-        apiFetch(ENTRIES_URL),
-        apiFetch(VARIETIES_URL)
-      ]);
+      const [optionsResponse, entriesResponse] = await Promise.all([apiFetch(OPTIONS_URL), apiFetch(ENTRIES_URL)]);
 
       if (!optionsResponse.ok) {
         throw new Error(`Failed to load options (${optionsResponse.status})`);
@@ -352,14 +286,8 @@ export function CasesEntryTab() {
 
       const entriesData = (await entriesResponse.json()) as CaseEntry[];
 
-      let varietiesData: VarietySetting[] = [];
-      if (varietiesResponse.ok) {
-        varietiesData = (await varietiesResponse.json()) as VarietySetting[];
-      }
-
       setColors(optionsData.colors);
       setEntries(entriesData);
-      setVarieties(varietiesData);
 
       setForm((current) => {
         const hasCurrentColor = optionsData.colors.includes(current.color);
@@ -381,6 +309,8 @@ export function CasesEntryTab() {
   useEffect(() => {
     void fetchOptionsAndEntries();
   }, []);
+
+  const shippedSync = shipped?.sync ?? null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -465,6 +395,7 @@ export function CasesEntryTab() {
 
       const entriesData = (await entriesResponse.json()) as CaseEntry[];
       setEntries(entriesData);
+      void loadShipped(Number(selectedSummaryYear));
     } catch (submitError) {
       setError(
         submitError instanceof Error ? submitError.message : "Failed to save entry"
@@ -489,16 +420,14 @@ export function CasesEntryTab() {
   }
 
   function openEntryModal() {
-    setError(null);
-    setEditingId(null);
-    setForm({
-      color: colors[0] ?? "red",
-      year: String(currentYear),
-      week: String(getCurrentWeek(currentYear)),
-      total_cases: "0",
-      case_weight_kg: "0"
-    });
-    setIsEntryModalOpen(true);
+    setPackEntryStatus(null);
+    setIsPackEntryOpen(true);
+  }
+
+  function packEntriesChanged(message: string | null) {
+    if (message) setPackEntryStatus(message);
+    void loadShipped(Number(selectedSummaryYear));
+    setPackRefreshKey((k) => k + 1);
   }
 
   function closeEntryModal() {
@@ -539,6 +468,7 @@ export function CasesEntryTab() {
 
       const entriesData = (await entriesResponse.json()) as CaseEntry[];
       setEntries(entriesData);
+      void loadShipped(Number(selectedSummaryYear));
     } catch (deleteError) {
       setError(
         deleteError instanceof Error ? deleteError.message : "Failed to delete entry"
@@ -546,12 +476,15 @@ export function CasesEntryTab() {
     }
   }
 
+  // Colour totals (legacy weeks) first, then pack shipments. A pack export
+  // DockLink hasn't deployed yet is reported, not treated as a failure.
   async function syncDocklinkCases() {
     setSyncing(true);
     setSyncStatus(null);
 
     try {
       const message = await requestDocklinkCaseSync();
+      const packs = await requestDocklinkPackSync();
 
       const entriesResponse = await apiFetch(ENTRIES_URL);
       if (!entriesResponse.ok) {
@@ -560,7 +493,10 @@ export function CasesEntryTab() {
 
       const entriesData = (await entriesResponse.json()) as CaseEntry[];
       setEntries(entriesData);
-      setSyncStatus({ kind: "success", message: message ?? "DockLink cases synced" });
+      void loadShipped(Number(selectedSummaryYear));
+      setPackRefreshKey((k) => k + 1);
+      const combined = [message ?? "DockLink cases synced", packs.message].filter(Boolean).join(" · ");
+      setSyncStatus({ kind: packs.ok ? "success" : "error", message: combined });
     } catch (syncError) {
       setSyncStatus({
         kind: "error",
@@ -585,9 +521,23 @@ export function CasesEntryTab() {
         </button>
       </div>
 
+      {packEntryStatus ? (
+        <p className="cases-sync-status cases-sync-status--success" role="status">
+          {packEntryStatus}
+        </p>
+      ) : null}
+
+      <LazyRoute>
+        <PackShipmentsWeek refreshKey={packRefreshKey} onChanged={() => void loadShipped(Number(selectedSummaryYear))} />
+      </LazyRoute>
+
+      <LazyRoute>
+        <RebuildRangesPanel refreshKey={packRefreshKey} onChanged={() => packEntriesChanged(null)} />
+      </LazyRoute>
+
       <div className="coming-soon-card yield-entry-recent-entries">
         <div className="recent-entries-header">
-          <h2>Recent Entries</h2>
+          <h2>Colour Totals</h2>
           <div className="recent-entries-actions">
             {recentWeekKeys.length > 1 ? (
               <button
@@ -624,7 +574,12 @@ export function CasesEntryTab() {
           </p>
         ) : null}
 
-        {entries.length === 0 && <p>No case entries yet.</p>}
+        <p className="recent-entries-helper-text">
+          Weekly colour totals from the DockLink colour sync and older colour entries. New case entries are made per Product Pack with Add Case
+          Entry.
+        </p>
+
+        {entries.length === 0 && <p>No colour totals yet.</p>}
 
         {entries.length > 0 && displayedRecentEntries.length > 0 && (
           <>
@@ -646,43 +601,15 @@ export function CasesEntryTab() {
               <tbody>
                 {displayedRecentEntries.map((entry) => {
                   const source = entry.source || "manual";
-                  const varietyStats = varietyStatsByColor.get(entry.color);
                   const totalCases = Number(entry.total_cases);
-                  const fallbackCaseWeight =
-                    Number.isFinite(Number(entry.case_weight_kg)) && Number(entry.case_weight_kg) >= 0
-                      ? Number(entry.case_weight_kg)
-                      : 0;
-
-                  const displayCaseWeight =
-                    source === "docklink"
-                      ? varietyStats?.avgCaseWeight ?? fallbackCaseWeight
-                      : fallbackCaseWeight;
-                  const safeCaseWeight =
-                    Number.isFinite(displayCaseWeight) && displayCaseWeight >= 0
-                      ? displayCaseWeight
-                      : 0;
+                  const caseWeight = Number(entry.case_weight_kg);
                   const safeTotalCases = Number.isFinite(totalCases) && totalCases >= 0 ? totalCases : 0;
-                  const displayTotalKg =
-                    source === "docklink"
-                      ? safeTotalCases * safeCaseWeight
-                      : Number.isFinite(Number(entry.total_kg)) && Number(entry.total_kg) >= 0
-                        ? Number(entry.total_kg)
-                        : 0;
-                  const displayAreaM2 =
-                    source === "docklink"
-                      ? varietyStats?.totalAreaM2 ?? 0
-                      : Number.isFinite(Number(entry.color_area_m2)) && Number(entry.color_area_m2) > 0
-                        ? Number(entry.color_area_m2)
-                        : 0;
-                  const roundedDisplayKg = Math.round(displayTotalKg);
-                  const displayKgPerM2 =
-                    displayAreaM2 > 0
-                      ? roundedDisplayKg / displayAreaM2
-                      : source === "docklink"
-                        ? null
-                        : Number.isFinite(Number(entry.kg_per_m2)) && Number(entry.kg_per_m2) >= 0
-                          ? Number(entry.kg_per_m2)
-                          : null;
+                  const hasWeight = Number.isFinite(caseWeight) && caseWeight > 0;
+                  const storedKg = Number(entry.total_kg);
+                  const storedKgPerM2 = Number(entry.kg_per_m2);
+                  // Another source counts for this week (DockLink pack totals or manual pack entries); the row is kept but not counted.
+                  const weekSource = shipped?.weeks.find((w) => w.isoYear === Number(entry.year) && w.isoWeek === Number(entry.week))?.source;
+                  const superseded = isPackWeek(shippedSync, Number(entry.year), Number(entry.week)) || weekSource === "manual";
 
                   return (
                     <tr key={entry.id}>
@@ -690,16 +617,21 @@ export function CasesEntryTab() {
                       <td>{entry.year}</td>
                       <td>{entry.week}</td>
                       <td>{formatRounded(safeTotalCases, 3)}</td>
-                      <td>
-                        {formatRounded(safeCaseWeight, 2)}
-                        {source === "docklink" && varietyStats?.avgCaseWeight != null ? " (avg)" : ""}
-                      </td>
-                      <td>{String(roundedDisplayKg)}</td>
-                      <td>{displayKgPerM2 === null ? "—" : formatRounded(displayKgPerM2, 3)}</td>
+                      <td>{hasWeight ? formatRounded(caseWeight, 2) : "Missing"}</td>
+                      <td>{hasWeight && Number.isFinite(storedKg) ? String(Math.round(storedKg)) : "—"}</td>
+                      <td>{hasWeight && Number.isFinite(storedKgPerM2) && storedKgPerM2 > 0 ? formatRounded(storedKgPerM2, 3) : "—"}</td>
                       <td>
                         <span className={`source-badge source-${source}`}>
                           {source.charAt(0).toUpperCase() + source.slice(1)}
                         </span>
+                        {superseded ? (
+                          <span
+                            className="source-badge source-superseded"
+                            title={`This ISO week counts ${weekSource === "manual" ? "manual pack entries" : "DockLink pack totals"}; this colour row is kept but not counted.`}
+                          >
+                            {weekSource === "manual" ? "Superseded by manual pack entries" : "Superseded by pack totals"}
+                          </span>
+                        ) : null}
                       </td>
                       <td>
                         <div className="row-actions">
@@ -745,36 +677,57 @@ export function CasesEntryTab() {
           </label>
         </div>
 
+        {shippedError ? <p className="form-error">{shippedError}</p> : null}
+
         {weeklyCaseCards.length === 0 ? (
           <p>No case totals found for {selectedSummaryYear}.</p>
         ) : (
           <div className="weekly-docklink-cards">
             {weeklyCaseCards.map((card) => {
-              const visibleColorRows = getVisibleColorRows(card.totals);
-              const weekTotal = weeklyCaseTotal(visibleColorRows);
-
+              const incomplete = incompleteShippedText(card);
               return (
-                <article key={`${card.year}-${card.week}`} className="weekly-docklink-card">
-                  <h3>Week {card.week} · {card.year}</h3>
+                <article key={`${card.isoYear}-${card.isoWeek}`} className="weekly-docklink-card">
+                  <h3>Week {card.isoWeek} · {card.isoYear}</h3>
+                  <p className="weekly-docklink-source">{WEEK_SOURCE_LABELS[card.source]}</p>
 
                   <dl className="weekly-docklink-rows">
-                    {visibleColorRows.map((row) => (
-                      <div key={row.color} className="weekly-docklink-row">
+                    {PEPPER_COLORS.filter((color) => card.colors[color].cases > 0).map((color) => (
+                      <div key={color} className="weekly-docklink-row">
                         <dt>
-                          <span
-                            className={`weekly-docklink-dot weekly-docklink-dot-${row.color}`}
-                          />
-                          {row.color.charAt(0).toUpperCase() + row.color.slice(1)}
+                          <span className={`weekly-docklink-dot weekly-docklink-dot-${color}`} />
+                          {color.charAt(0).toUpperCase() + color.slice(1)}
                         </dt>
-                        <dd>{formatCaseTotal(row.total)}</dd>
+                        <dd>{formatCaseTotal(card.colors[color].cases)}</dd>
                       </div>
                     ))}
+                    {card.mixedCases > 0 ? (
+                      <div className="weekly-docklink-row">
+                        <dt>Mixed / rainbow</dt>
+                        <dd>{formatCaseTotal(card.mixedCases)}</dd>
+                      </div>
+                    ) : null}
+                    {card.attentionCases > 0 ? (
+                      <div className="weekly-docklink-row">
+                        <dt>Needs attention</dt>
+                        <dd>{formatCaseTotal(card.attentionCases)}</dd>
+                      </div>
+                    ) : null}
 
                     <div className="weekly-docklink-row weekly-docklink-total-row">
                       <dt>Total</dt>
-                      <dd>{formatCaseTotal(weekTotal)}</dd>
+                      <dd>{formatCaseTotal(card.shippedCases)}</dd>
+                    </div>
+                    <div className="weekly-docklink-row weekly-docklink-kg-row">
+                      <dt>Shipped kg</dt>
+                      <dd>{formatShippedKg(card.kg)}</dd>
                     </div>
                   </dl>
+                  {incomplete ? <p className="weekly-docklink-incomplete">{incomplete}</p> : null}
+                  {card.needsSourceDecision ? (
+                    <p className="weekly-docklink-incomplete">Has manual pack entries and colour totals: choose which counts on the Weekly Pack Shipments panel.</p>
+                  ) : notCountedText(card) ? (
+                    <p className="weekly-docklink-not-counted">{notCountedText(card)}</p>
+                  ) : null}
                 </article>
               );
             })}
@@ -782,9 +735,22 @@ export function CasesEntryTab() {
         )}
       </div>
 
+      {isPackEntryOpen ? (
+        <LazyRoute>
+          <ManualPackEntryModal
+            mode={{ kind: "create" }}
+            onClose={() => setIsPackEntryOpen(false)}
+            onSaved={(message) => {
+              setIsPackEntryOpen(false);
+              packEntriesChanged(message);
+            }}
+          />
+        </LazyRoute>
+      ) : null}
+
       {isEntryModalOpen ? (
         <ModalOverlay onClose={closeEntryModal} contentClassName="variety-modal" titleId="enter-cases-title">
-            <h2 id="enter-cases-title">Enter Cases</h2>
+            <h2 id="enter-cases-title">Edit Colour Total</h2>
 
             {error ? <p className="form-error">{error}</p> : null}
             {loading ? <p>Loading...</p> : null}

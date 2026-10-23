@@ -22,12 +22,8 @@ export type ColorYieldVariety = {
   status: "active" | "inactive";
 };
 
-export type ColorCaseEntry = {
-  color: VarietyColor | string | null;
-  total_cases: number;
-  case_weight_kg: number;
-  total_kg: number;
-};
+/** Shipped kg per colour, from the authoritative shipped-yield calculation (GET /api/shipped-yield). */
+export type ShippedKgByColor = Partial<Record<VarietyColor, number>>;
 
 export type ColorYieldSummary = {
   color: VarietyColor;
@@ -139,47 +135,14 @@ export function normalizeYieldEntries(input: unknown): ColorYieldEntry[] {
   return result;
 }
 
-/** /api/color-case-entries → entries with cases and case weight ≥ 0. */
-export function normalizeColorCaseEntries(input: unknown): ColorCaseEntry[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  const result: ColorCaseEntry[] = [];
-
-  for (const rawEntry of input) {
-    if (!rawEntry || typeof rawEntry !== "object") {
-      continue;
-    }
-
-    const entry = rawEntry as Record<string, unknown>;
-    const totalCases = readNumberField(entry, ["total_cases", "totalCases"]);
-    const caseWeightKg = readNumberField(entry, ["case_weight_kg", "caseWeightKg"]);
-    const totalKg = readNumberField(entry, ["total_kg", "totalKg"]) ?? 0;
-
-    if (totalCases === null || caseWeightKg === null || totalCases < 0 || caseWeightKg < 0) {
-      continue;
-    }
-
-    result.push({
-      color: (entry.color as VarietyColor | string | null) ?? null,
-      total_cases: totalCases,
-      case_weight_kg: caseWeightKg,
-      total_kg: totalKg
-    });
-  }
-
-  return result;
-}
-
 /**
  * Per colour, in COLOR_ORDER: kg and area of the ACTIVE varieties, shipped
- * kg from the colour case entries, and each per m² (null without area).
+ * kg from the shipped-yield calculation, and each per m² (null without area).
  */
 export function buildColorYieldSummary(
   entries: ColorYieldEntry[],
   varieties: ColorYieldVariety[],
-  colorCaseEntries: ColorCaseEntry[]
+  shippedKgByColor: ShippedKgByColor
 ): ColorYieldSummary[] {
   const activeVarieties = (varieties ?? []).filter(
     (variety) => variety.status === "active"
@@ -221,21 +184,9 @@ export function buildColorYieldSummary(
     bucket.totalKg += totalKg;
   }
 
-  for (const entry of colorCaseEntries ?? []) {
-    const color = normalizeColor(entry.color);
-    const totalCases = Number(entry.total_cases);
-    const caseWeightKg = Number(entry.case_weight_kg);
-
-    if (!color || !Number.isFinite(totalCases) || !Number.isFinite(caseWeightKg)) {
-      continue;
-    }
-
-    if (totalCases < 0 || caseWeightKg < 0) {
-      continue;
-    }
-
-    const bucket = totalsByColor.get(color)!;
-    bucket.exportedKg += entry.total_kg;
+  for (const color of COLOR_ORDER) {
+    const shippedKg = Number(shippedKgByColor?.[color] ?? 0);
+    totalsByColor.get(color)!.exportedKg = Number.isFinite(shippedKg) && shippedKg > 0 ? shippedKg : 0;
   }
 
   return COLOR_ORDER.map((color) => {
