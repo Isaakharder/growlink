@@ -77,10 +77,16 @@ const FIXTURES: Record<string, unknown> = {
     { variety_id: "ve", year: 2026, week: 31, total_kg: 100 },
     { variety_id: "vb", year: 2026, week: 32, total_kg: 12345.678 }
   ],
-  "/api/color-case-entries": [
-    { color: "red", total_cases: 100, case_weight_kg: 5, total_kg: 500 },
-    { color: "green", total_cases: 10, case_weight_kg: 5, total_kg: 60 }
-  ]
+  // Shipped kg from the one shipped-yield calculation (the Dashboard reads the same endpoint).
+  "/api/shipped-yield": {
+    sync: null,
+    weeks: [],
+    totals: {
+      colors: { red: { kg: 500, cases: 100 }, orange: { kg: 0, cases: 0 }, yellow: { kg: 0, cases: 0 }, green: { kg: 60, cases: 10 } },
+      mixedCases: 0, shippedCases: 110, measuredCases: 110, unmeasuredCases: 0, attentionCases: 0, kg: 560,
+      complete: true, nonPepper: [], weekCount: 2, packWeeks: 0, legacyWeeks: 2
+    }
+  }
 };
 
 import { workspaceRoute } from "../workspaceRoutes";
@@ -261,7 +267,7 @@ describe("Yield by Color", () => {
     expect(cardValues(cards[0])).toEqual({ Harvested: "10.23 kg/m2", Shipped: "0.33 kg/m2", "Total picked": "15,346.18 kg · 98.1%" });
     expect(cardValues(cards[3])).toEqual({ Harvested: "0.25 kg/m2", Shipped: "0.15 kg/m2", "Total picked": "100 kg · 0.6%" });
     expect(cardValues(cards[1])).toEqual({ Harvested: "—", Shipped: "—", "Total picked": "200 kg · 1.3%" });
-    expect(server.calls.sort()).toEqual(["/api/color-case-entries", "/api/varieties", "/api/yield-entries"]);
+    expect(server.calls.sort()).toEqual(["/api/shipped-yield", "/api/varieties", "/api/yield-entries"]);
     // The share bar is decorative: its value is in the text.
     expect(cards[0].querySelector(".iosws-share")).toHaveAttribute("aria-hidden", "true");
   });
@@ -287,14 +293,14 @@ describe("Yield by Color", () => {
 
   it("shows an empty state when no yield is recorded", async () => {
     server.override["/api/yield-entries"] = () => ({ status: 200, body: [] });
-    server.override["/api/color-case-entries"] = () => ({ status: 200, body: [] });
+    server.override["/api/shipped-yield"] = () => ({ status: 200, body: { sync: null, weeks: [], totals: { colors: {} } } });
     renderAt("/workspace/yield-by-color");
     await findPage();
     expect(await within(page()).findByText("No yield recorded yet.")).toHaveClass("iosws-empty");
   });
 
   it("says so when the server denies any of its three endpoints", async () => {
-    server.override["/api/color-case-entries"] = () => ({ status: 403 });
+    server.override["/api/shipped-yield"] = () => ({ status: 403 });
     renderAt("/workspace/yield-by-color");
     await findPage();
     expect(await within(page()).findByRole("alert")).toHaveTextContent(

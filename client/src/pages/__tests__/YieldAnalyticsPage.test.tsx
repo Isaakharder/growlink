@@ -52,10 +52,18 @@ const SUMMARY = {
     { variety_id: "v-mat", variety_name: "Mathieu", entries_count: 1, total_kg: 300, waste_pct: 0, avg_fruit_weight_g: null, kg_per_m2: null, size_pct: {} }
   ]
 };
-const CASES = [
-  { color: "red", total_cases: 100 },
-  { color: "yellow", total_cases: 10 }
-];
+// Shipped totals for the selected period, from the one shipped-yield calculation.
+const colorTotals = (t: Partial<Record<"red" | "orange" | "yellow" | "green", { kg: number; cases: number }>>) =>
+  Object.fromEntries((["red", "orange", "yellow", "green"] as const).map((c) => [c, t[c] ?? { kg: 0, cases: 0 }]));
+const SHIPPED = {
+  sync: null,
+  weeks: [],
+  totals: {
+    colors: colorTotals({ red: { kg: 520, cases: 100 }, yellow: { kg: 0, cases: 10 } }),
+    mixedCases: 40, shippedCases: 150, measuredCases: 140, unmeasuredCases: 10, attentionCases: 0, kg: 520,
+    complete: false, nonPepper: [], weekCount: 2, packWeeks: 2, legacyWeeks: 0
+  }
+};
 const WASTE = [{ id: "w1", variety_id: "v-cad", year: YEAR, week: 30, waste_kg: 30 }];
 // Measured growing area: Cadalora's 10 rows of 100 m². Mathieu has no rows or
 // link, so its kg can't be put over an area.
@@ -74,7 +82,7 @@ function route(path: string) {
   if (custom !== undefined) return custom;
   if (path === "/api/yield-analytics/summary") return jsonOk(SUMMARY);
   if (path === "/api/yield-entries") return jsonOk(ENTRIES);
-  if (path === "/api/color-case-entries") return jsonOk(CASES);
+  if (path.startsWith("/api/shipped-yield")) return jsonOk(SHIPPED);
   if (path === "/api/varieties") return jsonOk(VARIETIES);
   if (path === "/api/waste-imports") return jsonOk(WASTE);
   if (path === "/api/yield-analytics/area-footprints") return jsonOk(AREA_FOOTPRINTS);
@@ -175,15 +183,25 @@ describe("Yield Analytics — summary metrics and Variety Summary", () => {
 });
 
 describe("Yield Analytics — Harvest vs Shipped and export", () => {
-  it("labels each colour in text next to its swatch and explains estimated kg per case", async () => {
+  it("compares the filtered weeks' harvested kg with the same weeks' shipped cases and kg, with no case-weight estimate", async () => {
     await renderLoaded();
     const card = screen.getByRole("region", { name: "Harvest vs Shipped" });
+    // Shipped totals are requested for the page's selected period (this year, all weeks).
+    await waitFor(() => expect(calls).toContain(`/api/shipped-yield?fromYear=${YEAR}&fromWeek=1&toYear=${YEAR}`));
     const red = within(card).getByRole("rowheader", { name: "Red" }).closest("tr")!;
-    // 1,500 kg harvested; 100 cases × 5 kg = 500 kg shipped; 1,000 kg remaining.
-    expect(within(red).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1500", "100", "5", "500", "1000"]);
+    // 1,500 kg harvested this year; 100 red cases shipped = 520 kg measured; 980 kg remaining.
+    await waitFor(() => expect(within(red).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1500", "100", "520", "980"]));
     const yellow = within(card).getByRole("rowheader", { name: "Yellow" }).closest("tr")!;
-    expect(within(yellow).getAllByRole("cell")[2]).toHaveTextContent("~11");
-    expect(within(card).getByText(/~ Estimated with the default 11 kg per case/)).toBeInTheDocument();
+    expect(within(yellow).getAllByRole("cell").map((c) => c.textContent)).toEqual(["300", "10", "0", "300"]);
+    expect(within(card).queryByText(/Est\. kg \/ Case|Estimated/)).not.toBeInTheDocument();
+    expect(within(card).getByText(/Plus 40 mixed\/rainbow cases, counted once/)).toBeInTheDocument();
+    expect(within(card).getByText(/Incomplete: 10 shipped cases have no usable measurement/)).toBeInTheDocument();
+  });
+
+  it("asks for the selected single week's shipped totals when the filter changes", async () => {
+    const user = await renderLoaded();
+    await user.selectOptions(screen.getByLabelText("Filter mode"), "single-week");
+    await waitFor(() => expect(calls.some((c) => /\/api\/shipped-yield\?fromYear=\d+&fromWeek=(\d+)&toYear=\d+&toWeek=\1$/.test(c))).toBe(true));
   });
 
   it("Export opens the same PDF/CSV choice, and the CSV option opens the existing preview", async () => {

@@ -44,7 +44,6 @@ import {
   buildYieldPieSlices,
   buildYieldTrendPoints,
   formatColorKgPerM2,
-  normalizeColorCaseEntries,
   normalizeYieldEntries,
   type ColorYieldEntry,
   type ColorYieldSummary,
@@ -53,6 +52,7 @@ import {
   type YieldPieSlice,
   type YieldTrendPoint
 } from "../lib/dashboard/yieldByColor";
+import { incompleteShippedTextFor, shippedKgByColor, shippedYieldUrl } from "../lib/shippedYield";
 
 type ServiceState = {
   loading: boolean;
@@ -104,7 +104,6 @@ const IRRIGATION_SETUP_URL = "/api/irrigation-setup";
 const IRRIGATION_LOGS_URL = "/api/irrigation/logs?days=365";
 const YIELD_ENTRIES_URL = "/api/yield-entries";
 const VARIETIES_URL = "/api/varieties";
-const COLOR_CASE_ENTRIES_URL = "/api/color-case-entries";
 const YIELD_PROJECTION_URL = "/api/mobile/daily-yield/today-projection";
 const RECOMMENDED_MINIMUM_SAMPLE_COUNT = 4;
 
@@ -491,6 +490,8 @@ export function DashboardPage() {
   const [yieldLoading, setYieldLoading] = useState(true);
   const [yieldError, setYieldError] = useState<string | null>(null);
   const [colorYieldSummary, setColorYieldSummary] = useState<ColorYieldSummary[]>([]);
+  // Shipped kg comes from the authoritative shipped-yield calculation; null when every shipped case is measured.
+  const [shippedIncomplete, setShippedIncomplete] = useState<string | null>(null);
   const [yieldEntries, setYieldEntries] = useState<ColorYieldEntry[]>([]);
   const [varieties, setVarieties] = useState<ColorYieldVariety[]>([]);
   const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
@@ -649,10 +650,10 @@ export function DashboardPage() {
       setYieldError(null);
 
       try {
-        const [entriesRes, varietiesRes, colorCaseEntriesRes] = await Promise.all([
+        const [entriesRes, varietiesRes, shippedRes] = await Promise.all([
           apiFetch(YIELD_ENTRIES_URL),
           apiFetch(VARIETIES_URL),
-          apiFetch(COLOR_CASE_ENTRIES_URL)
+          apiFetch(shippedYieldUrl())
         ]);
 
         if (!entriesRes.ok) {
@@ -663,21 +664,21 @@ export function DashboardPage() {
           throw new Error("Failed to fetch varieties");
         }
 
-        if (!colorCaseEntriesRes.ok) {
-          throw new Error("Failed to fetch color case entries");
+        if (!shippedRes.ok) {
+          throw new Error("Failed to fetch shipped totals");
         }
 
         const entriesRaw = (await entriesRes.json()) as unknown;
         const entries = normalizeYieldEntries(entriesRaw);
         const varieties = (await varietiesRes.json()) as ColorYieldVariety[];
-        const colorCaseEntriesRaw = (await colorCaseEntriesRes.json()) as unknown;
-        const colorCaseEntries = normalizeColorCaseEntries(colorCaseEntriesRaw);
-        const nextSummary = buildColorYieldSummary(entries, varieties ?? [], colorCaseEntries);
+        const shipped = (await shippedRes.json()) as unknown;
+        const nextSummary = buildColorYieldSummary(entries, varieties ?? [], shippedKgByColor(shipped));
 
         if (active) {
           setYieldEntries(entries);
           setVarieties(varieties ?? []);
           setColorYieldSummary(nextSummary);
+          setShippedIncomplete(incompleteShippedTextFor(shipped));
         }
       } catch (error) {
         if (active) {
@@ -1073,6 +1074,9 @@ export function DashboardPage() {
                 </div>
               ))}
             </div>
+          ) : null}
+          {!yieldLoading && !yieldError && shippedIncomplete ? (
+            <p className="dashboard-yield-incomplete">Shipped: {shippedIncomplete}</p>
           ) : null}
         </div>
       ) : null}

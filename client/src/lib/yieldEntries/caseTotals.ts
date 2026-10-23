@@ -1,33 +1,12 @@
 import { apiFetch } from "../api";
 import { roundTo } from "../roundTo";
 
-// Weekly Case Totals and the DockLink case sync. Shared by the desktop Cases
-// tab and the iOS workspace so both show identical totals.
-
-export type CaseColor = "red" | "orange" | "yellow" | "green";
-
-export const CASE_COLORS: CaseColor[] = ["red", "orange", "yellow", "green"];
+// The Cases tab's year options, case-count formatting and the DockLink sync
+// requests. Weekly totals themselves come from the authoritative shipped-yield
+// calculation (lib/shippedYield.ts), not from colour rows.
 
 export const COLOR_CASE_ENTRIES_URL = "/api/color-case-entries";
 export const DOCKLINK_CASE_SYNC_URL = "/api/integrations/docklink/sync-color-cases";
-
-export type WeeklyCaseEntry = {
-  color: CaseColor;
-  year: number;
-  week: number;
-  total_cases: number;
-};
-
-export type WeeklyCaseCard = {
-  year: number;
-  week: number;
-  totals: Record<CaseColor, number>;
-};
-
-export type WeeklyCaseColorRow = {
-  color: CaseColor;
-  total: number;
-};
 
 /** This year plus every year with an entry, newest first. */
 export function buildCaseEntryYearOptions(entries: Array<{ year: number }>, currentYear: number) {
@@ -42,68 +21,7 @@ export function buildCaseEntryYearOptions(entries: Array<{ year: number }>, curr
   return Array.from(years).sort((a, b) => b - a);
 }
 
-/**
- * One card per week of the year (newest first) that has cases > 0 in any
- * colour; weeks outside 1–53 and unknown colours are ignored.
- */
-export function buildWeeklyCaseCards(entries: WeeklyCaseEntry[], selectedYear: number): WeeklyCaseCard[] {
-  if (!Number.isInteger(selectedYear)) {
-    return [] as WeeklyCaseCard[];
-  }
-
-  const byWeek = new Map<number, Record<CaseColor, number>>();
-
-  for (const entry of entries) {
-    if (entry.year !== selectedYear) {
-      continue;
-    }
-
-    if (!Number.isInteger(entry.week) || entry.week < 1 || entry.week > 53) {
-      continue;
-    }
-
-    if (!CASE_COLORS.includes(entry.color)) {
-      continue;
-    }
-
-    const totalCases = Number(entry.total_cases);
-    if (!Number.isFinite(totalCases)) {
-      continue;
-    }
-
-    const totals = byWeek.get(entry.week) ?? {
-      red: 0,
-      orange: 0,
-      yellow: 0,
-      green: 0
-    };
-
-    totals[entry.color] += totalCases;
-    byWeek.set(entry.week, totals);
-  }
-
-  return Array.from(byWeek.entries())
-    .map(([week, totals]) => ({
-      year: selectedYear,
-      week,
-      totals
-    }))
-    .filter((card) => CASE_COLORS.some((color) => card.totals[color] > 0))
-    .sort((a, b) => b.week - a.week);
-}
-
-/** A card's colours with cases > 0, rounded to 3 dp. */
-export function getVisibleColorRows(totals: Record<CaseColor, number>): WeeklyCaseColorRow[] {
-  return CASE_COLORS.map((color) => ({ color, total: Number(totals[color]) }))
-    .filter((row) => Number.isFinite(row.total) && row.total > 0)
-    .map((row) => ({ ...row, total: roundTo(row.total, 3) }));
-}
-
-/** The week's total: the sum of its shown (rounded) rows. */
-export function weeklyCaseTotal(rows: WeeklyCaseColorRow[]) {
-  return rows.reduce((sum, row) => sum + row.total, 0);
-}
-
+/** A case count rounded to 3 dp, without trailing zeros. */
 export function formatCaseTotal(value: number) {
   const rounded = roundTo(value, 3);
   if (Number.isInteger(rounded)) {
@@ -138,4 +56,24 @@ export async function requestDocklinkCaseSync(): Promise<string | null> {
   }
 
   return message;
+}
+
+export const DOCKLINK_PACK_SYNC_URL = "/api/integrations/docklink/sync-packs";
+
+/**
+ * POSTs the DockLink pack shipment sync. Never throws: resolves with the
+ * server's summary. `ok` is false only for a real failure — a pack export
+ * DockLink hasn't deployed yet (503) or an organization without a mapping
+ * is reported as information, since colour totals keep working.
+ */
+export async function requestDocklinkPackSync(): Promise<{ ok: boolean; message: string | null }> {
+  try {
+    const response = await apiFetch(DOCKLINK_PACK_SYNC_URL, { method: "POST" });
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    const message = typeof body?.message === "string" && body.message ? body.message : null;
+    if (response.ok || response.status === 503) return { ok: true, message: message ? `Packs: ${message}` : null };
+    return { ok: false, message: `Pack sync failed: ${message ?? `status ${response.status}`}` };
+  } catch {
+    return { ok: false, message: "Pack sync failed: network error" };
+  }
 }

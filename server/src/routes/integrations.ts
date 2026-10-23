@@ -2,6 +2,12 @@ import { Router, Request, Response } from "express";
 import { supabase } from "../config/supabase";
 import { docklinkSupabase, isDocklinkConfigured } from "../config/docklink";
 import { requirePermission } from "../middleware/requirePermission";
+import {
+  PACK_EXPORT_RPC,
+  PackExportContractError,
+  validatePackExport,
+  type NormalizedPackExport
+} from "../lib/docklinkPackExport";
 
 const integrationsRouter = Router();
 
@@ -493,6 +499,140 @@ integrationsRouter.post("/integrations/docklink/sync-color-cases", requirePermis
 
     const message = error instanceof Error ? error.message : "Failed to sync DockLink cases";
     return res.status(400).json({ message });
+  }
+});
+
+// --- Pack shipment sync (contract docklink.growlink.pack_export v1) ---
+//
+// Calls DockLink's growlink_pack_export_v1 for the mapped organization,
+// validates the whole document (lib/docklinkPackExport.ts), then applies it
+// in ONE database transaction (apply_docklink_pack_export, migration 0143):
+// catalogue upsert, weekly series upsert, and — only when DockLink declares
+// the scope authoritative — series missing from the document set to zero.
+// Any failure before or during the apply leaves GrowLink unchanged. User
+// measurements live in their own table and are never touched.
+
+type PackSyncResult = {
+  scopeStatus: NormalizedPackExport["scope"]["status"];
+  generatedAt: string;
+  firstWeek: { isoYear: number; isoWeek: number } | null;
+  lastWeek: { isoYear: number; isoWeek: number } | null;
+  packs: number;
+  seriesInserted: number;
+  seriesUpdated: number;
+  seriesZeroed: number;
+  diagnostics: Record<string, unknown>;
+};
+
+async function fetchDocklinkPackExport(externalOrganizationId: string): Promise<NormalizedPackExport> {
+  if (!docklinkSupabase) {
+    throw new Error("DockLink integration is not configured. Supabase client is unavailable.");
+  }
+
+  const { data, error } = await docklinkSupabase.rpc(PACK_EXPORT_RPC, { p_organization_id: externalOrganizationId });
+
+  if (error) {
+    const keyRejected = getDocklinkKeyRejectedError(error);
+    if (keyRejected) {
+      console.error("DockLink pack export rejected the API key:", error);
+      throw keyRejected;
+    }
+    if (error.code === "P0002") {
+      throw new HttpError(409, "DockLink does not recognise the mapped organization. Check the DockLink organization on the Admin → DockLink page.");
+    }
+    const lower = (error.message ?? "").toLowerCase();
+    if (error.code === "PGRST202" || lower.includes("could not find the function") || lower.includes("does not exist")) {
+      throw new HttpError(503, "DockLink's pack export (growlink_pack_export_v1) is not available yet. Nothing was changed; colour totals are still used.");
+    }
+    console.error("DockLink pack export error:", error);
+    throw new HttpError(502, "Failed to read DockLink's pack export. Nothing was changed.");
+  }
+
+  try {
+    return validatePackExport(data, externalOrganizationId);
+  } catch (validationError) {
+    if (validationError instanceof PackExportContractError) {
+      console.error("DockLink pack export failed validation:", validationError.problems);
+      throw new HttpError(502, `${validationError.message}. Nothing was changed.`);
+    }
+    throw validationError;
+  }
+}
+
+async function syncDocklinkPacks(req: Request): Promise<PackSyncResult> {
+  const configError = getDocklinkConfigError();
+  if (configError) throw new Error(configError);
+  if (!isDocklinkConfigured()) throw new Error("DockLink integration is not configured. Supabase client is unavailable.");
+
+  const organizationId = req.organizationId;
+  const externalOrganizationId = await getDocklinkOrganizationMapping(organizationId);
+  const exportDoc = await fetchDocklinkPackExport(externalOrganizationId);
+
+  const { data, error } = await supabase.rpc("apply_docklink_pack_export", {
+    p_organization_id: organizationId,
+    p_external_organization_id: externalOrganizationId,
+    p_export: exportDoc
+  });
+
+  if (error) {
+    const lower = (error.message ?? "").toLowerCase();
+    if (error.code === "40001" || lower.includes("stale export")) {
+      throw new HttpError(409, "A newer DockLink export has already been applied. Nothing was changed; sync again to get the latest.");
+    }
+    if (error.code === "PGRST202" || lower.includes("could not find the function")) {
+      throw new HttpError(503, "Pack shipment tables are not available. Run GrowLink migration 0143 before syncing packs.");
+    }
+    if (error.code === "22023") {
+      console.error("DockLink pack export rejected by apply_docklink_pack_export:", error);
+      throw new HttpError(502, "DockLink's pack export failed GrowLink's checks. Nothing was changed.");
+    }
+    console.error("DockLink pack export apply error:", error);
+    throw new Error("Failed to apply DockLink pack shipments. Nothing was changed.");
+  }
+
+  const applied = (data ?? {}) as Record<string, number>;
+  const week = (w: { iso_year: number; iso_week: number } | null) => (w ? { isoYear: w.iso_year, isoWeek: w.iso_week } : null);
+  return {
+    scopeStatus: exportDoc.scope.status,
+    generatedAt: exportDoc.generated_at,
+    firstWeek: week(exportDoc.scope.first_week),
+    lastWeek: week(exportDoc.scope.last_week),
+    packs: Number(applied.packs ?? 0),
+    seriesInserted: Number(applied.series_inserted ?? 0),
+    seriesUpdated: Number(applied.series_updated ?? 0),
+    seriesZeroed: Number(applied.series_zeroed ?? 0),
+    diagnostics: exportDoc.diagnostics
+  };
+}
+
+function packSyncMessage(result: PackSyncResult): string {
+  if (result.scopeStatus !== "available") {
+    const why = result.scopeStatus === "pending_first_full_week" ? "pack capture has started but its first full week isn't complete" : "pack capture isn't active in DockLink yet";
+    return `Synced DockLink pack catalogue (${result.packs} packs). Weekly totals still come from colour totals: ${why}.`;
+  }
+  return (
+    `Synced DockLink packs for ${result.firstWeek!.isoYear}-W${result.firstWeek!.isoWeek} to ${result.lastWeek!.isoYear}-W${result.lastWeek!.isoWeek}: ` +
+    `${result.packs} packs, ${result.seriesInserted} new and ${result.seriesUpdated} updated weekly series, ${result.seriesZeroed} set to zero.`
+  );
+}
+
+integrationsRouter.post("/integrations/docklink/sync-packs", requirePermission("cases:edit"), async (req: Request, res: Response) => {
+  try {
+    const configError = getDocklinkConfigError();
+    if (configError) return res.status(503).json({ message: configError });
+    if (!isDocklinkConfigured()) return res.status(503).json({ message: "DockLink integration is not configured. Supabase client is unavailable." });
+
+    const result = await syncDocklinkPacks(req);
+    console.log("DockLink pack sync completed:", JSON.stringify({ ...result, diagnostics: undefined }));
+    return res.json({ success: true, message: packSyncMessage(result), ...result });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      if (error.status === 200) return res.json({ success: true, message: error.message, skipped: true });
+      return res.status(error.status).json({ message: error.message });
+    }
+    console.error("DockLink pack sync error:", error);
+    const message = error instanceof Error ? error.message : "Failed to sync DockLink packs";
+    return res.status(500).json({ message });
   }
 });
 
