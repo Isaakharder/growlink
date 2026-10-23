@@ -22,7 +22,7 @@ const one = async <T = Record<string, any>>(sql: string, params: unknown[] = [])
 const dump = async (org: string) =>
   JSON.stringify(
     await Promise.all(
-      ["color_case_entries", "manual_pack_case_entries", "case_week_sources", "historical_packs", "pack_case_measurements", "docklink_packs", "docklink_pack_weekly_shipments", "docklink_pack_sync_state"].map(
+      ["color_case_entries", "manual_pack_case_entries", "case_week_sources", "case_rebuild_ranges", "case_week_confirmations", "historical_packs", "pack_case_measurements", "docklink_packs", "docklink_pack_weekly_shipments", "docklink_pack_sync_state"].map(
         (t) => all(`select to_jsonb(t)::text j from ${t} t where organization_id = $1 order by 1`, [org])
       )
     )
@@ -42,6 +42,7 @@ beforeEach(async () => {
   `);
   await db.exec(read("supabase/migrations/0143_docklink_pack_shipments.sql"));
   await db.exec(read("supabase/migrations/0144_manual_pack_case_entries.sql"));
+  await db.exec(read("supabase/migrations/0145_case_rebuild_ranges.sql"));
   for (const org of [ORG, OTHER]) {
     await db.query(
       `insert into color_case_entries (organization_id, color, year, week, total_cases, case_weight_kg, total_kg, source, source_summary) values
@@ -59,6 +60,8 @@ beforeEach(async () => {
          ($1, 2025, 15, 'historical', null, $2, 'Old tri', 'mixed', 'mixed', 'pepper', 'kg', 75.25, ' Inv-2 ')`, [org, h.id]
     );
     await db.query(`insert into case_week_sources (organization_id, iso_year, iso_week, source) values ($1, 2025, 15, 'manual_packs')`, [org]);
+    await db.query(`insert into case_rebuild_ranges (organization_id, from_iso_year, from_iso_week, to_iso_year, to_iso_week, note) values ($1, 2025, 1, 2025, 30, 'rebuild')`, [org]);
+    await db.query(`insert into case_week_confirmations (organization_id, iso_year, iso_week) values ($1, 2025, 16)`, [org]);
     await db.query(
       `insert into pack_case_measurements (organization_id, iso_year, iso_week, pack_id, color_kind, color_key, crop_type, tracking_unit, net_kg_per_case) values ($1, 2025, 15, 'pk-red', 'single', 'red', 'pepper', 'kg', 5.1)`, [org]
     );
@@ -77,7 +80,8 @@ test("backup captures every case table of the organization only, verified by che
   const b = await one(`select row_counts from case_history_backup.backups where backup_id = $1`, [id]);
   assert.deepEqual(b.row_counts, {
     docklink_pack_sync_state: 0, docklink_packs: 1, docklink_pack_weekly_shipments: 0, historical_packs: 1,
-    pack_case_measurements: 1, color_case_entries: 3, case_week_sources: 1, manual_pack_case_entries: 2
+    pack_case_measurements: 1, color_case_entries: 3, case_week_sources: 1, case_rebuild_ranges: 1, case_week_confirmations: 1,
+    manual_pack_case_entries: 2
   });
   assert.equal((await one<{ n: number }>(`select count(*)::int n from case_history_backup.color_case_entries where organization_id <> $1`, [ORG])).n, 0);
 });
@@ -100,12 +104,16 @@ test("reset clears only the organization's colour totals; manual entries only wh
   assert.equal(await count("color_case_entries"), 0);
   assert.equal(await count("manual_pack_case_entries"), 2);
   assert.equal(await count("case_week_sources"), 1);
+  assert.equal(await count("case_rebuild_ranges"), 1, "rebuild ranges are kept unless manual data is cleared too");
   assert.equal(await count("pack_case_measurements"), 1);
   assert.equal(await count("historical_packs"), 1);
   assert.equal(await dump(OTHER), before.other, "the other organization is untouched");
 
   const id2 = await backup("before clearing test entries");
-  assert.deepEqual((await reset(id2, true)).deleted, { manual_pack_case_entries: 2, case_week_sources: 1, color_case_entries: 0 });
+  assert.deepEqual((await reset(id2, true)).deleted, {
+    manual_pack_case_entries: 2, case_week_sources: 1, case_rebuild_ranges: 1, case_week_confirmations: 1, color_case_entries: 0
+  });
+  assert.equal(await count("case_rebuild_ranges"), 0);
   assert.equal(await count("manual_pack_case_entries"), 0);
   assert.equal(await count("historical_packs"), 1, "historical packs are kept");
   assert.equal(await dump(OTHER), before.other);
@@ -124,7 +132,7 @@ test("restore puts back exactly the backed-up rows (ids, values, generated invoi
 
   await assert.rejects(restore(id, "RESTORE"), /confirmation text/);
   const r = await restore(id);
-  assert.deepEqual(r.restored, { color_case_entries: 3, case_week_sources: 1, manual_pack_case_entries: 2 });
+  assert.deepEqual(r.restored, { color_case_entries: 3, case_week_sources: 1, case_rebuild_ranges: 1, case_week_confirmations: 1, manual_pack_case_entries: 2 });
   assert.equal(await dump(ORG), original, "byte-for-byte the state before the reset");
   assert.equal(await dump(OTHER), other);
   const [{ k }] = await all<{ k: string }>(`select string_agg(invoice_ref_key, ',' order by invoice_ref_key) k from manual_pack_case_entries where organization_id = $1`, [ORG]);

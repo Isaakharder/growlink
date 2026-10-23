@@ -103,10 +103,11 @@ export type EntryUpdate = Partial<{
 }>;
 
 export const updateManualEntry = (id: string, update: EntryUpdate) =>
-  send<{ entry: ManualEntry; releasedPreviousWeek: boolean }>(`${MANUAL_ENTRIES_URL}/${id}`, { method: "PUT", body: JSON.stringify(update) });
+  send<{ entry: ManualEntry; previousWeekRemainingEntries: number | null }>(`${MANUAL_ENTRIES_URL}/${id}`, { method: "PUT", body: JSON.stringify(update) });
 
+/** Deleting a week's last entry never changes its source; the week then reads "not entered yet". */
 export const deleteManualEntry = (id: string) =>
-  send<{ deleted: string; releasedWeekSource: boolean }>(`${MANUAL_ENTRIES_URL}/${id}`, { method: "DELETE" });
+  send<{ deleted: string; remainingEntries: number }>(`${MANUAL_ENTRIES_URL}/${id}`, { method: "DELETE" });
 
 export const setWeekSource = (isoYear: number, isoWeek: number, source: WeekSourceChoice) =>
   send<{ source: WeekSourceChoice }>(WEEK_SOURCES_URL, { method: "PUT", body: JSON.stringify({ isoYear, isoWeek, source }) });
@@ -123,6 +124,38 @@ export type NewHistoricalPack = {
 
 export const createHistoricalPack = (pack: NewHistoricalPack) =>
   send<{ pack: { id: string } }>(HISTORICAL_PACKS_URL, { method: "POST", body: JSON.stringify(pack) });
+
+export const REBUILD_RANGES_URL = "/api/case-rebuild-ranges";
+export const WEEK_CONFIRMATIONS_URL = "/api/case-week-confirmations";
+
+export type RebuildRangeView = {
+  id: string;
+  from: { isoYear: number; isoWeek: number };
+  to: { isoYear: number; isoWeek: number };
+  note: string | null;
+  weeks: number;
+  entered: number;
+  confirmed: number;
+  notEntered: number;
+  /** Weeks DockLink's pack scope covers now; DockLink's totals count there. */
+  docklinkWeeks: number;
+};
+
+export const fetchRebuildRanges = () => send<{ ranges: RebuildRangeView[] }>(REBUILD_RANGES_URL, { method: "GET" });
+
+export const createRebuildRange = (range: { fromIsoYear: number; fromIsoWeek: number; toIsoYear: number; toIsoWeek: number; note: string | null }) =>
+  send<{ range: RebuildRangeView }>(REBUILD_RANGES_URL, { method: "POST", body: JSON.stringify(range) });
+
+export const deleteRebuildRange = (id: string) => send<{ deleted: string }>(`${REBUILD_RANGES_URL}/${id}`, { method: "DELETE" });
+
+/** "Every invoice for this week is entered" — possibly none, which makes it a confirmed zero-shipment week. */
+export const confirmWeek = (isoYear: number, isoWeek: number, note: string | null = null) =>
+  send<{ confirmed: true }>(WEEK_CONFIRMATIONS_URL, { method: "PUT", body: JSON.stringify({ isoYear, isoWeek, note }) });
+
+export const unconfirmWeek = async (isoYear: number, isoWeek: number) => {
+  const response = await apiFetch(`${WEEK_CONFIRMATIONS_URL}?isoYear=${isoYear}&isoWeek=${isoWeek}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(`Couldn't undo the confirmation (${response.status})`);
+};
 
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 

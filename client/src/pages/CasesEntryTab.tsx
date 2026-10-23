@@ -23,6 +23,7 @@ import { LazyRoute } from "../components/LazyRoute";
 // The weekly pack panel is only used here; loading it on demand keeps it out of
 // the main bundle, which sits close to the PWA's 2 MiB precache limit.
 const PackShipmentsWeek = lazy(() => import("./PackShipmentsWeek").then((m) => ({ default: m.PackShipmentsWeek })));
+const RebuildRangesPanel = lazy(() => import("./RebuildRangesPanel").then((m) => ({ default: m.RebuildRangesPanel })));
 const ManualPackEntryModal = lazy(() => import("./ManualPackEntryModal").then((m) => ({ default: m.ManualPackEntryModal })));
 
 type VarietyColor = "red" | "orange" | "yellow" | "green";
@@ -528,6 +529,10 @@ export function CasesEntryTab() {
 
       <LazyRoute>
         <PackShipmentsWeek refreshKey={packRefreshKey} onChanged={() => void loadShipped(Number(selectedSummaryYear))} />
+      </LazyRoute>
+
+      <LazyRoute>
+        <RebuildRangesPanel refreshKey={packRefreshKey} onChanged={() => packEntriesChanged(null)} />
       </LazyRoute>
 
       <div className="coming-soon-card yield-entry-recent-entries">

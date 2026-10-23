@@ -15,7 +15,7 @@ import {
   classifyShipment,
   computeShippedYield,
   evaluateSeries,
-  isDocklinkOwnedWeek,
+  inRebuildRange,
   isPackWeek,
   measurementKey,
   measurementMatches,
@@ -27,7 +27,9 @@ import {
   type PackScopeState,
   type PackSource,
   type PepperColor,
+  type RebuildRange,
   type ShipmentRow,
+  type WeekConfirmation,
   type WeekRange,
   type WeekSourceChoice
 } from "../lib/shippedYield";
@@ -276,6 +278,41 @@ export async function loadWeekSources(organizationId: string, fromYear: number, 
   }));
 }
 
+export type RebuildRangeRecord = RebuildRange & { id: string; note: string | null; created_at: string };
+
+export async function loadRebuildRanges(organizationId: string): Promise<RebuildRangeRecord[]> {
+  const rows = await selectAll<Record<string, unknown>>(() =>
+    supabase
+      .from("case_rebuild_ranges")
+      .select("id, from_iso_year, from_iso_week, to_iso_year, to_iso_week, note, created_at")
+      .eq("organization_id", organizationId)
+      .order("from_iso_year")
+      .order("from_iso_week")
+      .order("id")
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    from: { year: Number(r.from_iso_year), week: Number(r.from_iso_week) },
+    to: { year: Number(r.to_iso_year), week: Number(r.to_iso_week) },
+    note: (r.note as string | null) ?? null,
+    created_at: String(r.created_at)
+  }));
+}
+
+export async function loadConfirmations(organizationId: string, fromYear: number, toYear: number): Promise<Array<WeekConfirmation & { confirmed_at: string; note: string | null }>> {
+  const rows = await selectAll<Record<string, unknown>>(() =>
+    supabase
+      .from("case_week_confirmations")
+      .select("iso_year, iso_week, confirmed_at, note")
+      .eq("organization_id", organizationId)
+      .gte("iso_year", fromYear)
+      .lte("iso_year", toYear)
+      .order("iso_year")
+      .order("iso_week")
+  );
+  return rows.map((r) => ({ iso_year: Number(r.iso_year), iso_week: Number(r.iso_week), confirmed_at: String(r.confirmed_at), note: (r.note as string | null) ?? null }));
+}
+
 // ---------------------------------------------------------------------------
 // GET /shipped-yield — the authoritative totals
 // ---------------------------------------------------------------------------
@@ -286,14 +323,19 @@ export async function loadShippedYield(organizationId: string, range: WeekRange)
   const fromYear = range ? Math.min(range.from.year, range.to.year) : 2000;
   const toYear = range ? Math.max(range.from.year, range.to.year) : 2100;
   // Measurements are loaded with or without a DockLink sync: manual pack weeks use them too.
-  const [shipments, measurements, legacy, manual, weekSources] = await Promise.all([
+  const [shipments, measurements, legacy, manual, weekSources, rebuildRanges, confirmations] = await Promise.all([
     state ? loadShipments(organizationId, fromYear, toYear) : Promise.resolve([]),
     loadMeasurements(organizationId, fromYear, toYear),
     loadLegacy(organizationId, range ? fromYear : null, range ? toYear : null),
     loadManualEntries(organizationId, fromYear, toYear),
-    loadWeekSources(organizationId, fromYear, toYear)
+    loadWeekSources(organizationId, fromYear, toYear),
+    loadRebuildRanges(organizationId),
+    loadConfirmations(organizationId, fromYear, toYear)
   ]);
-  return { sync: syncSummary(state), ...computeShippedYield({ range, scope, shipments, measurements, legacy, manual, weekSources }) };
+  return {
+    sync: syncSummary(state),
+    ...computeShippedYield({ range, scope, shipments, measurements, legacy, manual, weekSources, rebuildRanges, confirmations })
+  };
 }
 
 function parseRange(q: Record<string, unknown>): WeekRange {
@@ -429,7 +471,7 @@ async function loadWeek(organizationId: string, year: number, week: number) {
   const state = await loadSyncState(organizationId);
   const scope = toScope(state);
 
-  const [catalogResult, historicalResult, shipmentsAll, measurementsAll, legacy, manualAll, choices] = await Promise.all([
+  const [catalogResult, historicalResult, shipmentsAll, measurementsAll, legacy, manualAll, choices, rebuildRanges, confirmations] = await Promise.all([
     supabase
       .from("docklink_packs")
       .select("pack_id, name, pack_code, description, color_label, color_key, color_kind, display_order, crop_type, tracking_unit, status, archived_at, in_latest_export")
@@ -439,7 +481,9 @@ async function loadWeek(organizationId: string, year: number, week: number) {
     loadMeasurements(organizationId, year, year),
     loadLegacy(organizationId, year, year),
     loadManualEntries(organizationId, year, year),
-    loadWeekSources(organizationId, year, year)
+    loadWeekSources(organizationId, year, year),
+    loadRebuildRanges(organizationId),
+    loadConfirmations(organizationId, year, year)
   ]);
   if (catalogResult.error) throw catalogResult.error;
   if (historicalResult.error) throw historicalResult.error;
@@ -452,7 +496,11 @@ async function loadWeek(organizationId: string, year: number, week: number) {
   const legacyRows = legacy.filter((l) => l.week === week);
   const manualEntries = manualAll.filter((e) => e.iso_week === week);
   const choice = choices.find((c) => c.iso_week === week)?.source ?? null;
-  const decision = resolveWeekSource({ scope, year, week, choice, manualEntries: manualEntries.length, legacyRows: legacyRows.length });
+  const rebuildRange = rebuildRanges.find((r) => inRebuildRange([r], year, week)) ?? null;
+  const confirmation = confirmations.find((c) => c.iso_week === week) ?? null;
+  const decision = resolveWeekSource({
+    scope, year, week, choice, manualEntries: manualEntries.length, legacyRows: legacyRows.length, inRebuildRange: Boolean(rebuildRange)
+  });
   const totals =
     computeShippedYield({
       range: { from: { year, week }, to: { year, week } },
@@ -461,7 +509,9 @@ async function loadWeek(organizationId: string, year: number, week: number) {
       measurements,
       legacy: legacyRows,
       manual: manualEntries,
-      weekSources: choice ? [{ iso_year: year, iso_week: week, source: choice }] : []
+      weekSources: choice ? [{ iso_year: year, iso_week: week, source: choice }] : [],
+      rebuildRanges: rebuildRange ? [rebuildRange] : [],
+      confirmations: confirmation ? [confirmation] : []
     }).weeks[0] ?? null;
 
   // Pack rows shown with measurement inputs: DockLink's series in a pack week; the
@@ -580,7 +630,8 @@ async function loadWeek(organizationId: string, year: number, week: number) {
     return r.status === "missing" || r.status === "incompatible";
   });
   const duplicates = await findDuplicates(organizationId, manualEntries);
-  const owned = isDocklinkOwnedWeek(scope, year, week);
+  const owned = isPackWeek(scope, year, week);
+  const wk = (y: number, w: number) => `${y}-W${String(w).padStart(2, "0")}`;
 
   return {
     isoYear: year,
@@ -592,9 +643,17 @@ async function loadWeek(organizationId: string, year: number, week: number) {
     sourceReason: decision.reason,
     needsSourceDecision: decision.needsSourceDecision,
     weekSourceChoice: choice,
+    rebuildRange: rebuildRange
+      ? { id: rebuildRange.id, from: { isoYear: rebuildRange.from.year, isoWeek: rebuildRange.from.week }, to: { isoYear: rebuildRange.to.year, isoWeek: rebuildRange.to.week } }
+      : null,
+    manualStatus: totals?.manualStatus ?? null,
+    confirmation: confirmation ? { confirmedAt: confirmation.confirmed_at, note: confirmation.note } : null,
     notCounted: totals?.notCounted ?? { manualCases: 0, manualEntries: 0, legacyCases: 0, legacyRows: 0 },
     manualEntryAllowed: !owned,
-    manualEntryBlockedReason: owned ? "DockLink pack totals are authoritative from this week on. Correct shipments in DockLink instead." : null,
+    manualEntryBlockedReason:
+      owned && scope?.first && scope.last
+        ? `DockLink pack totals are authoritative for this week (DockLink's pack scope is ${wk(scope.first.year, scope.first.week)} to ${wk(scope.last.year, scope.last.week)}). Correct shipments in DockLink instead.`
+        : null,
     packs,
     attention,
     nonPepper,

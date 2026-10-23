@@ -13,6 +13,7 @@ const OTHER_ORG = "22222222-2222-4222-8222-222222222222";
 const read = (f: string) => readFileSync(path.resolve(__dirname, "../../../supabase/migrations", f), "utf8");
 const m0143 = read("0143_docklink_pack_shipments.sql");
 const m0144 = read("0144_manual_pack_case_entries.sql");
+const m0145 = read("0145_case_rebuild_ranges.sql");
 
 let db: PGlite;
 const all = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => (await db.query<T>(sql, params)).rows;
@@ -39,6 +40,7 @@ beforeEach(async () => {
     values ('${ORG}', 2026, 47, 's-red-5kg', 'pk-red', 'single', ' Red ', 'Pepper', 'KG', 5.12);
   `);
   await db.exec(m0144);
+  await db.exec(m0145);
 });
 
 const insertEntry = (o: Record<string, unknown> = {}) => {
@@ -150,4 +152,23 @@ test("the documented rollback restores 0143's measurement key", async () => {
   const [c] = await all<{ n: number }>(`select count(*)::int n from pg_constraint where conname = 'pack_case_measurements_identity'`);
   assert.equal(c.n, 1);
   assert.equal((await all(`select * from pack_case_measurements`)).length, 1, "existing DockLink measurements survive the rollback");
+});
+
+test("0145: rebuild ranges must run forwards; one confirmation per week; server-only; documented rollback", async () => {
+  await db.query(`insert into case_rebuild_ranges (organization_id, from_iso_year, from_iso_week, to_iso_year, to_iso_week) values ($1, 2025, 1, 2026, 44)`, [ORG]);
+  await assert.rejects(
+    db.query(`insert into case_rebuild_ranges (organization_id, from_iso_year, from_iso_week, to_iso_year, to_iso_week) values ($1, 2026, 10, 2026, 9)`, [ORG]),
+    /case_rebuild_ranges_order/
+  );
+  await db.query(`insert into case_week_confirmations (organization_id, iso_year, iso_week) values ($1, 2025, 14)`, [ORG]);
+  await assert.rejects(db.query(`insert into case_week_confirmations (organization_id, iso_year, iso_week) values ($1, 2025, 14)`, [ORG]));
+  for (const t of ["case_rebuild_ranges", "case_week_confirmations"]) {
+    for (const role of ["anon", "authenticated"]) {
+      const [p] = await all<{ s: boolean; i: boolean }>(`select has_table_privilege($1, $2, 'SELECT') s, has_table_privilege($1, $2, 'INSERT') i`, [role, `public.${t}`]);
+      assert.deepEqual(p, { s: false, i: false }, `${role} on ${t}`);
+    }
+  }
+  const rollback = m0145.split("-- ROLLBACK")[1].split("\n").filter((l) => l.startsWith("-- ")).map((l) => l.slice(3)).join("\n");
+  await db.exec(rollback);
+  assert.deepEqual(await all(`select tablename from pg_tables where schemaname = 'public' and tablename in ('case_rebuild_ranges', 'case_week_confirmations')`), []);
 });

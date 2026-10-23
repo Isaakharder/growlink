@@ -7,8 +7,9 @@ import {
   aggregateManualEntries,
   computeShippedYield,
   evaluateSeries,
-  isDocklinkOwnedWeek,
+  isPackWeek,
   measurementKey,
+  weeksBetween,
   resolveWeekSource,
   type LegacyRow,
   type ManualEntryRow,
@@ -72,13 +73,75 @@ test("source precedence: DockLink scope, then the week's explicit choice, then m
   assert.deepEqual(r({ week: 44, manualEntries: 1, legacyRows: 2, choice: "manual_packs" }).source, "manual");
 });
 
-test("DockLink-owned weeks: from the announced first pack week on, available or pending; never before it", () => {
-  assert.equal(isDocklinkOwnedWeek(scope, 2026, 44), false);
-  assert.equal(isDocklinkOwnedWeek(scope, 2026, 45), true);
-  assert.equal(isDocklinkOwnedWeek(scope, 2027, 2), true, "beyond last_week is still DockLink's");
-  assert.equal(isDocklinkOwnedWeek({ ...scope, status: "pending_first_full_week" }, 2026, 45), true);
-  assert.equal(isDocklinkOwnedWeek({ status: "capture_not_active", first: null, last: null }, 2026, 45), false);
-  assert.equal(isDocklinkOwnedWeek(null, 2026, 45), false);
+test("DockLink's weeks are exactly its validated available scope: first..last inclusive, never pending or not-active", () => {
+  assert.equal(isPackWeek(scope, 2026, 44), false, "transition week");
+  assert.equal(isPackWeek(scope, 2026, 45), true, "first_week");
+  assert.equal(isPackWeek(scope, 2026, 48), true, "last_week");
+  assert.equal(isPackWeek(scope, 2026, 49), false, "after last_week is not DockLink's yet");
+  assert.equal(isPackWeek(scope, 2027, 2), false);
+  assert.equal(isPackWeek({ ...scope, status: "pending_first_full_week" }, 2026, 46), false);
+  assert.equal(isPackWeek({ status: "capture_not_active", first: null, last: null }, 2026, 46), false);
+  assert.equal(isPackWeek(null, 2026, 46), false);
+});
+
+test("scope moving forward and back changes which source counts, never the manual entries themselves", () => {
+  const manualEntries = [manual({ iso_week: 46, cases: 99 }), manual({ iso_week: 49, cases: 77 })];
+  const run = (s: PackScopeState) =>
+    computeShippedYield({ range: null, scope: s, shipments: [imported(46, 1720), imported(49, 900)], measurements: [], legacy: [], manual: manualEntries })
+      .weeks.map((w) => `${w.isoWeek}:${w.source}:${w.shippedCases}:${w.notCounted.manualCases}`);
+  assert.deepEqual(run(scope), ["46:packs:1720:99", "49:manual:77:0"]);
+  assert.deepEqual(run({ ...scope, last: { year: 2026, week: 50 } }), ["46:packs:1720:99", "49:packs:900:77"]);
+  assert.deepEqual(run({ ...scope, first: { year: 2026, week: 47 }, last: { year: 2026, week: 50 } }), ["46:manual:99:0", "49:packs:900:77"]);
+  assert.deepEqual(run({ ...scope, status: "pending_first_full_week" }), ["46:manual:99:0", "49:manual:77:0"]);
+});
+
+test("rebuild range: every week is manual, entered or not; colour totals never count; DockLink scope still wins", () => {
+  const result = computeShippedYield({
+    range: null,
+    scope,
+    shipments: [imported(45, 1500)],
+    measurements: [single(42, 5), single(45, 5)],
+    legacy: [legacy(41, "red", 900), legacy(42, "red", 800), legacy(45, "red", 1400)],
+    manual: [manual({ iso_week: 42, cases: 640 }), manual({ iso_week: 45, cases: 3 })],
+    // A per-week colour choice inside the range has no effect.
+    weekSources: [{ iso_year: 2026, iso_week: 41, source: "legacy_colours" }],
+    rebuildRanges: [{ from: { year: 2026, week: 40 }, to: { year: 2026, week: 45 } }],
+    confirmations: [{ iso_year: 2026, iso_week: 43 }]
+  });
+  assert.deepEqual(
+    result.weeks.map((w) => `${w.isoWeek}:${w.source}:${w.sourceReason}:${w.manualStatus}:${w.shippedCases}:${w.complete}`),
+    [
+      "40:manual:rebuild_range:not_entered:0:false",
+      "41:manual:rebuild_range:not_entered:0:false",
+      "42:manual:rebuild_range:entered:640:true",
+      "43:manual:rebuild_range:confirmed:0:true",
+      "44:manual:rebuild_range:not_entered:0:false",
+      "45:packs:docklink_scope:null:1500:true"
+    ]
+  );
+  assert.equal(result.weeks[1].notCounted.legacyCases, 900, "colour totals in the range are kept, not counted");
+  assert.equal(result.weeks[5].notCounted.manualCases, 3);
+  assert.equal(result.totals.weeksNotEntered, 3);
+  assert.equal(result.totals.weeksConfirmed, 1);
+  assert.equal(result.totals.complete, false, "unknown weeks make the total incomplete, never a silent zero");
+  assert.equal(result.totals.shippedCases, 640 + 1500);
+});
+
+test("a manual week whose entries were all deleted stays manual: not entered yet, or a confirmed zero", () => {
+  const base = { range: null, scope, shipments: [], measurements: [], manual: [], legacy: [legacy(30, "red", 900)], weekSources: [{ iso_year: 2026, iso_week: 30, source: "manual_packs" as const }] };
+  const notEntered = computeShippedYield(base).weeks[0];
+  assert.deepEqual([notEntered.source, notEntered.manualStatus, notEntered.shippedCases, notEntered.complete], ["manual", "not_entered", 0, false]);
+  const confirmed = computeShippedYield({ ...base, confirmations: [{ iso_year: 2026, iso_week: 30 }] }).weeks[0];
+  assert.deepEqual([confirmed.source, confirmed.manualStatus, confirmed.shippedCases, confirmed.complete], ["manual", "confirmed", 0, true]);
+});
+
+test("rebuild ranges are clipped to the requested weeks, across 53-week years", () => {
+  assert.equal(weeksBetween({ year: 2026, week: 52 }, { year: 2027, week: 2 }).length, 4, "2026 has 53 ISO weeks");
+  const result = computeShippedYield({
+    range: { from: { year: 2026, week: 52 }, to: { year: 2027, week: 1 } }, scope: null, shipments: [], measurements: [], legacy: [],
+    rebuildRanges: [{ from: { year: 2026, week: 1 }, to: { year: 2027, week: 10 } }]
+  });
+  assert.deepEqual(result.weeks.map((w) => `${w.isoYear}-${w.isoWeek}`), ["2026-52", "2026-53", "2027-1"]);
 });
 
 test("several invoices for the same week and pack add up, and use the week's average net kg per case", () => {

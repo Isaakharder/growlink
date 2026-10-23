@@ -14,11 +14,13 @@
 --
 -- Backed up (all case- and shipment-related rows of the organization):
 --   color_case_entries, manual_pack_case_entries, case_week_sources,
+--   case_rebuild_ranges, case_week_confirmations,
 --   historical_packs, pack_case_measurements,
 --   docklink_pack_weekly_shipments, docklink_packs, docklink_pack_sync_state
 -- Cleared by a reset:
 --   color_case_entries                              (always)
---   manual_pack_case_entries, case_week_sources     (only with clear_manual_entries => true)
+--   manual_pack_case_entries, case_week_sources,
+--   case_rebuild_ranges, case_week_confirmations    (only with clear_manual_entries => true)
 -- Never cleared: historical packs, measurements, DockLink's pack data, and
 -- every non-case table (harvest yield entries, varieties, …).
 --
@@ -63,7 +65,7 @@ as $$
   select array[
     'docklink_pack_sync_state', 'docklink_packs', 'docklink_pack_weekly_shipments',
     'historical_packs', 'pack_case_measurements',
-    'color_case_entries', 'case_week_sources', 'manual_pack_case_entries'
+    'color_case_entries', 'case_week_sources', 'case_rebuild_ranges', 'case_week_confirmations', 'manual_pack_case_entries'
   ]
 $$;
 
@@ -153,7 +155,7 @@ language sql
 immutable
 as $$
   select case when p_clear_manual
-    then array['color_case_entries', 'manual_pack_case_entries', 'case_week_sources']
+    then array['color_case_entries', 'manual_pack_case_entries', 'case_week_sources', 'case_rebuild_ranges', 'case_week_confirmations']
     else array['color_case_entries'] end
 $$;
 
@@ -187,8 +189,8 @@ begin
     end if;
   end loop;
 
-  -- Entries before the week choices and colour totals (no table depends on these three, but keep a fixed order).
-  foreach v_table in array array['manual_pack_case_entries', 'case_week_sources', 'color_case_entries'] loop
+  -- A fixed order; no table depends on these.
+  foreach v_table in array array['manual_pack_case_entries', 'case_week_sources', 'case_rebuild_ranges', 'case_week_confirmations', 'color_case_entries'] loop
     continue when not (v_table = any (case_history_backup.cleared_tables(p_clear_manual_entries))) or not case_history_backup.table_exists(v_table);
     execute format('delete from public.%I where organization_id = $1', v_table) using p_org;
     get diagnostics v_count = row_count;
@@ -217,7 +219,7 @@ declare
   v_cols text;
   v_count bigint;
   v_restored jsonb := '{}'::jsonb;
-  v_tables text[] := array['color_case_entries', 'case_week_sources', 'manual_pack_case_entries'];
+  v_tables text[] := array['color_case_entries', 'case_week_sources', 'case_rebuild_ranges', 'case_week_confirmations', 'manual_pack_case_entries'];
 begin
   if p_confirm is distinct from 'RESTORE ' || p_org::text then
     raise exception 'confirmation text must be exactly: RESTORE %', p_org;
@@ -227,7 +229,7 @@ begin
 
   v_safety := case_history_backup.take_backup(p_org, 'pre-restore of ' || p_backup::text);
 
-  foreach v_table in array array['manual_pack_case_entries', 'case_week_sources', 'color_case_entries'] loop
+  foreach v_table in array array['manual_pack_case_entries', 'case_week_sources', 'case_rebuild_ranges', 'case_week_confirmations', 'color_case_entries'] loop
     continue when not case_history_backup.table_exists(v_table) or not (v_backup.row_counts ? v_table);
     execute format('delete from public.%I where organization_id = $1', v_table) using p_org;
   end loop;

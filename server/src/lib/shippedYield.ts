@@ -5,16 +5,24 @@
 //
 // Exactly one source counts for each week (resolveWeekSource); the others are
 // reported as not counted, never added:
-//   1. "packs"  — inside DockLink's authoritative pack scope (sync state
-//      "available", first_week..last_week): DockLink pack shipments. Manual
-//      pack entries and colour totals for the week are not counted.
-//   2. otherwise the week's explicit choice (case_week_sources), if any:
+//   1. "packs"  — inside DockLink's validated authoritative pack scope (sync
+//      state "available", first_week..last_week inclusive; nothing when the
+//      scope is pending or capture is not active): DockLink pack shipments.
+//      Manual pack entries and colour totals for the week are not counted.
+//   2. "manual" — inside a historical rebuild range (case_rebuild_ranges),
+//      whether or not anything has been entered yet; colour totals never
+//      count there, so a colour sync can't bring them back;
+//   3. otherwise the week's explicit choice (case_week_sources), if any:
 //      "manual" (manual pack entries) or "legacy" (colour totals);
-//   3. otherwise manual pack entries if the week has any and no colour totals;
-//   4. otherwise colour totals (color_case_entries: DockLink colour sync and
+//   4. otherwise manual pack entries if the week has any and no colour totals;
+//   5. otherwise colour totals (color_case_entries: DockLink colour sync and
 //      older manual colour entries), with their stored kg. A week with both
 //      manual entries and colour totals but no choice counts colour totals and
 //      is flagged as needing a decision.
+//
+// A manual week with no entries is "not entered yet" (incomplete, never a
+// silent zero) unless the week is confirmed complete (case_week_confirmations),
+// which makes it a confirmed zero-shipment week.
 //
 // Pack weeks and manual weeks use the same per-pack calculation:
 //   * single-colour pack: kg = cases × net kg per shipping case
@@ -28,7 +36,7 @@
 //     needing attention, never guessed into a colour
 //   * non-pepper products are reported separately and never enter pepper totals
 
-import { weekOrdinal, type ScopeStatus } from "./docklinkPackExport";
+import { isoWeeksInYear, weekOrdinal, type ScopeStatus } from "./docklinkPackExport";
 
 export const PEPPER_COLORS = ["red", "orange", "yellow", "green"] as const;
 export type PepperColor = (typeof PEPPER_COLORS)[number];
@@ -116,6 +124,15 @@ export type ManualEntryRow = {
 };
 
 export type WeekSourceChoice = { iso_year: number; iso_week: number; source: "manual_packs" | "legacy_colours" };
+
+/** An explicit span of ISO weeks rebuilt from manual pack entries (inclusive). */
+export type RebuildRange = { from: WeekRef; to: WeekRef };
+
+/** A manual week confirmed complete: every invoice entered, possibly none. */
+export type WeekConfirmation = { iso_year: number; iso_week: number };
+
+/** Whether a manual week's entries are done: none yet, some entered, or confirmed complete (possibly zero). */
+export type ManualWeekStatus = "not_entered" | "entered" | "confirmed";
 
 // ---------------------------------------------------------------------------
 // Classification of one shipment series (by its OWN ship-time fields)
@@ -236,6 +253,7 @@ export type WeekSource = "packs" | "manual" | "legacy";
 
 export type WeekSourceReason =
   | "docklink_scope" // inside DockLink's authoritative pack scope
+  | "rebuild_range" // inside a historical rebuild range
   | "chosen_manual" // explicit case_week_sources choice
   | "chosen_legacy" // explicit case_week_sources choice
   | "manual_only" // manual pack entries and no colour totals
@@ -257,6 +275,10 @@ export type WeekTotals = {
   sourceReason: WeekSourceReason;
   /** Manual pack entries and colour totals both exist and no source was chosen (colour totals count meanwhile). */
   needsSourceDecision: boolean;
+  /** Inside a historical rebuild range. */
+  inRebuildRange: boolean;
+  /** Manual weeks only (null otherwise): not entered yet, entered, or confirmed complete (a confirmed 0 is a real zero). */
+  manualStatus: ManualWeekStatus | null;
   /** kg per colour (rainbow components included) and single-colour/legacy cases per colour. */
   colors: ColorTotals;
   /** Rainbow/mixed cases — counted once, not per colour. */
@@ -278,7 +300,7 @@ export type WeekTotals = {
 
 export type ShippedYieldTotals = Omit<
   WeekTotals,
-  "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "notCounted" | "supersededLegacyRows"
+  "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "inRebuildRange" | "manualStatus" | "notCounted" | "supersededLegacyRows"
 > & {
   weekCount: number;
   packWeeks: number;
@@ -288,6 +310,10 @@ export type ShippedYieldTotals = Omit<
   weeksNeedingSourceDecision: number;
   /** Weeks whose manual pack entries are not counted (DockLink scope, or colour totals chosen). */
   weeksWithUncountedManualEntries: number;
+  /** Manual weeks with no entries and no confirmation: their shipments are unknown, not zero. */
+  weeksNotEntered: number;
+  /** Manual weeks confirmed complete (including confirmed zero-shipment weeks). */
+  weeksConfirmed: number;
 };
 
 export type ShippedYieldResult = {
@@ -305,14 +331,25 @@ export function isPackWeek(scope: PackScopeState, year: number, week: number): b
   return ord >= weekOrdinal(scope.first.year, scope.first.week) && ord <= weekOrdinal(scope.last.year, scope.last.week);
 }
 
-/**
- * True for weeks DockLink pack totals do or will cover: from the first pack
- * week on, whenever DockLink has announced one (available or pending).
- * Manual pack entries are refused for these weeks.
- */
-export function isDocklinkOwnedWeek(scope: PackScopeState, year: number, week: number): boolean {
-  if (!scope || scope.status === "capture_not_active" || !scope.first) return false;
-  return weekOrdinal(year, week) >= weekOrdinal(scope.first.year, scope.first.week);
+/** True when the week is inside any rebuild range. */
+export function inRebuildRange(ranges: RebuildRange[] | undefined, year: number, week: number): boolean {
+  const ord = weekOrdinal(year, week);
+  return (ranges ?? []).some((r) => ord >= weekOrdinal(r.from.year, r.from.week) && ord <= weekOrdinal(r.to.year, r.to.week));
+}
+
+/** Every ISO week from `from` to `to` inclusive. */
+export function weeksBetween(from: WeekRef, to: WeekRef): WeekRef[] {
+  const out: WeekRef[] = [];
+  let { year, week } = from;
+  const last = weekOrdinal(to.year, to.week);
+  while (weekOrdinal(year, week) <= last) {
+    out.push({ year, week });
+    if (week >= isoWeeksInYear(year)) {
+      year += 1;
+      week = 1;
+    } else week += 1;
+  }
+  return out;
 }
 
 export function inRange(range: WeekRange, year: number, week: number): boolean {
@@ -331,8 +368,10 @@ export function resolveWeekSource(input: {
   choice: WeekSourceChoice["source"] | null;
   manualEntries: number;
   legacyRows: number;
+  inRebuildRange?: boolean;
 }): { source: WeekSource; reason: WeekSourceReason; needsSourceDecision: boolean } {
   if (isPackWeek(input.scope, input.year, input.week)) return { source: "packs", reason: "docklink_scope", needsSourceDecision: false };
+  if (input.inRebuildRange) return { source: "manual", reason: "rebuild_range", needsSourceDecision: false };
   if (input.choice === "manual_packs") return { source: "manual", reason: "chosen_manual", needsSourceDecision: false };
   if (input.choice === "legacy_colours") return { source: "legacy", reason: "chosen_legacy", needsSourceDecision: false };
   if (input.manualEntries > 0 && input.legacyRows === 0) return { source: "manual", reason: "manual_only", needsSourceDecision: false };
@@ -381,7 +420,7 @@ function addNonPepper(list: NonPepperTotal[], cropType: string, trackingUnit: st
   else list.push({ cropType, trackingUnit, cases });
 }
 
-type WeekHeader = Pick<WeekTotals, "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "notCounted">;
+type WeekHeader = Pick<WeekTotals, "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "inRebuildRange" | "manualStatus" | "notCounted">;
 
 function emptyWeek(header: WeekHeader): WeekTotals {
   return {
@@ -456,6 +495,8 @@ export function computeShippedYield(input: {
   legacy: LegacyRow[];
   manual?: ManualEntryRow[];
   weekSources?: WeekSourceChoice[];
+  rebuildRanges?: RebuildRange[];
+  confirmations?: WeekConfirmation[];
 }): ShippedYieldResult {
   const { range, scope } = input;
   const weekKeys = new Map<number, WeekRef>();
@@ -484,16 +525,37 @@ export function computeShippedYield(input: {
     weekKeys.set(ord, { year: e.iso_year, week: e.iso_week });
     pushTo(manualByWeek, ord, e);
   }
-  for (const c of input.weekSources ?? []) choiceByWeek.set(weekOrdinal(c.iso_year, c.iso_week), c.source);
+  for (const c of input.weekSources ?? []) {
+    const ord = weekOrdinal(c.iso_year, c.iso_week);
+    choiceByWeek.set(ord, c.source);
+    // A week kept on manual entries is listed even with none left, so it reads "not entered yet", not absent.
+    if (c.source === "manual_packs" && inRange(range, c.iso_year, c.iso_week)) weekKeys.set(ord, { year: c.iso_year, week: c.iso_week });
+  }
+  const confirmed = new Set((input.confirmations ?? []).map((c) => weekOrdinal(c.iso_year, c.iso_week)));
+  // Every week of a rebuild range is listed (clipped to the requested range), entered or not.
+  for (const r of input.rebuildRanges ?? []) {
+    let from = r.from;
+    let to = r.to;
+    if (range) {
+      const lo = weekOrdinal(range.from.year, range.from.week) <= weekOrdinal(range.to.year, range.to.week) ? range.from : range.to;
+      const hi = lo === range.from ? range.to : range.from;
+      if (weekOrdinal(lo.year, lo.week) > weekOrdinal(from.year, from.week)) from = lo;
+      if (weekOrdinal(hi.year, hi.week) < weekOrdinal(to.year, to.week)) to = hi;
+    }
+    for (const w of weeksBetween(from, to)) weekKeys.set(weekOrdinal(w.year, w.week), w);
+  }
 
   const weeks: WeekTotals[] = [];
   for (const [ord, ref] of [...weekKeys.entries()].sort((a, b) => a[0] - b[0])) {
     const legacyRows = legacyByWeek.get(ord) ?? [];
     const manualEntries = manualByWeek.get(ord) ?? [];
+    const rebuild = inRebuildRange(input.rebuildRanges, ref.year, ref.week);
     const decision = resolveWeekSource({
       scope, year: ref.year, week: ref.week, choice: choiceByWeek.get(ord) ?? null,
-      manualEntries: manualEntries.length, legacyRows: legacyRows.length
+      manualEntries: manualEntries.length, legacyRows: legacyRows.length, inRebuildRange: rebuild
     });
+    const manualStatus: ManualWeekStatus | null =
+      decision.source !== "manual" ? null : confirmed.has(ord) ? "confirmed" : manualEntries.length > 0 ? "entered" : "not_entered";
     const manualCases = manualEntries.reduce((sum, e) => sum + (Number(e.cases) || 0), 0);
     const notCounted: NotCounted = {
       manualCases: decision.source === "manual" ? 0 : manualCases,
@@ -503,22 +565,24 @@ export function computeShippedYield(input: {
     };
     const header: WeekHeader = {
       isoYear: ref.year, isoWeek: ref.week, source: decision.source, sourceReason: decision.reason,
-      needsSourceDecision: decision.needsSourceDecision, notCounted
+      needsSourceDecision: decision.needsSourceDecision, inRebuildRange: rebuild, manualStatus, notCounted
     };
     const measurements = measurementsByWeek.get(ord) ?? [];
-    weeks.push(
+    const week =
       decision.source === "packs"
         ? packRowsTotals(header, shipmentsByWeek.get(ord) ?? [], measurements)
         : decision.source === "manual"
           ? packRowsTotals(header, aggregateManualEntries(manualEntries), measurements)
-          : legacyWeekTotals(header, legacyRows)
-    );
+          : legacyWeekTotals(header, legacyRows);
+    // Shipments of a week not entered yet are unknown: incomplete, never a confirmed zero.
+    if (manualStatus === "not_entered") week.complete = false;
+    weeks.push(week);
   }
 
   const totals: ShippedYieldTotals = {
     colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, unmeasuredCases: 0, attentionCases: 0,
     kg: 0, complete: true, nonPepper: [], weekCount: weeks.length, packWeeks: 0, manualWeeks: 0, legacyWeeks: 0,
-    weeksNeedingSourceDecision: 0, weeksWithUncountedManualEntries: 0
+    weeksNeedingSourceDecision: 0, weeksWithUncountedManualEntries: 0, weeksNotEntered: 0, weeksConfirmed: 0
   };
   for (const w of weeks) {
     if (w.source === "packs") totals.packWeeks += 1;
@@ -526,6 +590,8 @@ export function computeShippedYield(input: {
     else totals.legacyWeeks += 1;
     if (w.needsSourceDecision) totals.weeksNeedingSourceDecision += 1;
     if (w.notCounted.manualEntries > 0) totals.weeksWithUncountedManualEntries += 1;
+    if (w.manualStatus === "not_entered") totals.weeksNotEntered += 1;
+    if (w.manualStatus === "confirmed") totals.weeksConfirmed += 1;
     for (const color of PEPPER_COLORS) {
       totals.colors[color].kg += w.colors[color].kg;
       totals.colors[color].cases += w.colors[color].cases;
@@ -538,7 +604,7 @@ export function computeShippedYield(input: {
     totals.kg += w.kg;
     for (const n of w.nonPepper) addNonPepper(totals.nonPepper, n.cropType, n.trackingUnit, n.cases);
   }
-  totals.complete = totals.unmeasuredCases === 0 && totals.attentionCases === 0;
+  totals.complete = totals.unmeasuredCases === 0 && totals.attentionCases === 0 && totals.weeksNotEntered === 0;
 
   return { range, scope, weeks, totals };
 }

@@ -17,6 +17,7 @@ vi.mock("../../lib/api", () => ({
 
 import { ManualPackEntryModal } from "../ManualPackEntryModal";
 import { PackShipmentsWeek, type PackWeekResponse } from "../PackShipmentsWeek";
+import { RebuildRangesPanel } from "../RebuildRangesPanel";
 
 const jsonOk = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
 
@@ -194,6 +195,7 @@ function manualWeek(): PackWeekResponse {
   return {
     isoYear: 2026, isoWeek: 44, weekStart: "2026-10-26", weekEnd: "2026-11-01", sync: null,
     source: "manual", sourceReason: "chosen_manual", needsSourceDecision: false, weekSourceChoice: "manual_packs",
+    rebuildRange: null, manualStatus: "entered", confirmation: null,
     notCounted: { manualCases: 0, manualEntries: 0, legacyCases: 1700, legacyRows: 2 },
     manualEntryAllowed: true, manualEntryBlockedReason: null,
     manualEntries: [
@@ -214,6 +216,7 @@ function manualWeek(): PackWeekResponse {
     ],
     totals: {
       isoYear: 2026, isoWeek: 44, source: "manual", sourceReason: "chosen_manual", needsSourceDecision: false,
+      inRebuildRange: false, manualStatus: "entered",
       notCounted: { manualCases: 0, manualEntries: 0, legacyCases: 1700, legacyRows: 2 },
       colors: { ...zeroColors(), red: { cases: 1390, kg: 0 } }, mixedCases: 0, shippedCases: 1390, measuredCases: 0, unmeasuredCases: 1390,
       attentionCases: 0, kg: 0, complete: false, nonPepper: [], supersededLegacyRows: 2
@@ -229,7 +232,7 @@ describe("Weekly Pack Shipments — manual weeks", () => {
     apiFetch.mockImplementation((path: string, options: { method?: string } = {}) => {
       const method = options.method ?? "GET";
       if (path.startsWith("/api/pack-shipments/week")) return Promise.resolve(jsonOk(body));
-      if (path.startsWith("/api/manual-pack-entries/") && method === "DELETE") return Promise.resolve(jsonOk({ deleted: "e2", releasedWeekSource: false }));
+      if (path.startsWith("/api/manual-pack-entries/") && method === "DELETE") return Promise.resolve(jsonOk({ deleted: "e2", remainingEntries: 1 }));
       if (path === "/api/case-week-sources") return Promise.resolve(jsonOk({ source: "legacy_colours" }));
       return Promise.resolve(jsonOk({ measurement: {} }));
     });
@@ -294,5 +297,114 @@ describe("Weekly Pack Shipments — manual weeks", () => {
     expect(source).toHaveTextContent("Not counted: 2 manual pack entries (1,390 cases)");
     expect(within(source).getByRole("button", { name: "Count manual pack entries" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Packs entered for 2026-W44 \(not counted this week\)/ })).toBeInTheDocument();
+  });
+});
+
+describe("Historical rebuild weeks", () => {
+  let body: PackWeekResponse;
+  beforeEach(() => {
+    body = {
+      ...manualWeek(),
+      sourceReason: "rebuild_range",
+      weekSourceChoice: null,
+      rebuildRange: { id: "r1", from: { isoYear: 2026, isoWeek: 30 }, to: { isoYear: 2026, isoWeek: 44 } },
+      manualStatus: "not_entered",
+      confirmation: null,
+      manualEntries: [],
+      packs: []
+    } as PackWeekResponse;
+    apiFetch.mockImplementation((path: string, options: { method?: string } = {}) => {
+      const method = options.method ?? "GET";
+      if (path.startsWith("/api/pack-shipments/week")) return Promise.resolve(jsonOk(body));
+      if (path === "/api/case-week-confirmations" && method === "PUT") {
+        body = { ...body, manualStatus: "confirmed", confirmation: { confirmedAt: "2026-11-02T10:00:00Z", note: null } };
+        return Promise.resolve(jsonOk({ confirmed: true }));
+      }
+      return Promise.resolve(jsonOk({}));
+    });
+  });
+
+  it("a week with nothing entered says so — unknown, not zero — and can be confirmed as no shipments", async () => {
+    const user = userEvent.setup();
+    render(<PackShipmentsWeek initialWeek={{ isoYear: 2026, isoWeek: 44 }} />);
+    const source = await screen.findByRole("region", { name: "Source for 2026-W44" });
+    expect(source).toHaveTextContent("part of a historical rebuild, so it always uses manual pack entries. Rebuild range: 2026-W30 to 2026-W44.");
+    expect(source).toHaveTextContent("Not entered yet — nothing entered for this week. Its shipments are unknown, not zero.");
+    expect(within(source).queryByRole("button", { name: /Count colour totals/ })).not.toBeInTheDocument();
+    await user.click(within(source).getByRole("button", { name: "Confirm no shipments this week" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/case-week-confirmations")!.body).toEqual({ isoYear: 2026, isoWeek: 44, note: null }));
+    expect(await within(source).findByText("Confirmed complete")).toBeInTheDocument();
+    expect(source).toHaveTextContent("no shipments this week");
+    expect(within(source).getByRole("button", { name: "Undo confirmation" })).toBeInTheDocument();
+  });
+
+  it("deleting a week's last entry says the week stays on manual entries", async () => {
+    const user = userEvent.setup();
+    body = { ...body, manualStatus: "entered", manualEntries: manualWeek().manualEntries.slice(0, 1) };
+    apiFetch.mockImplementation((path: string, options: { method?: string } = {}) => {
+      if (path.startsWith("/api/pack-shipments/week")) return Promise.resolve(jsonOk(body));
+      if (options.method === "DELETE") return Promise.resolve(jsonOk({ deleted: "e1", remainingEntries: 0 }));
+      return Promise.resolve(jsonOk({}));
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<PackShipmentsWeek initialWeek={{ isoYear: 2026, isoWeek: 44 }} />);
+    await user.click(await screen.findByRole("button", { name: "Delete entry: Red 5kg, invoice INV-2044" }));
+    expect(await screen.findByText(/it still uses manual pack entries and reads “not entered yet”/)).toBeInTheDocument();
+  });
+
+  it("the entry modal needs no source choice inside a rebuild range", async () => {
+    weekInfo.legacyRows = [{ totalCases: 1700 }];
+    (weekInfo as Record<string, unknown>).rebuildRange = { from: { isoYear: 2026, isoWeek: 30 }, to: { isoYear: 2026, isoWeek: 44 } };
+    apiFetch.mockImplementation((path: string) => {
+      if (path === "/api/manual-pack-entries/packs") return Promise.resolve(jsonOk(CATALOGUE));
+      if (path.startsWith("/api/pack-shipments/week")) return Promise.resolve(jsonOk(weekInfo));
+      return Promise.resolve(jsonOk({}));
+    });
+    render(<ManualPackEntryModal mode={{ kind: "create", initialWeek: { isoYear: 2026, isoWeek: 44 } }} onClose={() => undefined} onSaved={() => undefined} />);
+    expect(await screen.findByText("2026-W44 is part of the historical rebuild 2026-W30 to 2026-W44: it always counts manual pack entries.")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /already has colour totals/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Historical rebuild panel", () => {
+  let ranges: unknown[];
+  beforeEach(() => {
+    ranges = [{ id: "r1", from: { isoYear: 2025, isoWeek: 10 }, to: { isoYear: 2025, isoWeek: 20 }, note: "First invoices", weeks: 11, entered: 3, confirmed: 1, notEntered: 7, docklinkWeeks: 0 }];
+    apiFetch.mockImplementation((path: string, options: { method?: string } = {}) => {
+      const method = options.method ?? "GET";
+      if (path === "/api/case-rebuild-ranges" && method === "GET") return Promise.resolve(jsonOk({ ranges }));
+      if (path === "/api/case-rebuild-ranges" && method === "POST") {
+        const range = { id: "r2", from: { isoYear: 2026, isoWeek: 1 }, to: { isoYear: 2026, isoWeek: 44 }, note: null, weeks: 44, entered: 0, confirmed: 0, notEntered: 44, docklinkWeeks: 0 };
+        ranges = [...ranges, range];
+        return Promise.resolve(jsonOk({ range }, 201));
+      }
+      if (method === "DELETE") return Promise.resolve(jsonOk({ deleted: "r1" }));
+      return Promise.resolve(jsonOk({}));
+    });
+  });
+
+  it("lists ranges with progress and adds a new one from explicit ISO weeks", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    render(<RebuildRangesPanel onChanged={onChanged} />);
+    expect(await screen.findByText(/11 weeks: 3 entered, 1 confirmed, 7 not entered yet/)).toBeInTheDocument();
+    const form = screen.getByRole("form", { name: "Add a rebuild range" });
+    await user.selectOptions(within(form).getByLabelText("From ISO year"), "2026");
+    await user.selectOptions(within(form).getByLabelText("From ISO week"), "1");
+    await user.selectOptions(within(form).getByLabelText("To ISO year"), "2026");
+    await user.selectOptions(within(form).getByLabelText("To ISO week"), "44");
+    await user.click(within(form).getByRole("button", { name: "Add rebuild range" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")!.body).toEqual({ fromIsoYear: 2026, fromIsoWeek: 1, toIsoYear: 2026, toIsoWeek: 44, note: null }));
+    expect(await screen.findByText("2026-W01 to 2026-W44 now uses manual pack entries (44 weeks).")).toBeInTheDocument();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("removing a range is explicit and says what happens to its weeks", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<RebuildRangesPanel />);
+    await user.click(await screen.findByRole("button", { name: "Remove rebuild range 2025-W10 to 2025-W20" }));
+    expect(confirm.mock.calls[0][0]).toMatch(/weeks with colour totals and no explicit choice will count colour totals again/);
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/case-rebuild-ranges/r1")).toBe(true));
   });
 });

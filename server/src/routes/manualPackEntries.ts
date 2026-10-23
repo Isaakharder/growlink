@@ -11,11 +11,14 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { requireAnyPermission, requirePermission } from "../middleware/requirePermission";
 import { sendSafeError } from "../utils/safeError";
-import { isDocklinkOwnedWeek, type PackSource } from "../lib/shippedYield";
+import { weekOrdinal } from "../lib/docklinkPackExport";
+import { inRebuildRange, isPackWeek, weeksBetween, type PackScopeState, type PackSource, type RebuildRange } from "../lib/shippedYield";
 import {
   MANUAL_ENTRY_COLUMNS,
   RouteError,
   isLikelyDuplicate,
+  loadRebuildRanges,
+  loadShippedYield,
   loadSyncState,
   manualEntryView,
   parseWeekParam,
@@ -205,15 +208,23 @@ function normalizeKindView(kind: unknown, key: unknown) {
 // Entries
 // ---------------------------------------------------------------------------
 
+const wk = (year: number, week: number) => `${year}-W${String(week).padStart(2, "0")}`;
+
+/**
+ * Manual pack entries are refused exactly where DockLink's pack totals count:
+ * inside its last validated "available" scope, first_week..last_week
+ * inclusive. Pending or not-active scopes, and weeks outside the scope, accept
+ * them (if DockLink's scope later grows over such a week, the entries are kept
+ * and reported as not counted; if it shrinks back, they count again).
+ */
+export function docklinkScopeMessage(scope: PackScopeState, year: number, week: number): string | null {
+  if (!isPackWeek(scope, year, week) || !scope?.first || !scope.last) return null;
+  return `DockLink pack totals are authoritative for ${wk(year, week)} (DockLink's pack scope is ${wk(scope.first.year, scope.first.week)} to ${wk(scope.last.year, scope.last.week)}), so it can't take manual pack entries. Correct the shipment in DockLink instead.`;
+}
+
 async function assertWeekOpenForManual(organizationId: string, year: number, week: number) {
-  const scope = toScope(await loadSyncState(organizationId));
-  if (isDocklinkOwnedWeek(scope, year, week)) {
-    throw routeError(
-      409,
-      `DockLink pack totals are authoritative from ${scope?.first?.year}-W${String(scope?.first?.week).padStart(2, "0")} on, so ${year}-W${String(week).padStart(2, "0")} can't take manual pack entries. Correct the shipment in DockLink instead.`,
-      { code: "docklink_owned_week" }
-    );
-  }
+  const message = docklinkScopeMessage(toScope(await loadSyncState(organizationId)), year, week);
+  if (message) throw routeError(409, message, { code: "docklink_owned_week" });
 }
 
 async function weekLegacy(organizationId: string, year: number, week: number) {
@@ -261,6 +272,8 @@ function parseWeekSource(value: unknown): "manual_packs" | "legacy_colours" | nu
  * replace the entered history.
  */
 async function decideWeekSource(organizationId: string, year: number, week: number, requested: "manual_packs" | "legacy_colours" | null) {
+  // A rebuild range already makes the week manual, permanently; no per-week choice applies.
+  if (inRebuildRange(await loadRebuildRanges(organizationId), year, week)) return { set: null as null, existing: "rebuild_range" as const };
   if (requested) return { set: requested };
   const existing = await weekChoice(organizationId, year, week);
   if (existing) return { set: null as null, existing };
@@ -411,21 +424,16 @@ async function loadEntry(organizationId: string, id: string): Promise<ManualEntr
   return toManualEntry(data as Record<string, unknown>);
 }
 
-/** After a week loses entries: a "manual_packs" choice with no entries left is removed, so colour totals count again. */
-async function releaseEmptyManualWeek(organizationId: string, year: number, week: number): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("manual_pack_case_entries")
-    .select("id")
-    .eq("organization_id", organizationId)
-    .eq("iso_year", year)
-    .eq("iso_week", week)
-    .limit(1);
-  if (error) throw error;
-  if ((data as unknown[] | null)?.length) return false;
-  if ((await weekChoice(organizationId, year, week)) !== "manual_packs") return false;
-  const del = await supabase.from("case_week_sources").delete().eq("organization_id", organizationId).eq("iso_year", year).eq("iso_week", week).eq("source", "manual_packs");
-  if (del.error) throw del.error;
-  return true;
+/**
+ * Entries left in a week. Removing a week's last entry never changes the
+ * week's source: a manual week with no entries reads "not entered yet" (or a
+ * confirmed zero) until the user explicitly switches it or confirms it.
+ */
+async function countWeekEntries(organizationId: string, year: number, week: number): Promise<number> {
+  const rows = await selectAll<Record<string, unknown>>(() =>
+    supabase.from("manual_pack_case_entries").select("id").eq("organization_id", organizationId).eq("iso_year", year).eq("iso_week", week).order("id")
+  );
+  return rows.length;
 }
 
 manualPackEntriesRouter.put("/manual-pack-entries/:id", canEdit, async (req, res) => {
@@ -475,8 +483,8 @@ manualPackEntriesRouter.put("/manual-pack-entries/:id", canEdit, async (req, res
       .single();
     if (error) throw error;
     if (decision.set) await setWeekChoice(req.organizationId, req.userId, year, week, decision.set);
-    const releasedPreviousWeek = weekChanged ? await releaseEmptyManualWeek(req.organizationId, existing.iso_year, existing.iso_week) : false;
-    return res.json({ entry: manualEntryView(toManualEntry(data as Record<string, unknown>)), releasedPreviousWeek });
+    const previousWeekRemainingEntries = weekChanged ? await countWeekEntries(req.organizationId, existing.iso_year, existing.iso_week) : null;
+    return res.json({ entry: manualEntryView(toManualEntry(data as Record<string, unknown>)), previousWeekRemainingEntries });
   } catch (error) {
     return respondError(res, error, "Failed to update the manual pack entry.", "manual pack entry update error:");
   }
@@ -487,8 +495,8 @@ manualPackEntriesRouter.delete("/manual-pack-entries/:id", canEdit, async (req, 
     const existing = await loadEntry(req.organizationId, String(req.params.id));
     const { error } = await supabase.from("manual_pack_case_entries").delete().eq("organization_id", req.organizationId).eq("id", existing.id);
     if (error) throw error;
-    const releasedWeekSource = await releaseEmptyManualWeek(req.organizationId, existing.iso_year, existing.iso_week);
-    return res.json({ deleted: existing.id, releasedWeekSource });
+    const remainingEntries = await countWeekEntries(req.organizationId, existing.iso_year, existing.iso_week);
+    return res.json({ deleted: existing.id, remainingEntries });
   } catch (error) {
     return respondError(res, error, "Failed to delete the manual pack entry.", "manual pack entry delete error:");
   }
@@ -504,6 +512,14 @@ manualPackEntriesRouter.put("/case-week-sources", canEdit, async (req, res) => {
     await assertWeekOpenForManual(req.organizationId, year, week);
     const source = parseWeekSource(req.body?.source);
     if (!source) throw routeError(400, "source must be manual_packs or legacy_colours.");
+    const range = (await loadRebuildRanges(req.organizationId)).find((r) => inRebuildRange([r], year, week));
+    if (range) {
+      throw routeError(
+        409,
+        `${wk(year, week)} is part of the historical rebuild ${wk(range.from.year, range.from.week)} to ${wk(range.to.year, range.to.week)}, so it always uses manual pack entries. Change the rebuild range instead.`,
+        { code: "in_rebuild_range" }
+      );
+    }
     await setWeekChoice(req.organizationId, req.userId, year, week, source);
     return res.json({ isoYear: year, isoWeek: week, source });
   } catch (error) {
@@ -519,6 +535,178 @@ manualPackEntriesRouter.delete("/case-week-sources", canEdit, async (req, res) =
     return res.status(204).send();
   } catch (error) {
     return respondError(res, error, "Failed to clear the week's source.", "case week source delete error:");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Historical rebuild ranges
+// ---------------------------------------------------------------------------
+
+const MAX_RANGE_WEEKS = 600;
+
+function parseRangeBody(body: Record<string, unknown>): RebuildRange & { note: string | null } {
+  const from = parseWeekParam(body.fromIsoYear, body.fromIsoWeek, "From");
+  const to = parseWeekParam(body.toIsoYear, body.toIsoWeek, "To");
+  if (weekOrdinal(from.year, from.week) > weekOrdinal(to.year, to.week)) throw routeError(400, "The rebuild range must start on or before its last week.");
+  if (weeksBetween(from, to).length > MAX_RANGE_WEEKS) throw routeError(400, `A rebuild range can cover at most ${MAX_RANGE_WEEKS} weeks.`);
+  return { from, to, note: optionalText(body.note, "Note", 500) };
+}
+
+const overlaps = (a: RebuildRange, b: RebuildRange) =>
+  weekOrdinal(a.from.year, a.from.week) <= weekOrdinal(b.to.year, b.to.week) && weekOrdinal(b.from.year, b.from.week) <= weekOrdinal(a.to.year, a.to.week);
+
+async function assertRangeAllowed(organizationId: string, range: RebuildRange, excludeId?: string) {
+  const existing = (await loadRebuildRanges(organizationId)).filter((r) => r.id !== excludeId);
+  const clash = existing.find((r) => overlaps(r, range));
+  if (clash) {
+    throw routeError(409, `That overlaps the rebuild range ${wk(clash.from.year, clash.from.week)} to ${wk(clash.to.year, clash.to.week)}. Change that range instead.`, { code: "range_overlap" });
+  }
+  const scope = toScope(await loadSyncState(organizationId));
+  if (scope?.status === "available" && scope.first && scope.last && overlaps(range, { from: scope.first, to: scope.last })) {
+    throw routeError(
+      409,
+      `DockLink pack totals are authoritative from ${wk(scope.first.year, scope.first.week)} to ${wk(scope.last.year, scope.last.week)}; a rebuild range must end before ${wk(scope.first.year, scope.first.week)}.`,
+      { code: "docklink_scope_overlap" }
+    );
+  }
+}
+
+async function rangeView(organizationId: string, r: RebuildRange & { id: string; note: string | null; created_at?: string }) {
+  const result = await loadShippedYield(organizationId, { from: r.from, to: r.to });
+  const count = (status: string) => result.weeks.filter((w) => w.manualStatus === status).length;
+  return {
+    id: r.id,
+    from: { isoYear: r.from.year, isoWeek: r.from.week },
+    to: { isoYear: r.to.year, isoWeek: r.to.week },
+    note: r.note,
+    weeks: weeksBetween(r.from, r.to).length,
+    entered: count("entered"),
+    confirmed: count("confirmed"),
+    notEntered: count("not_entered"),
+    // Weeks DockLink's pack scope covers now (its scope moved back over the range): DockLink counts there.
+    docklinkWeeks: result.weeks.filter((w) => w.inRebuildRange && w.source === "packs").length
+  };
+}
+
+manualPackEntriesRouter.get("/case-rebuild-ranges", canView, async (req, res) => {
+  try {
+    const ranges = await loadRebuildRanges(req.organizationId);
+    return res.json({ ranges: await Promise.all(ranges.map((r) => rangeView(req.organizationId, r))) });
+  } catch (error) {
+    return respondError(res, error, "Failed to load rebuild ranges.", "rebuild ranges list error:");
+  }
+});
+
+manualPackEntriesRouter.post("/case-rebuild-ranges", canEdit, async (req, res) => {
+  try {
+    const range = parseRangeBody((req.body ?? {}) as Record<string, unknown>);
+    await assertRangeAllowed(req.organizationId, range);
+    const { data, error } = await supabase
+      .from("case_rebuild_ranges")
+      .insert({
+        organization_id: req.organizationId,
+        from_iso_year: range.from.year,
+        from_iso_week: range.from.week,
+        to_iso_year: range.to.year,
+        to_iso_week: range.to.week,
+        note: range.note,
+        created_by: req.userId ?? null
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    const id = String((data as { id: string }).id);
+    return res.status(201).json({ range: await rangeView(req.organizationId, { ...range, id }) });
+  } catch (error) {
+    return respondError(res, error, "Failed to save the rebuild range.", "rebuild range create error:");
+  }
+});
+
+manualPackEntriesRouter.put("/case-rebuild-ranges/:id", canEdit, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const current = (await loadRebuildRanges(req.organizationId)).find((r) => r.id === id);
+    if (!current) throw routeError(404, "That rebuild range was not found.");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const range = parseRangeBody({
+      fromIsoYear: body.fromIsoYear ?? current.from.year,
+      fromIsoWeek: body.fromIsoWeek ?? current.from.week,
+      toIsoYear: body.toIsoYear ?? current.to.year,
+      toIsoWeek: body.toIsoWeek ?? current.to.week,
+      note: body.note === undefined ? current.note : body.note
+    });
+    await assertRangeAllowed(req.organizationId, range, id);
+    const { error } = await supabase
+      .from("case_rebuild_ranges")
+      .update({
+        from_iso_year: range.from.year,
+        from_iso_week: range.from.week,
+        to_iso_year: range.to.year,
+        to_iso_week: range.to.week,
+        note: range.note,
+        updated_at: new Date().toISOString()
+      })
+      .eq("organization_id", req.organizationId)
+      .eq("id", id);
+    if (error) throw error;
+    return res.json({ range: await rangeView(req.organizationId, { ...range, id }) });
+  } catch (error) {
+    return respondError(res, error, "Failed to update the rebuild range.", "rebuild range update error:");
+  }
+});
+
+// Explicit and deliberate: the range's weeks go back to their own per-week rules.
+manualPackEntriesRouter.delete("/case-rebuild-ranges/:id", canEdit, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const current = (await loadRebuildRanges(req.organizationId)).find((r) => r.id === id);
+    if (!current) throw routeError(404, "That rebuild range was not found.");
+    const { error } = await supabase.from("case_rebuild_ranges").delete().eq("organization_id", req.organizationId).eq("id", id);
+    if (error) throw error;
+    return res.json({ deleted: id });
+  } catch (error) {
+    return respondError(res, error, "Failed to delete the rebuild range.", "rebuild range delete error:");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Week confirmations: "every invoice for this week is entered" (possibly none)
+// ---------------------------------------------------------------------------
+
+manualPackEntriesRouter.put("/case-week-confirmations", canEdit, async (req, res) => {
+  try {
+    const { year, week } = parseWeekParam(req.body?.isoYear, req.body?.isoWeek, "");
+    await assertWeekOpenForManual(req.organizationId, year, week);
+    const [w] = (await loadShippedYield(req.organizationId, { from: { year, week }, to: { year, week } })).weeks;
+    if (!w || w.source !== "manual") {
+      throw routeError(409, `${wk(year, week)} isn't counted from manual pack entries, so there is nothing to confirm.`, { code: "not_a_manual_week" });
+    }
+    const { error } = await supabase.from("case_week_confirmations").upsert(
+      {
+        organization_id: req.organizationId,
+        iso_year: year,
+        iso_week: week,
+        note: optionalText(req.body?.note, "Note", 500),
+        confirmed_by: req.userId ?? null,
+        confirmed_at: new Date().toISOString()
+      },
+      { onConflict: "organization_id,iso_year,iso_week" }
+    );
+    if (error) throw error;
+    return res.json({ isoYear: year, isoWeek: week, confirmed: true });
+  } catch (error) {
+    return respondError(res, error, "Failed to confirm the week.", "week confirmation error:");
+  }
+});
+
+manualPackEntriesRouter.delete("/case-week-confirmations", canEdit, async (req, res) => {
+  try {
+    const { year, week } = parseWeekParam(req.query.isoYear, req.query.isoWeek, "");
+    const { error } = await supabase.from("case_week_confirmations").delete().eq("organization_id", req.organizationId).eq("iso_year", year).eq("iso_week", week);
+    if (error) throw error;
+    return res.status(204).send();
+  } catch (error) {
+    return respondError(res, error, "Failed to undo the confirmation.", "week confirmation delete error:");
   }
 });
 

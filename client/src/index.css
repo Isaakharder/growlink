@@ -12228,3 +12228,93 @@ textarea.cleaning-checklist-response-input {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Manual week status: not entered yet (unknown) vs entered vs confirmed complete. */
+.pack-week-manual-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.pack-week-manual-status p {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.pack-week-manual-status--not_entered {
+  background: #fff1d6;
+  color: #8a4b00;
+}
+
+.pack-week-manual-status--confirmed {
+  background: #e3f2ec;
+  color: #1b5e20;
+}
+
+.pack-week-manual-status button {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.rebuild-ranges ul {
+  margin: 0.4rem 0 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.rebuild-ranges li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rebuild-range-progress {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.rebuild-range-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.rebuild-range-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.rebuild-range-form input,
+.rebuild-range-form select,
+.rebuild-range-form button,
+.rebuild-ranges li button {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.yield-entry-layout > .rebuild-ranges {
+  grid-column: 1 / -1;
+}

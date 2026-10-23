@@ -24,6 +24,7 @@ const VIEWER = "aaaaaaaa-0000-4000-8000-00000000000b";
 const fixturePath = path.resolve(__dirname, "../../lib/__tests__/fixtures/docklink-pack-export-v1.json");
 const migration = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0143_docklink_pack_shipments.sql"), "utf8");
 const migration0144 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0144_manual_pack_case_entries.sql"), "utf8");
+const migration0145 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0145_case_rebuild_ranges.sql"), "utf8");
 type Doc = ReturnType<typeof JSON.parse>;
 const freshFixture = (): Doc => JSON.parse(readFileSync(fixturePath, "utf8"));
 
@@ -58,6 +59,7 @@ async function resetDatabase() {
   `);
   await db.exec(migration);
   await db.exec(migration0144);
+  await db.exec(migration0145);
 }
 
 before(async () => {

@@ -16,7 +16,10 @@ export type NonPepperTotal = { cropType: string; trackingUnit: string | null; ca
 
 /** Which data counts for a week (exactly one): DockLink pack shipments, manual pack entries, or colour totals. */
 export type WeekSource = "packs" | "manual" | "legacy";
-export type WeekSourceReason = "docklink_scope" | "chosen_manual" | "chosen_legacy" | "manual_only" | "legacy_only" | "undecided";
+export type WeekSourceReason = "docklink_scope" | "rebuild_range" | "chosen_manual" | "chosen_legacy" | "manual_only" | "legacy_only" | "undecided";
+
+/** Manual weeks: not entered yet (unknown, not zero), entered, or confirmed complete (a confirmed 0 is a real zero). */
+export type ManualWeekStatus = "not_entered" | "entered" | "confirmed";
 
 /** Data recorded for a week that does not count because another source is authoritative. */
 export type NotCounted = { manualCases: number; manualEntries: number; legacyCases: number; legacyRows: number };
@@ -27,6 +30,8 @@ export type ShippedWeekTotals = {
   source: WeekSource;
   sourceReason: WeekSourceReason;
   needsSourceDecision: boolean;
+  inRebuildRange: boolean;
+  manualStatus: ManualWeekStatus | null;
   notCounted: NotCounted;
   colors: ColorTotals;
   mixedCases: number;
@@ -42,7 +47,7 @@ export type ShippedWeekTotals = {
 
 export type ShippedTotals = Omit<
   ShippedWeekTotals,
-  "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "notCounted" | "supersededLegacyRows"
+  "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "inRebuildRange" | "manualStatus" | "notCounted" | "supersededLegacyRows"
 > & {
   weekCount: number;
   packWeeks: number;
@@ -50,6 +55,8 @@ export type ShippedTotals = Omit<
   legacyWeeks: number;
   weeksNeedingSourceDecision: number;
   weeksWithUncountedManualEntries: number;
+  weeksNotEntered: number;
+  weeksConfirmed: number;
 };
 
 export const WEEK_SOURCE_LABELS: Record<WeekSource, string> = {
@@ -60,6 +67,7 @@ export const WEEK_SOURCE_LABELS: Record<WeekSource, string> = {
 
 export const WEEK_SOURCE_REASON_LABELS: Record<WeekSourceReason, string> = {
   docklink_scope: "DockLink pack totals are authoritative for this week.",
+  rebuild_range: "This week is part of a historical rebuild, so it always uses manual pack entries.",
   chosen_manual: "Manual pack entries were chosen for this week.",
   chosen_legacy: "Colour totals were chosen for this week.",
   manual_only: "This week only has manual pack entries.",
@@ -71,6 +79,12 @@ export const WEEK_SOURCE_REASON_LABELS: Record<WeekSourceReason, string> = {
  * "Not counted: 1,700 cases in colour totals · 2 manual entries (77 cases)",
  * or null when nothing recorded for the week is left out.
  */
+export const MANUAL_STATUS_LABELS: Record<ManualWeekStatus, string> = {
+  not_entered: "Not entered yet",
+  entered: "Entries in progress",
+  confirmed: "Confirmed complete"
+};
+
 export function notCountedText(week: Pick<ShippedWeekTotals, "notCounted"> | null | undefined): string | null {
   const n = week?.notCounted;
   if (!n) return null;

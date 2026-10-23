@@ -4,6 +4,7 @@ import { isoWeekOf, isoWeekRangeLabel, isoWeeksInYear, shiftIsoWeek } from "../l
 import {
   ATTENTION_REASON_LABELS,
   PEPPER_COLORS,
+  MANUAL_STATUS_LABELS,
   WEEK_SOURCE_LABELS,
   WEEK_SOURCE_REASON_LABELS,
   formatCases,
@@ -11,13 +12,14 @@ import {
   incompleteShippedText,
   notCountedText,
   type NotCounted,
+  type ManualWeekStatus,
   type PackSyncSummary,
   type PepperColor,
   type ShippedWeekTotals,
   type WeekSource,
   type WeekSourceReason
 } from "../lib/shippedYield";
-import { classificationLabel, deleteManualEntry, setWeekSource, type ManualEntry, type WeekSourceChoice } from "../lib/manualPackEntries";
+import { classificationLabel, confirmWeek, deleteManualEntry, setWeekSource, unconfirmWeek, type ManualEntry, type WeekSourceChoice } from "../lib/manualPackEntries";
 import { ManualPackEntryModal } from "./ManualPackEntryModal";
 
 // Weekly pack shipments for one ISO week: DockLink's shipped cases per
@@ -80,6 +82,9 @@ export type PackWeekResponse = {
   sourceReason: WeekSourceReason;
   needsSourceDecision: boolean;
   weekSourceChoice: WeekSourceChoice | null;
+  rebuildRange: { id: string; from: { isoYear: number; isoWeek: number }; to: { isoYear: number; isoWeek: number } } | null;
+  manualStatus: ManualWeekStatus | null;
+  confirmation: { confirmedAt: string; note: string | null } | null;
   notCounted: NotCounted;
   manualEntryAllowed: boolean;
   manualEntryBlockedReason: string | null;
@@ -171,6 +176,9 @@ export function PackShipmentsWeek({
         sourceReason: raw.sourceReason ?? (raw.source === "packs" ? "docklink_scope" : "legacy_only"),
         needsSourceDecision: raw.needsSourceDecision ?? false,
         weekSourceChoice: raw.weekSourceChoice ?? null,
+        rebuildRange: raw.rebuildRange ?? null,
+        manualStatus: raw.manualStatus ?? null,
+        confirmation: raw.confirmation ?? null,
         notCounted: raw.notCounted ?? { manualCases: 0, manualEntries: 0, legacyCases: 0, legacyRows: 0 },
         manualEntryAllowed: raw.manualEntryAllowed ?? false,
         manualEntryBlockedReason: raw.manualEntryBlockedReason ?? null,
@@ -214,9 +222,23 @@ export function PackShipmentsWeek({
     if (!window.confirm(`Delete this entry (${entry.packName}, ${formatCases(entry.cases)} cases${entry.invoiceRef ? `, invoice ${entry.invoiceRef}` : ""})?`)) return;
     try {
       const result = await deleteManualEntry(entry.id);
-      await changed(result.releasedWeekSource ? "Entry deleted. The week has no manual entries left, so colour totals count again." : "Entry deleted.");
+      await changed(
+        result.remainingEntries === 0
+          ? "Entry deleted. The week has no entries left; it still uses manual pack entries and reads “not entered yet” until you add entries, confirm it had no shipments, or switch it to colour totals."
+          : "Entry deleted."
+      );
     } catch (deleteError) {
       setEntryStatus({ kind: "error", message: deleteError instanceof Error ? deleteError.message : "Delete failed" });
+    }
+  }
+
+  async function setConfirmed(confirmed: boolean) {
+    try {
+      if (confirmed) await confirmWeek(selected.isoYear, selected.isoWeek);
+      else await unconfirmWeek(selected.isoYear, selected.isoWeek);
+      await changed(confirmed ? `${weekLabel(selected)} confirmed complete.` : `${weekLabel(selected)} is no longer confirmed.`);
+    } catch (confirmError) {
+      setEntryStatus({ kind: "error", message: confirmError instanceof Error ? confirmError.message : "Couldn't change the confirmation" });
     }
   }
 
@@ -378,7 +400,35 @@ export function PackShipmentsWeek({
           <p>
             <span className="pack-week-source-label">Counted for {weekLabel(data)}:</span> <strong>{WEEK_SOURCE_LABELS[data.source]}</strong>
           </p>
-          <p className="pack-week-note">{WEEK_SOURCE_REASON_LABELS[data.sourceReason]}</p>
+          <p className="pack-week-note">
+            {WEEK_SOURCE_REASON_LABELS[data.sourceReason]}
+            {data.rebuildRange
+              ? ` Rebuild range: ${weekLabel(data.rebuildRange.from)} to ${weekLabel(data.rebuildRange.to)}.`
+              : ""}
+          </p>
+          {data.source === "manual" && data.manualStatus ? (
+            <div className={`pack-week-manual-status pack-week-manual-status--${data.manualStatus}`}>
+              <p>
+                <strong>{MANUAL_STATUS_LABELS[data.manualStatus]}</strong>
+                {data.manualStatus === "not_entered"
+                  ? " — nothing entered for this week. Its shipments are unknown, not zero."
+                  : data.manualStatus === "entered"
+                    ? " — add any remaining invoices, then confirm the week."
+                    : ` — ${data.manualEntries.length === 0 ? "no shipments this week" : "every invoice entered"} (confirmed ${new Date(data.confirmation?.confirmedAt ?? "").toLocaleDateString()}).`}
+              </p>
+              {data.manualEntryAllowed ? (
+                data.manualStatus === "confirmed" ? (
+                  <button type="button" className="secondary" onClick={() => void setConfirmed(false)}>
+                    Undo confirmation
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void setConfirmed(true)}>
+                    {data.manualEntries.length === 0 ? "Confirm no shipments this week" : "Confirm week complete"}
+                  </button>
+                )
+              ) : null}
+            </div>
+          ) : null}
           {notCountedText(data) ? <p className="pack-week-not-counted">{notCountedText(data)}</p> : null}
           {data.source !== "packs" && data.manualEntries.length > 0 && data.legacyRows.length > 0 ? (
             <div className="pack-week-source-actions">

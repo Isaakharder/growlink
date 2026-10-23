@@ -27,6 +27,7 @@ import {
 type Mode = { kind: "create"; initialWeek?: { isoYear: number; isoWeek: number } } | { kind: "edit"; entry: ManualEntry };
 
 type WeekInfo = {
+  rebuildRange?: { from: { isoYear: number; isoWeek: number }; to: { isoYear: number; isoWeek: number } } | null;
   manualEntryAllowed: boolean;
   manualEntryBlockedReason: string | null;
   weekSourceChoice: WeekSourceChoice | null;
@@ -106,7 +107,8 @@ export function ManualPackEntryModal({ mode, onClose, onSaved }: { mode: Mode; o
 
   const legacyCases = (weekInfo?.legacyRows ?? []).reduce((s, r) => s + (Number(r.totalCases) || 0), 0);
   const movingWeek = editing ? editing.isoYear !== year || editing.isoWeek !== week : true;
-  const needsChoice = Boolean(movingWeek && weekInfo && weekInfo.manualEntryAllowed && !weekInfo.weekSourceChoice && weekInfo.legacyRows.length > 0);
+  const rebuild = weekInfo?.rebuildRange ?? null;
+  const needsChoice = Boolean(movingWeek && weekInfo && weekInfo.manualEntryAllowed && !rebuild && !weekInfo.weekSourceChoice && weekInfo.legacyRows.length > 0);
   const blocked = weekInfo && !weekInfo.manualEntryAllowed ? weekInfo.manualEntryBlockedReason : null;
 
   function updateLine(key: number, patch: Partial<Line>) {
@@ -234,7 +236,9 @@ export function ManualPackEntryModal({ mode, onClose, onSaved }: { mode: Mode; o
             </fieldset>
           ) : (
             <p className="manual-pack-source-note">
-              {weekInfo.weekSourceChoice === "legacy_colours"
+              {rebuild
+                ? `${weekLabel(year, week)} is part of the historical rebuild ${weekLabel(rebuild.from.isoYear, rebuild.from.isoWeek)} to ${weekLabel(rebuild.to.isoYear, rebuild.to.isoWeek)}: it always counts manual pack entries.`
+                : weekInfo.weekSourceChoice === "legacy_colours"
                 ? `${weekLabel(year, week)} counts colour totals (chosen). These entries are recorded but not counted until you switch the week to manual pack entries.`
                 : weekInfo.weekSourceChoice === "manual_packs"
                   ? `${weekLabel(year, week)} counts manual pack entries.`

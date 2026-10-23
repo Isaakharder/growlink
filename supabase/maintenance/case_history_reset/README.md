@@ -14,6 +14,7 @@ Replace `ORG_ID` with the organization's id (`select id, name from organizations
 | `color_case_entries` | all of the org's weekly colour totals — DockLink colour sync rows **and** older manual colour entries, every year | **Yes, always** |
 | `manual_pack_case_entries` | manual pack entries (e.g. test entries made while trying the new screen) | Only with `clear_manual_entries => true` |
 | `case_week_sources` | per-week source choices | Only with `clear_manual_entries => true` |
+| `case_rebuild_ranges`, `case_week_confirmations` | historical rebuild ranges and confirmed weeks | Only with `clear_manual_entries => true` |
 | `historical_packs` | old-invoice pack definitions | No (backed up) |
 | `pack_case_measurements` | weekly kg/case and rainbow measurements | No (backed up) |
 | `docklink_pack_sync_state`, `docklink_packs`, `docklink_pack_weekly_shipments` | DockLink's pack catalogue and pack shipments | No (backed up; owned by the DockLink sync) |
@@ -28,9 +29,11 @@ Only rows with `organization_id = ORG_ID` are read, backed up or deleted.
    week DockLink has colour totals for back on the next sync. That is safe for
    weeks you have re-entered — a week with manual entries records
    *manual pack entries* as its source when the first entry is saved, so synced
-   colour totals for it are kept but not counted. Weeks you have not re-entered
-   yet will show synced colour totals again until you do. If that is not what
-   you want, don't run the sync until the re-entry is finished.
+   colour totals for it are kept but not counted. **Create the historical
+   rebuild range first** (Cases tab → Historical rebuild): every week in the
+   range then uses manual pack entries — weeks not entered yet show as "not
+   entered yet", never as colour totals — so a sync can't bring colour totals
+   back anywhere in the range. Weeks outside any range keep their own rules.
 2. Deploy migrations 0143 and 0144 first and check that the new screen works in
    production with a test entry or two (clear them with `clear_manual_entries => true`).
 3. Optional off-database copy: Table editor → `color_case_entries` → filter

@@ -25,7 +25,7 @@ const YELLOW = "a3f00000-0000-4000-8000-000000000002";
 const TRI = "d91b0000-0000-4000-8000-000000000004"; // archived in DockLink
 const GREEN = "a3f00000-0000-4000-8000-000000000005"; // archived in DockLink
 
-const migrations = ["0143_docklink_pack_shipments.sql", "0144_manual_pack_case_entries.sql"].map((f) =>
+const migrations = ["0143_docklink_pack_shipments.sql", "0144_manual_pack_case_entries.sql", "0145_case_rebuild_ranges.sql"].map((f) =>
   readFileSync(path.resolve(__dirname, "../../../../supabase/migrations", f), "utf8")
 );
 const fixture = () => JSON.parse(readFileSync(path.resolve(__dirname, "../../lib/__tests__/fixtures/docklink-pack-export-v1.json"), "utf8"));
@@ -133,6 +133,32 @@ const RAINBOW = [
   { color: "yellow", piecesPerCase: 15, fruitWeightG: 175 },
   { color: "orange", piecesPerCase: 15, fruitWeightG: 170 }
 ];
+let generation = 0;
+function scoped(first: number | null, last: number | null, status = "available") {
+  const doc = fixture();
+  generation += 1;
+  doc.generated_at = new Date(Date.parse("2026-11-24T00:00:00Z") + generation * 3_600_000).toISOString();
+  doc.scope.status = status;
+  if (first !== null && last !== null) {
+    doc.scope.first_week = { iso_year: 2026, iso_week: first, week_start: "", week_end: "" };
+    doc.scope.last_week = { iso_year: 2026, iso_week: last, week_start: "", week_end: "" };
+    const mondays: Record<number, string> = { 44: "2026-10-26", 45: "2026-11-02", 46: "2026-11-09", 47: "2026-11-16", 48: "2026-11-23", 49: "2026-11-30", 50: "2026-12-07" };
+    for (const k of ["first_week", "last_week"] as const) {
+      doc.scope[k].week_start = mondays[doc.scope[k].iso_week];
+      doc.scope[k].week_end = new Date(Date.parse(mondays[doc.scope[k].iso_week]) + 6 * 86_400_000).toISOString().slice(0, 10);
+    }
+    doc.scope.transition_week = { iso_year: 2026, iso_week: first - 1, week_start: mondays[first - 1], week_end: new Date(Date.parse(mondays[first - 1]) + 6 * 86_400_000).toISOString().slice(0, 10) };
+  }
+  doc.weekly_pack_totals = status === "available" ? doc.weekly_pack_totals.filter((r: any) => r.iso_week >= (first ?? 0) && r.iso_week <= (last ?? 0)) : [];
+  docklinkResponse = () => ({ data: doc, error: null });
+  return doc;
+}
+const manualEntryRow = (week: number, cases: number) =>
+  db.query(
+    `insert into manual_pack_case_entries (organization_id, iso_year, iso_week, pack_source, docklink_pack_id, pack_name, color_kind, color_key, crop_type, tracking_unit, cases)
+     values ($1, 2026, $2, 'docklink', $3, 'Red 5kg', 'single', 'red', 'pepper', 'kg', $4)`, [ORG, week, RED, cases]
+  );
+
 const manualSnapshot = async () =>
   JSON.stringify(
     await Promise.all(
@@ -209,7 +235,7 @@ test("duplicates are flagged: the same invoice and pack again, or the same week/
   assert.equal(again.status, 409);
   assert.equal(again.body.code, "possible_duplicates");
   assert.deepEqual(again.body.duplicates.map((d: any) => `${d.line}:${d.existing.invoiceRef}:${d.existing.isoWeek}`), ["0:INV-1001:14"]);
-  assert.equal((await db.query(`select count(*)::int n from manual_pack_case_entries`)).rows[0].n, 1, "nothing saved until confirmed");
+  assert.equal((await db.query<{ n: number }>(`select count(*)::int n from manual_pack_case_entries`)).rows[0].n, 1, "nothing saved until confirmed");
 
   // Same invoice, different pack: normal (one invoice lists several packs).
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, invoiceRef: "INV-1001", lines: [line(YELLOW, 50)] })).status, 201);
@@ -250,28 +276,59 @@ test("a week with colour totals needs an explicit source; the chosen source coun
   assert.equal(y.totals.weeksNeedingSourceDecision, 1);
 });
 
-test("DockLink pack weeks refuse manual entries (from the first pack week on); a stray overlap is reported, not added", async () => {
-  await sync();
-  for (const w of [45, 48, 52]) {
-    const r = await add({ isoYear: 2026, isoWeek: w, lines: [line(RED, 10)] });
+test("DockLink precedence is exactly its validated available scope (first..last, status); moving it forward and back keeps manual history", async () => {
+  // Pending scope: nothing is DockLink's yet, so manual entries are accepted in W46 and W49.
+  scoped(45, 48, "pending_first_full_week");
+  assert.equal((await sync()).status, 200);
+  assert.equal((await add({ isoYear: 2026, isoWeek: 46, invoiceRef: "INV-46", lines: [line(RED, 99)] })).status, 201, "pending scope doesn't own W46");
+  assert.equal((await add({ isoYear: 2026, isoWeek: 49, invoiceRef: "INV-49", lines: [line(RED, 77)] })).status, 201);
+  const history = await manualSnapshot();
+
+  // Available 45..48: W45 and W48 (first and last) refuse new entries; W44 and W49 (just outside) accept them.
+  scoped(45, 48);
+  assert.equal((await sync()).status, 200);
+  for (const w of [45, 46, 48]) {
+    const r = await add({ isoYear: 2026, isoWeek: w, lines: [line(YELLOW, 10)] });
     assert.equal(r.status, 409, `W${w}`);
     assert.equal(r.body.code, "docklink_owned_week");
+    assert.match(r.body.message, /2026-W45 to 2026-W48/);
   }
   assert.equal((await call("/case-week-sources", { method: "PUT", body: { isoYear: 2026, isoWeek: 46, source: "manual_packs" } })).status, 409);
-
-  // An entry that predates the sync (DockLink's scope arrived later) is kept, shown and not counted.
-  await db.query(
-    `insert into manual_pack_case_entries (organization_id, iso_year, iso_week, pack_source, docklink_pack_id, pack_name, color_kind, color_key, crop_type, tracking_unit, cases)
-     values ($1, 2026, 46, 'docklink', $2, 'Red 5kg', 'single', 'red', 'pepper', 'kg', 99)`, [ORG, RED]
-  );
-  const w46 = (await week(2026, 46)).body;
+  let w46 = (await week(2026, 46)).body;
   assert.equal(w46.source, "packs");
   assert.equal(w46.manualEntryAllowed, false);
-  assert.equal(w46.manualEntries.length, 1);
-  assert.equal(w46.notCounted.manualCases, 99);
+  assert.match(w46.manualEntryBlockedReason, /2026-W45 to 2026-W48/);
+  assert.equal(w46.notCounted.manualCases, 99, "the earlier entry is kept, shown, not counted");
   assert.equal(w46.totals.shippedCases, 1720 + 610 + 120);
-  const y = (await call("/shipped-yield?fromYear=2026&fromWeek=46&toYear=2026&toWeek=46")).body;
-  assert.equal(y.totals.weeksWithUncountedManualEntries, 1);
+  let w49 = (await week(2026, 49)).body;
+  assert.equal(w49.source, "manual", "beyond last_week is not DockLink's yet");
+  assert.equal(w49.totals.shippedCases, 77);
+  assert.equal(w49.manualEntryAllowed, true);
+
+  // Forward: DockLink's scope now runs to W50. W49 becomes DockLink's; its manual entry is kept, not counted.
+  scoped(45, 50);
+  assert.equal((await sync()).status, 200);
+  w49 = (await week(2026, 49)).body;
+  assert.equal(w49.source, "packs");
+  assert.equal(w49.notCounted.manualCases, 77);
+  assert.equal((await add({ isoYear: 2026, isoWeek: 50, lines: [line(RED, 1)] })).status, 409);
+
+  // Backward: DockLink's first pack week moves to W47 (e.g. an uncaptured load). W46 is manual again, with its history.
+  scoped(47, 50);
+  assert.equal((await sync()).status, 200);
+  w46 = (await week(2026, 46)).body;
+  assert.equal(w46.source, "manual");
+  assert.equal(w46.totals.shippedCases, 99);
+  assert.equal(w46.manualEntryAllowed, true);
+  const w45 = (await yieldFor(2026, 45)).body.weeks;
+  assert.deepEqual(w45, [], "W45 left the scope and has no other data");
+
+  // Not active: every week accepts manual entries; nothing counts as DockLink's.
+  scoped(null, null, "capture_not_active");
+  assert.equal((await sync()).status, 200);
+  assert.equal((await week(2026, 47)).body.source, "legacy");
+  assert.equal((await week(2026, 49)).body.source, "manual");
+  assert.equal(await manualSnapshot(), history, "no sync, forward or back, changed a manual entry or choice");
 });
 
 test("syncs never overwrite, zero or delete manual entries, historical packs or week choices", async () => {
@@ -302,7 +359,7 @@ test("syncs never overwrite, zero or delete manual entries, historical packs or 
   assert.equal(w.notCounted.legacyCases, 999);
 });
 
-test("edit and remove individual entries; a week's manual source is released when its last entry goes", async () => {
+test("edit and remove individual entries; deleting a week's last entry never switches it back to colour totals", async () => {
   await sync();
   const created = (await add({ isoYear: 2025, isoWeek: 14, invoiceRef: "INV-1", lines: [line(RED, 400), line(YELLOW, 30)] })).body.entries;
   const red = created.find((e: any) => e.packId === RED);
@@ -312,16 +369,36 @@ test("edit and remove individual entries; a week's manual source is released whe
   assert.equal(edited.status, 200, JSON.stringify(edited.body));
   assert.deepEqual([edited.body.entry.cases, edited.body.entry.invoiceRef, edited.body.entry.note, edited.body.entry.colorKey], [410, "INV-1A", "recounted", "red"]);
 
-  // Moving an entry to another week: W14 keeps its source because the yellow entry is still there.
   const moved = await call(`/manual-pack-entries/${red.id}`, { method: "PUT", body: { isoYear: 2025, isoWeek: 15 } });
   assert.equal(moved.status, 200);
-  assert.equal(moved.body.releasedPreviousWeek, false);
+  assert.equal(moved.body.previousWeekRemainingEntries, 1);
   assert.equal((await week(2025, 15)).body.source, "manual");
 
+  // Colour totals arrive for W14 (a colour sync), then W14's last entry is deleted.
+  await db.query(`insert into color_case_entries (organization_id, color, year, week, total_cases, case_weight_kg, total_kg, source) values ($1, 'red', 2025, 14, 999, 5.15, 5144.85, 'docklink')`, [ORG]);
   const del = await call(`/manual-pack-entries/${yellow.id}`, { method: "DELETE" });
   assert.equal(del.status, 200);
-  assert.equal(del.body.releasedWeekSource, true, "W14 has no entries left, so its manual source choice is removed");
-  assert.equal((await db.query(`select count(*)::int n from case_week_sources where iso_week = 14`)).rows[0].n, 0);
+  assert.equal(del.body.remainingEntries, 0);
+  assert.equal((await db.query<{ n: number }>(`select count(*)::int n from case_week_sources where iso_week = 14 and source = 'manual_packs'`)).rows[0].n, 1, "the week's choice is kept");
+  let w14 = (await week(2025, 14)).body;
+  assert.equal(w14.source, "manual", "still manual; colour totals don't silently come back");
+  assert.equal(w14.manualStatus, "not_entered");
+  assert.equal(w14.totals.complete, false, "not entered yet is incomplete, not a zero");
+  assert.equal(w14.notCounted.legacyCases, 999);
+
+  // Confirmed zero-shipment week is different from not entered.
+  assert.equal((await call("/case-week-confirmations", { method: "PUT", body: { isoYear: 2025, isoWeek: 14, note: "no invoices that week" } })).status, 200);
+  w14 = (await week(2025, 14)).body;
+  assert.equal(w14.manualStatus, "confirmed");
+  assert.equal(w14.totals.shippedCases, 0);
+  assert.equal(w14.totals.complete, true);
+  assert.equal(w14.confirmation.note, "no invoices that week");
+  assert.equal((await call("/case-week-confirmations?isoYear=2025&isoWeek=14", { method: "DELETE" })).status, 204);
+  assert.equal((await week(2025, 14)).body.manualStatus, "not_entered");
+
+  // Switching back to colour totals is explicit.
+  assert.equal((await call("/case-week-sources", { method: "PUT", body: { isoYear: 2025, isoWeek: 14, source: "legacy_colours" } })).status, 200);
+  assert.equal((await week(2025, 14)).body.source, "legacy");
   assert.equal((await call(`/manual-pack-entries/${yellow.id}`, { method: "DELETE" })).status, 404);
 
   // Editing into a DockLink week is refused; invalid cases are refused.
@@ -393,12 +470,12 @@ test("validation: week, packs, cases, lines", async () => {
   assert.equal((await add({ isoYear: 2025, isoWeek: 53, lines: [line(RED, 1)] })).status, 400, "2025 has 52 ISO weeks");
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [] })).status, 400);
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [line(RED, 0)] })).status, 400);
-  assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [line(RED, "12")] as any })).status, 400);
+  assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [{ packSource: "docklink", packId: RED, cases: "12" }] })).status, 400);
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [line(RED, 1), line(RED, 2)] })).status, 400);
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [line("no-such-pack", 1)] })).status, 404);
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [line(RED, 1, "croplink")] })).status, 400);
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, invoiceRef: "x".repeat(101), lines: [line(RED, 1)] })).status, 400);
-  assert.equal((await db.query(`select count(*)::int n from manual_pack_case_entries`)).rows[0].n, 0, "a rejected save writes nothing");
+  assert.equal((await db.query<{ n: number }>(`select count(*)::int n from manual_pack_case_entries`)).rows[0].n, 0, "a rejected save writes nothing");
 });
 
 test("organization isolation: another organization can't see, change or use this organization's entries and packs", async () => {
@@ -415,7 +492,7 @@ test("organization isolation: another organization can't see, change or use this
   assert.equal((await add({ isoYear: 2025, isoWeek: 14, lines: [line(RED, 1)] }, other)).status, 404, "org B has no copy of org A's DockLink pack");
   assert.equal((await call("/manual-pack-entries/packs", other)).body.historical.length, 0);
   assert.equal((await call(`/historical-packs/${hist}`, { ...other, method: "DELETE" })).status, 404);
-  assert.equal((await db.query(`select cases::int c from manual_pack_case_entries`)).rows[0].c, 400);
+  assert.equal((await db.query<{ c: number }>(`select cases::int c from manual_pack_case_entries`)).rows[0].c, 400);
 });
 
 test("permissions: cases:view can read entries and totals but can't add, edit, delete, choose a source or add packs", async () => {
@@ -447,4 +524,100 @@ test("projections compare against the same weekly shipped cases (manual weeks, c
     assert.equal(r.actual_amount, w.colors.red.cases, `W${r.target_week}`);
   }
   assert.deepEqual(rows.map((r) => r.actual_amount), [1390, 1720 + 120]);
+});
+
+test("a historical rebuild range: every week uses manual entries, entered or not; colour totals never count there", async () => {
+  await sync();
+  const created = await call("/case-rebuild-ranges", { body: { fromIsoYear: 2025, fromIsoWeek: 10, toIsoYear: 2025, toIsoWeek: 20, note: "Rebuild from first invoices" } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.deepEqual(
+    { weeks: created.body.range.weeks, entered: created.body.range.entered, confirmed: created.body.range.confirmed, notEntered: created.body.range.notEntered },
+    { weeks: 11, entered: 0, confirmed: 0, notEntered: 11 }
+  );
+
+  // W20 has an older manual colour total (800 cases): inside the range it's kept, never counted.
+  let w20 = (await week(2025, 20)).body;
+  assert.equal(w20.source, "manual");
+  assert.equal(w20.sourceReason, "rebuild_range");
+  assert.equal(w20.manualStatus, "not_entered");
+  assert.equal(w20.notCounted.legacyCases, 800);
+  assert.equal(w20.rebuildRange.from.isoWeek, 10);
+
+  // Entries need no per-week choice inside a range, and none is stored.
+  assert.equal((await add({ isoYear: 2025, isoWeek: 20, invoiceRef: "INV-520", lines: [line(RED, 650)] })).status, 201);
+  assert.equal((await db.query<{ n: number }>(`select count(*)::int n from case_week_sources`)).rows[0].n, 0);
+  w20 = (await week(2025, 20)).body;
+  assert.equal(w20.manualStatus, "entered");
+  assert.equal(w20.totals.shippedCases, 650);
+
+  // A colour sync bringing totals back for range weeks changes nothing.
+  await db.query(`insert into color_case_entries (organization_id, color, year, week, total_cases, case_weight_kg, total_kg, source) values ($1, 'red', 2025, 12, 500, 5.15, 2575, 'docklink')`, [ORG]);
+  const w12 = (await week(2025, 12)).body;
+  assert.equal(w12.source, "manual");
+  assert.equal(w12.totals.shippedCases, 0);
+  assert.equal(w12.manualStatus, "not_entered");
+
+  // Confirmed zero vs not entered, over the whole range.
+  assert.equal((await call("/case-week-confirmations", { method: "PUT", body: { isoYear: 2025, isoWeek: 11 } })).status, 200);
+  const y = (await call("/shipped-yield?fromYear=2025&fromWeek=10&toYear=2025&toWeek=20")).body;
+  assert.equal(y.weeks.length, 11, "every week of the range is listed, entered or not");
+  assert.equal(y.totals.shippedCases, 650);
+  assert.equal(y.totals.weeksNotEntered, 9);
+  assert.equal(y.totals.weeksConfirmed, 1);
+  assert.equal(y.totals.complete, false);
+  const ranges = (await call("/case-rebuild-ranges")).body.ranges;
+  assert.deepEqual([ranges[0].entered, ranges[0].confirmed, ranges[0].notEntered], [1, 1, 9]);
+
+  // Deleting the last entry keeps the week manual (not entered yet), never colour totals.
+  const [entry] = (await week(2025, 20)).body.manualEntries;
+  assert.equal((await call(`/manual-pack-entries/${entry.id}`, { method: "DELETE" })).status, 200);
+  w20 = (await week(2025, 20)).body;
+  assert.equal(w20.source, "manual");
+  assert.equal(w20.manualStatus, "not_entered");
+  assert.equal(w20.notCounted.legacyCases, 800);
+
+  // Per-week choices can't override the range; ranges can't overlap each other or DockLink's scope.
+  const choice = await call("/case-week-sources", { method: "PUT", body: { isoYear: 2025, isoWeek: 15, source: "legacy_colours" } });
+  assert.equal(choice.status, 409);
+  assert.equal(choice.body.code, "in_rebuild_range");
+  assert.equal((await call("/case-rebuild-ranges", { body: { fromIsoYear: 2025, fromIsoWeek: 18, toIsoYear: 2025, toIsoWeek: 30 } })).body.code, "range_overlap");
+  assert.equal((await call("/case-rebuild-ranges", { body: { fromIsoYear: 2026, fromIsoWeek: 40, toIsoYear: 2026, toIsoWeek: 45 } })).body.code, "docklink_scope_overlap");
+  assert.equal((await call("/case-rebuild-ranges", { body: { fromIsoYear: 2026, fromIsoWeek: 40, toIsoYear: 2026, toIsoWeek: 44 } })).status, 201, "up to the transition week is fine");
+  assert.equal((await call("/case-rebuild-ranges", { body: { fromIsoYear: 2025, fromIsoWeek: 30, toIsoYear: 2025, toIsoWeek: 21 } })).status, 400);
+
+  // Extending the range is an edit; removing it is explicit, and its weeks return to their own rules.
+  const id = ranges[0].id;
+  assert.equal((await call(`/case-rebuild-ranges/${id}`, { method: "PUT", body: { toIsoWeek: 22 } })).body.range.weeks, 13);
+  assert.equal((await call(`/case-rebuild-ranges/${id}`, { method: "DELETE" })).status, 200);
+  assert.equal((await week(2025, 20)).body.source, "legacy");
+  assert.equal((await week(2025, 12)).body.source, "legacy");
+});
+
+test("a DockLink scope that later moves back over a rebuild range wins there, and the range's entries are kept", async () => {
+  scoped(47, 48);
+  await sync();
+  assert.equal((await call("/case-rebuild-ranges", { body: { fromIsoYear: 2026, fromIsoWeek: 40, toIsoYear: 2026, toIsoWeek: 46 } })).status, 201);
+  assert.equal((await add({ isoYear: 2026, isoWeek: 46, lines: [line(RED, 33)] })).status, 201);
+  scoped(45, 48);
+  await sync();
+  const w46 = (await week(2026, 46)).body;
+  assert.equal(w46.source, "packs");
+  assert.notEqual(w46.rebuildRange, null, "W46 is still inside the rebuild range");
+  assert.equal(w46.notCounted.manualCases, 33);
+  const [range] = (await call("/case-rebuild-ranges")).body.ranges;
+  assert.equal(range.docklinkWeeks, 2);
+  scoped(47, 48);
+  await sync();
+  assert.equal((await week(2026, 46)).body.totals.shippedCases, 33);
+});
+
+test("confirmations only apply to manual weeks", async () => {
+  await sync();
+  assert.equal((await call("/case-week-confirmations", { method: "PUT", body: { isoYear: 2026, isoWeek: 44 } })).body.code, "not_a_manual_week");
+  assert.equal((await call("/case-week-confirmations", { method: "PUT", body: { isoYear: 2026, isoWeek: 46 } })).body.code, "docklink_owned_week");
+  const viewer = await call("/case-rebuild-ranges", { user: VIEWER, body: { fromIsoYear: 2025, fromIsoWeek: 1, toIsoYear: 2025, toIsoWeek: 2 } });
+  assert.equal(viewer.status, 403);
+  assert.equal((await call("/case-rebuild-ranges", { user: VIEWER })).status, 200);
+  const other = await call("/case-rebuild-ranges", { org: OTHER_ORG });
+  assert.deepEqual(other.body.ranges, []);
 });
