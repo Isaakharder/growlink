@@ -3,20 +3,27 @@
 // Cases tab, the Dashboard, Yield Analytics and the iOS workspace, so every
 // screen shows the same numbers. Pure: callers load the rows.
 //
-// Source per week — never both:
-//   * a week inside DockLink's authoritative pack scope (sync state
-//     "available", first_week..last_week) uses pack shipments, with kg from
-//     the measurements entered in GrowLink;
-//   * every other week uses the legacy colour totals (color_case_entries:
-//     DockLink colour sync and manual entries), with their stored kg.
+// Exactly one source counts for each week (resolveWeekSource); the others are
+// reported as not counted, never added:
+//   1. "packs"  — inside DockLink's authoritative pack scope (sync state
+//      "available", first_week..last_week): DockLink pack shipments. Manual
+//      pack entries and colour totals for the week are not counted.
+//   2. otherwise the week's explicit choice (case_week_sources), if any:
+//      "manual" (manual pack entries) or "legacy" (colour totals);
+//   3. otherwise manual pack entries if the week has any and no colour totals;
+//   4. otherwise colour totals (color_case_entries: DockLink colour sync and
+//      older manual colour entries), with their stored kg. A week with both
+//      manual entries and colour totals but no choice counts colour totals and
+//      is flagged as needing a decision.
 //
-// Pack weeks:
+// Pack weeks and manual weeks use the same per-pack calculation:
 //   * single-colour pack: kg = cases × net kg per shipping case
 //   * mixed/rainbow pack, per colour: kg = cases × peppers per shipping case
 //     × fruit weight g ÷ 1000; the pack's total kg is the sum of its colours
 //     and its cases are counted once
-//   * a measurement applies only to the series and ship-time classification
-//     it was entered against; missing measurements stay missing (never 0)
+//   * one measurement per week, pack and ship-time classification serves
+//     imported and manual cases alike (not keyed by DockLink's series_key);
+//     missing measurements stay missing (never 0)
 //   * unattributed shipments and unsupported classifications are counted as
 //     needing attention, never guessed into a colour
 //   * non-pepper products are reported separately and never enter pepper totals
@@ -36,11 +43,19 @@ export type PackScopeState = {
   last: WeekRef | null;
 } | null;
 
+export type PackSource = "docklink" | "historical";
+
 export type ShipmentRow = {
   iso_year: number;
   iso_week: number;
   series_key: string;
   attribution: "pack" | "unattributed";
+  /** Where pack_id comes from; DockLink when absent. */
+  pack_source?: PackSource;
+  /** "import" (DockLink pack export) or "manual" (manual pack entries, aggregated); import when absent. */
+  origin?: "import" | "manual";
+  /** Manual rows: how many entries were aggregated into this row. */
+  entry_count?: number;
   pack_id: string | null;
   source_pack_ref: string | null;
   pack_name: string | null;
@@ -59,7 +74,9 @@ export type MeasurementComponent = { color: PepperColor; pieces_per_case: number
 export type MeasurementRow = {
   iso_year: number;
   iso_week: number;
-  series_key: string;
+  /** Informational only (the series it was first entered against); never used for matching. */
+  series_key: string | null;
+  pack_source?: PackSource;
   pack_id: string;
   color_kind: "single" | "mixed";
   color_key: string | null;
@@ -80,6 +97,25 @@ export type LegacyRow = {
   total_kg: number;
   source: string | null;
 };
+
+/** One manual pack entry (one invoice line), with the classification it was entered against. */
+export type ManualEntryRow = {
+  id: string;
+  iso_year: number;
+  iso_week: number;
+  pack_source: PackSource;
+  pack_id: string;
+  pack_name: string;
+  pack_code: string | null;
+  color_kind: string;
+  color_key: string;
+  crop_type: string;
+  tracking_unit: string;
+  cases: number;
+  invoice_ref: string | null;
+};
+
+export type WeekSourceChoice = { iso_year: number; iso_week: number; source: "manual_packs" | "legacy_colours" };
 
 // ---------------------------------------------------------------------------
 // Classification of one shipment series (by its OWN ship-time fields)
@@ -110,16 +146,26 @@ export function classifyShipment(row: Pick<ShipmentRow, "attribution" | "color_k
   return { kind: "attention", reason: "unsupported_kind" };
 }
 
-/** True when `m` was entered against exactly this series' ship-time classification. */
+type PackIdentity = { pack_source?: PackSource; pack_id: string | null };
+type ClassifiedIdentity = PackIdentity & Pick<ShipmentRow, "color_kind" | "color_key" | "crop_type" | "tracking_unit">;
+
+/** The pack a row or measurement belongs to, independent of classification. */
+export function packIdentity(r: PackIdentity): string {
+  return `${r.pack_source ?? "docklink"}:${r.pack_id ?? ""}`;
+}
+
+/**
+ * Identity of a weekly measurement: the pack plus its ship-time
+ * classification. Imported series and manual entries with the same identity
+ * in the same week share one measurement.
+ */
+export function measurementKey(r: ClassifiedIdentity): string {
+  return [packIdentity(r), norm(r.color_kind), norm(r.color_key), norm(r.crop_type), norm(r.tracking_unit)].join("|");
+}
+
+/** True when `m` was entered for this row's pack and exact ship-time classification. */
 export function measurementMatches(m: MeasurementRow, row: ShipmentRow): boolean {
-  return (
-    m.series_key === row.series_key &&
-    m.pack_id === row.pack_id &&
-    norm(m.color_kind) === norm(row.color_kind) &&
-    norm(m.color_key) === norm(row.color_key) &&
-    norm(m.crop_type) === norm(row.crop_type) &&
-    norm(m.tracking_unit) === norm(row.tracking_unit)
-  );
+  return row.pack_id !== null && measurementKey(m) === measurementKey(row);
 }
 
 const positive = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -153,11 +199,12 @@ export function evaluateSeries(row: ShipmentRow, weekMeasurements: MeasurementRo
   if (classification.kind === "non_pepper") return { ...base, status: "non_pepper", measurement: null };
   if (classification.kind === "attention") return { ...base, status: cases > 0 ? "attention" : "zero", measurement: null };
 
-  const sameSeries = weekMeasurements.filter((m) => m.series_key === row.series_key);
-  const measurement = sameSeries.find((m) => measurementMatches(m, row)) ?? null;
+  const measurement = weekMeasurements.find((m) => measurementMatches(m, row)) ?? null;
   if (cases === 0) return { ...base, status: "zero", measurement };
   if (!measurement) {
-    return { ...base, status: sameSeries.length > 0 ? "incompatible" : "missing", measurement: sameSeries[0] ?? null };
+    // "incompatible": this pack has a measurement this week, but for another ship-time classification.
+    const samePack = weekMeasurements.filter((m) => packIdentity(m) === packIdentity(row));
+    return { ...base, status: samePack.length > 0 ? "incompatible" : "missing", measurement: samePack[0] ?? null };
   }
   if (!measurementUsable(measurement)) return { ...base, status: "missing", measurement };
 
@@ -184,10 +231,32 @@ export type ColorTotals = Record<PepperColor, { kg: number; cases: number }>;
 
 export type NonPepperTotal = { cropType: string; trackingUnit: string | null; cases: number };
 
+/** Which data counts for a week: DockLink pack shipments, manual pack entries, or colour totals. */
+export type WeekSource = "packs" | "manual" | "legacy";
+
+export type WeekSourceReason =
+  | "docklink_scope" // inside DockLink's authoritative pack scope
+  | "chosen_manual" // explicit case_week_sources choice
+  | "chosen_legacy" // explicit case_week_sources choice
+  | "manual_only" // manual pack entries and no colour totals
+  | "legacy_only" // colour totals (or nothing) and no manual pack entries
+  | "undecided"; // both exist and no choice yet: colour totals count, flagged
+
+/** Data that exists for a week but is not counted, because another source is authoritative. */
+export type NotCounted = {
+  manualCases: number;
+  manualEntries: number;
+  legacyCases: number;
+  legacyRows: number;
+};
+
 export type WeekTotals = {
   isoYear: number;
   isoWeek: number;
-  source: "packs" | "legacy";
+  source: WeekSource;
+  sourceReason: WeekSourceReason;
+  /** Manual pack entries and colour totals both exist and no source was chosen (colour totals count meanwhile). */
+  needsSourceDecision: boolean;
   /** kg per colour (rainbow components included) and single-colour/legacy cases per colour. */
   colors: ColorTotals;
   /** Rainbow/mixed cases — counted once, not per colour. */
@@ -202,14 +271,23 @@ export type WeekTotals = {
   kg: number;
   complete: boolean;
   nonPepper: NonPepperTotal[];
-  /** Legacy colour rows for this week ignored because pack totals are authoritative. */
+  notCounted: NotCounted;
+  /** Colour rows for this week that are not counted (kept for older clients; equals notCounted.legacyRows). */
   supersededLegacyRows: number;
 };
 
-export type ShippedYieldTotals = Omit<WeekTotals, "isoYear" | "isoWeek" | "source" | "supersededLegacyRows"> & {
+export type ShippedYieldTotals = Omit<
+  WeekTotals,
+  "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "notCounted" | "supersededLegacyRows"
+> & {
   weekCount: number;
   packWeeks: number;
+  manualWeeks: number;
   legacyWeeks: number;
+  /** Weeks with both manual pack entries and colour totals and no source chosen. */
+  weeksNeedingSourceDecision: number;
+  /** Weeks whose manual pack entries are not counted (DockLink scope, or colour totals chosen). */
+  weeksWithUncountedManualEntries: number;
 };
 
 export type ShippedYieldResult = {
@@ -227,6 +305,16 @@ export function isPackWeek(scope: PackScopeState, year: number, week: number): b
   return ord >= weekOrdinal(scope.first.year, scope.first.week) && ord <= weekOrdinal(scope.last.year, scope.last.week);
 }
 
+/**
+ * True for weeks DockLink pack totals do or will cover: from the first pack
+ * week on, whenever DockLink has announced one (available or pending).
+ * Manual pack entries are refused for these weeks.
+ */
+export function isDocklinkOwnedWeek(scope: PackScopeState, year: number, week: number): boolean {
+  if (!scope || scope.status === "capture_not_active" || !scope.first) return false;
+  return weekOrdinal(year, week) >= weekOrdinal(scope.first.year, scope.first.week);
+}
+
 export function inRange(range: WeekRange, year: number, week: number): boolean {
   if (!range) return true;
   const ord = weekOrdinal(year, week);
@@ -235,17 +323,76 @@ export function inRange(range: WeekRange, year: number, week: number): boolean {
   return ord >= Math.min(a, b) && ord <= Math.max(a, b);
 }
 
+/** The single source that counts for a week, and why (see the header comment). */
+export function resolveWeekSource(input: {
+  scope: PackScopeState;
+  year: number;
+  week: number;
+  choice: WeekSourceChoice["source"] | null;
+  manualEntries: number;
+  legacyRows: number;
+}): { source: WeekSource; reason: WeekSourceReason; needsSourceDecision: boolean } {
+  if (isPackWeek(input.scope, input.year, input.week)) return { source: "packs", reason: "docklink_scope", needsSourceDecision: false };
+  if (input.choice === "manual_packs") return { source: "manual", reason: "chosen_manual", needsSourceDecision: false };
+  if (input.choice === "legacy_colours") return { source: "legacy", reason: "chosen_legacy", needsSourceDecision: false };
+  if (input.manualEntries > 0 && input.legacyRows === 0) return { source: "manual", reason: "manual_only", needsSourceDecision: false };
+  if (input.manualEntries > 0) return { source: "legacy", reason: "undecided", needsSourceDecision: true };
+  return { source: "legacy", reason: "legacy_only", needsSourceDecision: false };
+}
+
+/**
+ * Manual entries for one week, aggregated into one row per pack and
+ * classification (several invoices for the same pack add up). Evaluated by the
+ * same per-pack calculation as DockLink's imported series.
+ */
+export function aggregateManualEntries(entries: ManualEntryRow[]): ShipmentRow[] {
+  const byKey = new Map<string, ShipmentRow>();
+  for (const e of entries) {
+    const row: ShipmentRow = {
+      iso_year: e.iso_year,
+      iso_week: e.iso_week,
+      series_key: "",
+      attribution: "pack",
+      pack_source: e.pack_source,
+      origin: "manual",
+      entry_count: 0,
+      pack_id: e.pack_id,
+      source_pack_ref: null,
+      pack_name: e.pack_name,
+      pack_code: e.pack_code,
+      color_key: e.color_key,
+      color_kind: e.color_kind,
+      crop_type: e.crop_type,
+      tracking_unit: e.tracking_unit,
+      total_cases: 0
+    };
+    const key = measurementKey(row);
+    const existing = byKey.get(key) ?? { ...row, series_key: `manual|${key}` };
+    existing.total_cases += Number(e.cases) || 0;
+    existing.entry_count = (existing.entry_count ?? 0) + 1;
+    byKey.set(key, existing);
+  }
+  return [...byKey.values()];
+}
+
 function addNonPepper(list: NonPepperTotal[], cropType: string, trackingUnit: string | null, cases: number) {
   const existing = list.find((n) => n.cropType === cropType && n.trackingUnit === trackingUnit);
   if (existing) existing.cases += cases;
   else list.push({ cropType, trackingUnit, cases });
 }
 
-function packWeekTotals(year: number, week: number, rows: ShipmentRow[], measurements: MeasurementRow[], supersededLegacyRows: number): WeekTotals {
-  const totals: WeekTotals = {
-    isoYear: year, isoWeek: week, source: "packs", colors: emptyColors(), mixedCases: 0, shippedCases: 0,
-    measuredCases: 0, unmeasuredCases: 0, attentionCases: 0, kg: 0, complete: true, nonPepper: [], supersededLegacyRows
+type WeekHeader = Pick<WeekTotals, "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "notCounted">;
+
+function emptyWeek(header: WeekHeader): WeekTotals {
+  return {
+    ...header, colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, unmeasuredCases: 0,
+    attentionCases: 0, kg: 0, complete: true, nonPepper: [], supersededLegacyRows: header.notCounted.legacyRows
   };
+}
+
+/** Pack-based totals: DockLink pack shipments or aggregated manual pack entries. */
+function packRowsTotals(header: WeekHeader, rows: ShipmentRow[], measurements: MeasurementRow[]): WeekTotals {
+  const totals = emptyWeek(header);
   for (const row of rows) {
     const cases = Number(row.total_cases) || 0;
     const result = evaluateSeries(row, measurements);
@@ -270,11 +417,8 @@ function packWeekTotals(year: number, week: number, rows: ShipmentRow[], measure
   return totals;
 }
 
-function legacyWeekTotals(year: number, week: number, rows: LegacyRow[]): WeekTotals {
-  const totals: WeekTotals = {
-    isoYear: year, isoWeek: week, source: "legacy", colors: emptyColors(), mixedCases: 0, shippedCases: 0,
-    measuredCases: 0, unmeasuredCases: 0, attentionCases: 0, kg: 0, complete: true, nonPepper: [], supersededLegacyRows: 0
-  };
+function legacyWeekTotals(header: WeekHeader, rows: LegacyRow[]): WeekTotals {
+  const totals = emptyWeek(header);
   for (const row of rows) {
     const color = norm(row.color);
     const cases = Number(row.total_cases) || 0;
@@ -295,53 +439,93 @@ function legacyWeekTotals(year: number, week: number, rows: LegacyRow[]): WeekTo
   return totals;
 }
 
+const legacyPepperCases = (rows: LegacyRow[]) =>
+  rows.reduce((sum, r) => sum + (isPepperColor(norm(r.color)) && Number(r.total_cases) > 0 ? Number(r.total_cases) : 0), 0);
+
+function pushTo<T>(map: Map<number, T[]>, ord: number, item: T) {
+  const list = map.get(ord);
+  if (list) list.push(item);
+  else map.set(ord, [item]);
+}
+
 export function computeShippedYield(input: {
   range: WeekRange;
   scope: PackScopeState;
   shipments: ShipmentRow[];
   measurements: MeasurementRow[];
   legacy: LegacyRow[];
+  manual?: ManualEntryRow[];
+  weekSources?: WeekSourceChoice[];
 }): ShippedYieldResult {
   const { range, scope } = input;
   const weekKeys = new Map<number, WeekRef>();
   const shipmentsByWeek = new Map<number, ShipmentRow[]>();
   const measurementsByWeek = new Map<number, MeasurementRow[]>();
   const legacyByWeek = new Map<number, LegacyRow[]>();
+  const manualByWeek = new Map<number, ManualEntryRow[]>();
+  const choiceByWeek = new Map<number, WeekSourceChoice["source"]>();
 
   for (const s of input.shipments) {
     if (!inRange(range, s.iso_year, s.iso_week) || !isPackWeek(scope, s.iso_year, s.iso_week)) continue; // pack rows outside the current scope are not used
     const ord = weekOrdinal(s.iso_year, s.iso_week);
     weekKeys.set(ord, { year: s.iso_year, week: s.iso_week });
-    shipmentsByWeek.set(ord, [...(shipmentsByWeek.get(ord) ?? []), s]);
+    pushTo(shipmentsByWeek, ord, s);
   }
-  for (const m of input.measurements) {
-    const ord = weekOrdinal(m.iso_year, m.iso_week);
-    measurementsByWeek.set(ord, [...(measurementsByWeek.get(ord) ?? []), m]);
-  }
+  for (const m of input.measurements) pushTo(measurementsByWeek, weekOrdinal(m.iso_year, m.iso_week), m);
   for (const l of input.legacy) {
     if (!inRange(range, l.year, l.week)) continue;
     const ord = weekOrdinal(l.year, l.week);
     weekKeys.set(ord, { year: l.year, week: l.week });
-    legacyByWeek.set(ord, [...(legacyByWeek.get(ord) ?? []), l]);
+    pushTo(legacyByWeek, ord, l);
   }
+  for (const e of input.manual ?? []) {
+    if (!inRange(range, e.iso_year, e.iso_week)) continue;
+    const ord = weekOrdinal(e.iso_year, e.iso_week);
+    weekKeys.set(ord, { year: e.iso_year, week: e.iso_week });
+    pushTo(manualByWeek, ord, e);
+  }
+  for (const c of input.weekSources ?? []) choiceByWeek.set(weekOrdinal(c.iso_year, c.iso_week), c.source);
 
   const weeks: WeekTotals[] = [];
   for (const [ord, ref] of [...weekKeys.entries()].sort((a, b) => a[0] - b[0])) {
     const legacyRows = legacyByWeek.get(ord) ?? [];
+    const manualEntries = manualByWeek.get(ord) ?? [];
+    const decision = resolveWeekSource({
+      scope, year: ref.year, week: ref.week, choice: choiceByWeek.get(ord) ?? null,
+      manualEntries: manualEntries.length, legacyRows: legacyRows.length
+    });
+    const manualCases = manualEntries.reduce((sum, e) => sum + (Number(e.cases) || 0), 0);
+    const notCounted: NotCounted = {
+      manualCases: decision.source === "manual" ? 0 : manualCases,
+      manualEntries: decision.source === "manual" ? 0 : manualEntries.length,
+      legacyCases: decision.source === "legacy" ? 0 : legacyPepperCases(legacyRows),
+      legacyRows: decision.source === "legacy" ? 0 : legacyRows.length
+    };
+    const header: WeekHeader = {
+      isoYear: ref.year, isoWeek: ref.week, source: decision.source, sourceReason: decision.reason,
+      needsSourceDecision: decision.needsSourceDecision, notCounted
+    };
+    const measurements = measurementsByWeek.get(ord) ?? [];
     weeks.push(
-      isPackWeek(scope, ref.year, ref.week)
-        ? packWeekTotals(ref.year, ref.week, shipmentsByWeek.get(ord) ?? [], measurementsByWeek.get(ord) ?? [], legacyRows.length)
-        : legacyWeekTotals(ref.year, ref.week, legacyRows)
+      decision.source === "packs"
+        ? packRowsTotals(header, shipmentsByWeek.get(ord) ?? [], measurements)
+        : decision.source === "manual"
+          ? packRowsTotals(header, aggregateManualEntries(manualEntries), measurements)
+          : legacyWeekTotals(header, legacyRows)
     );
   }
 
   const totals: ShippedYieldTotals = {
     colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, unmeasuredCases: 0, attentionCases: 0,
-    kg: 0, complete: true, nonPepper: [], weekCount: weeks.length, packWeeks: 0, legacyWeeks: 0
+    kg: 0, complete: true, nonPepper: [], weekCount: weeks.length, packWeeks: 0, manualWeeks: 0, legacyWeeks: 0,
+    weeksNeedingSourceDecision: 0, weeksWithUncountedManualEntries: 0
   };
   for (const w of weeks) {
     if (w.source === "packs") totals.packWeeks += 1;
+    else if (w.source === "manual") totals.manualWeeks += 1;
     else totals.legacyWeeks += 1;
+    if (w.needsSourceDecision) totals.weeksNeedingSourceDecision += 1;
+    if (w.notCounted.manualEntries > 0) totals.weeksWithUncountedManualEntries += 1;
     for (const color of PEPPER_COLORS) {
       totals.colors[color].kg += w.colors[color].kg;
       totals.colors[color].cases += w.colors[color].cases;

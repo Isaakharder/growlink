@@ -2,6 +2,9 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requireAnyPermission, requirePermission } from "../middleware/requirePermission";
+import { isoWeeksInYear } from "../lib/docklinkPackExport";
+import { PEPPER_COLORS } from "../lib/shippedYield";
+import { loadShippedYield } from "./packShipments";
 
 const yieldProjectionsRouter = Router();
 const canView = requireAnyPermission(["yield:view", "yield:edit"]);
@@ -131,19 +134,21 @@ yieldProjectionsRouter.get("/yield/projections", canView, async (req, res) => {
       }
     }
 
-    // 4. Load cases actuals from color_case_entries for this org+target_year
-    const { data: caseEntries } = await supabase
-      .from("color_case_entries")
-      .select("color, week, total_cases")
-      .eq("organization_id", organizationId)
-      .eq("year", targetYear);
+    // 4. Shipped cases per colour and ISO week from the one shipped-yield
+    //    calculation, so projections compare against the same weekly source as
+    //    every other screen (DockLink pack weeks, manual pack weeks, colour
+    //    totals). Rainbow cases have no single colour and are not attributed.
+    const shipped = await loadShippedYield(organizationId, {
+      from: { year: targetYear, week: 1 },
+      to: { year: targetYear, week: isoWeeksInYear(targetYear) }
+    });
 
     const actualCasesByColorWeek = new Map<string, number>();
-    for (const entry of caseEntries ?? []) {
-      actualCasesByColorWeek.set(
-        `${entry.color as string}:${entry.week as number}`,
-        Number(entry.total_cases ?? 0)
-      );
+    for (const shippedWeek of shipped.weeks) {
+      for (const color of PEPPER_COLORS) {
+        const cases = shippedWeek.colors[color].cases;
+        if (cases > 0) actualCasesByColorWeek.set(`${color}:${shippedWeek.isoWeek}`, cases);
+      }
     }
 
     // 5. Enrich each projection with actual + accuracy

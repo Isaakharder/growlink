@@ -12,8 +12,10 @@ import { fetchShippedYield } from "../lib/shippedYieldApi";
 import {
   PEPPER_COLORS,
   formatShippedKg,
+  WEEK_SOURCE_LABELS,
   incompleteShippedText,
   isPackWeek,
+  notCountedText,
   type ShippedYieldResponse
 } from "../lib/shippedYield";
 import { LazyRoute } from "../components/LazyRoute";
@@ -21,6 +23,7 @@ import { LazyRoute } from "../components/LazyRoute";
 // The weekly pack panel is only used here; loading it on demand keeps it out of
 // the main bundle, which sits close to the PWA's 2 MiB precache limit.
 const PackShipmentsWeek = lazy(() => import("./PackShipmentsWeek").then((m) => ({ default: m.PackShipmentsWeek })));
+const ManualPackEntryModal = lazy(() => import("./ManualPackEntryModal").then((m) => ({ default: m.ManualPackEntryModal })));
 
 type VarietyColor = "red" | "orange" | "yellow" | "green";
 
@@ -138,7 +141,10 @@ export function CasesEntryTab() {
   const [packRefreshKey, setPackRefreshKey] = useState(0);
   const [isRecentExpanded, setIsRecentExpanded] = useState(false);
   const [selectedSummaryYear, setSelectedSummaryYear] = useState(String(currentYear));
+  // Colour-total rows can still be corrected; new case entries are per Product Pack (ManualPackEntryModal).
   const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
+  const [isPackEntryOpen, setIsPackEntryOpen] = useState(false);
+  const [packEntryStatus, setPackEntryStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -413,16 +419,14 @@ export function CasesEntryTab() {
   }
 
   function openEntryModal() {
-    setError(null);
-    setEditingId(null);
-    setForm({
-      color: colors[0] ?? "red",
-      year: String(currentYear),
-      week: String(getCurrentWeek(currentYear)),
-      total_cases: "0",
-      case_weight_kg: "0"
-    });
-    setIsEntryModalOpen(true);
+    setPackEntryStatus(null);
+    setIsPackEntryOpen(true);
+  }
+
+  function packEntriesChanged(message: string | null) {
+    if (message) setPackEntryStatus(message);
+    void loadShipped(Number(selectedSummaryYear));
+    setPackRefreshKey((k) => k + 1);
   }
 
   function closeEntryModal() {
@@ -516,13 +520,19 @@ export function CasesEntryTab() {
         </button>
       </div>
 
+      {packEntryStatus ? (
+        <p className="cases-sync-status cases-sync-status--success" role="status">
+          {packEntryStatus}
+        </p>
+      ) : null}
+
       <LazyRoute>
-        <PackShipmentsWeek refreshKey={packRefreshKey} />
+        <PackShipmentsWeek refreshKey={packRefreshKey} onChanged={() => void loadShipped(Number(selectedSummaryYear))} />
       </LazyRoute>
 
       <div className="coming-soon-card yield-entry-recent-entries">
         <div className="recent-entries-header">
-          <h2>Recent Entries</h2>
+          <h2>Colour Totals</h2>
           <div className="recent-entries-actions">
             {recentWeekKeys.length > 1 ? (
               <button
@@ -559,7 +569,12 @@ export function CasesEntryTab() {
           </p>
         ) : null}
 
-        {entries.length === 0 && <p>No case entries yet.</p>}
+        <p className="recent-entries-helper-text">
+          Weekly colour totals from the DockLink colour sync and older colour entries. New case entries are made per Product Pack with Add Case
+          Entry.
+        </p>
+
+        {entries.length === 0 && <p>No colour totals yet.</p>}
 
         {entries.length > 0 && displayedRecentEntries.length > 0 && (
           <>
@@ -587,8 +602,9 @@ export function CasesEntryTab() {
                   const hasWeight = Number.isFinite(caseWeight) && caseWeight > 0;
                   const storedKg = Number(entry.total_kg);
                   const storedKgPerM2 = Number(entry.kg_per_m2);
-                  // Weeks inside DockLink's pack scope use pack totals; this colour row is kept but not counted.
-                  const superseded = isPackWeek(shippedSync, Number(entry.year), Number(entry.week));
+                  // Another source counts for this week (DockLink pack totals or manual pack entries); the row is kept but not counted.
+                  const weekSource = shipped?.weeks.find((w) => w.isoYear === Number(entry.year) && w.isoWeek === Number(entry.week))?.source;
+                  const superseded = isPackWeek(shippedSync, Number(entry.year), Number(entry.week)) || weekSource === "manual";
 
                   return (
                     <tr key={entry.id}>
@@ -604,8 +620,11 @@ export function CasesEntryTab() {
                           {source.charAt(0).toUpperCase() + source.slice(1)}
                         </span>
                         {superseded ? (
-                          <span className="source-badge source-superseded" title="This ISO week uses DockLink pack totals; this colour row is kept but not counted.">
-                            Superseded by pack totals
+                          <span
+                            className="source-badge source-superseded"
+                            title={`This ISO week counts ${weekSource === "manual" ? "manual pack entries" : "DockLink pack totals"}; this colour row is kept but not counted.`}
+                          >
+                            {weekSource === "manual" ? "Superseded by manual pack entries" : "Superseded by pack totals"}
                           </span>
                         ) : null}
                       </td>
@@ -664,7 +683,7 @@ export function CasesEntryTab() {
               return (
                 <article key={`${card.isoYear}-${card.isoWeek}`} className="weekly-docklink-card">
                   <h3>Week {card.isoWeek} · {card.isoYear}</h3>
-                  <p className="weekly-docklink-source">{card.source === "packs" ? "Pack totals" : "Colour totals"}</p>
+                  <p className="weekly-docklink-source">{WEEK_SOURCE_LABELS[card.source]}</p>
 
                   <dl className="weekly-docklink-rows">
                     {PEPPER_COLORS.filter((color) => card.colors[color].cases > 0).map((color) => (
@@ -699,6 +718,11 @@ export function CasesEntryTab() {
                     </div>
                   </dl>
                   {incomplete ? <p className="weekly-docklink-incomplete">{incomplete}</p> : null}
+                  {card.needsSourceDecision ? (
+                    <p className="weekly-docklink-incomplete">Has manual pack entries and colour totals: choose which counts on the Weekly Pack Shipments panel.</p>
+                  ) : notCountedText(card) ? (
+                    <p className="weekly-docklink-not-counted">{notCountedText(card)}</p>
+                  ) : null}
                 </article>
               );
             })}
@@ -706,9 +730,22 @@ export function CasesEntryTab() {
         )}
       </div>
 
+      {isPackEntryOpen ? (
+        <LazyRoute>
+          <ManualPackEntryModal
+            mode={{ kind: "create" }}
+            onClose={() => setIsPackEntryOpen(false)}
+            onSaved={(message) => {
+              setIsPackEntryOpen(false);
+              packEntriesChanged(message);
+            }}
+          />
+        </LazyRoute>
+      ) : null}
+
       {isEntryModalOpen ? (
         <ModalOverlay onClose={closeEntryModal} contentClassName="variety-modal" titleId="enter-cases-title">
-            <h2 id="enter-cases-title">Enter Cases</h2>
+            <h2 id="enter-cases-title">Edit Colour Total</h2>
 
             {error ? <p className="form-error">{error}</p> : null}
             {loading ? <p>Loading...</p> : null}

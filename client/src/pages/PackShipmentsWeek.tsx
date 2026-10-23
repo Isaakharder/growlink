@@ -4,18 +4,28 @@ import { isoWeekOf, isoWeekRangeLabel, isoWeeksInYear, shiftIsoWeek } from "../l
 import {
   ATTENTION_REASON_LABELS,
   PEPPER_COLORS,
+  WEEK_SOURCE_LABELS,
+  WEEK_SOURCE_REASON_LABELS,
   formatCases,
   formatShippedKg,
   incompleteShippedText,
+  notCountedText,
+  type NotCounted,
   type PackSyncSummary,
   type PepperColor,
-  type ShippedWeekTotals
+  type ShippedWeekTotals,
+  type WeekSource,
+  type WeekSourceReason
 } from "../lib/shippedYield";
+import { classificationLabel, deleteManualEntry, setWeekSource, type ManualEntry, type WeekSourceChoice } from "../lib/manualPackEntries";
+import { ManualPackEntryModal } from "./ManualPackEntryModal";
 
-// Weekly pack shipments: DockLink's shipped cases per Product Pack for one
-// ISO week, with the measurements GrowLink needs to turn them into kg.
-// Every kg shown here comes from the server's shipped-yield calculation —
-// this screen only collects measurements.
+// Weekly pack shipments for one ISO week: DockLink's shipped cases per
+// Product Pack, or the week's manual pack entries (from invoices), with the
+// measurements GrowLink needs to turn them into kg. Exactly one source counts
+// per week and the screen says which. Every kg shown here comes from the
+// server's shipped-yield calculation — this screen only collects
+// measurements and manual entries.
 
 const WEEK_URL = "/api/pack-shipments/week";
 const MEASUREMENTS_URL = "/api/pack-shipments/measurements";
@@ -31,13 +41,17 @@ type MeasurementView = {
 
 type PackRow = {
   seriesKey: string | null;
+  /** Identity of the week's measurement (pack + ship-time classification); null when nothing can be measured. */
+  measurementKey: string | null;
+  origin: "import" | "manual";
+  entryCount: number | null;
   packId: string | null;
   name: string;
   packCode: string | null;
   currentName: string | null;
   currentPackCode: string | null;
   description: string | null;
-  packStatus: "active" | "archived" | "not_in_catalogue";
+  packStatus: "active" | "archived" | "not_in_catalogue" | "historical";
   colorKind: "single" | "mixed" | string | null;
   colorKey: string | null;
   colorLabel: string | null;
@@ -45,6 +59,8 @@ type PackRow = {
   cases: number;
   loadCount: number | null;
   status: SeriesStatus;
+  /** False for manual entries in a week where colour totals count instead. */
+  counted: boolean;
   kg: number | null;
   kgByColor: Partial<Record<PepperColor, number>> | null;
   measurement: MeasurementView | null;
@@ -60,7 +76,14 @@ export type PackWeekResponse = {
   weekStart: string;
   weekEnd: string;
   sync: PackSyncSummary | null;
-  source: "packs" | "legacy";
+  source: WeekSource;
+  sourceReason: WeekSourceReason;
+  needsSourceDecision: boolean;
+  weekSourceChoice: WeekSourceChoice | null;
+  notCounted: NotCounted;
+  manualEntryAllowed: boolean;
+  manualEntryBlockedReason: string | null;
+  manualEntries: ManualEntry[];
   packs: PackRow[];
   attention: AttentionRow[];
   nonPepper: NonPepperRow[];
@@ -103,7 +126,7 @@ function statusText(row: PackRow): { label: string; tone: "ok" | "warn" | "muted
 function scopeText(sync: PackSyncSummary | null): string {
   if (!sync) return "Pack shipments haven't been synced from DockLink yet. Weekly totals use colour totals.";
   if (sync.scopeStatus === "available" && sync.firstWeek && sync.lastWeek) {
-    const transition = sync.transitionWeek ? ` ${weekLabel(sync.transitionWeek)} and earlier use colour totals.` : "";
+    const transition = sync.transitionWeek ? ` ${weekLabel(sync.transitionWeek)} and earlier use colour totals or manual pack entries.` : "";
     return `Pack totals from ${weekLabel(sync.firstWeek)} to ${weekLabel(sync.lastWeek)}.${transition} Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}.`;
   }
   return sync.scopeStatus === "pending_first_full_week"
@@ -111,7 +134,16 @@ function scopeText(sync: PackSyncSummary | null): string {
     : "Pack capture isn't active in DockLink yet. Every week uses colour totals.";
 }
 
-export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?: number; initialWeek?: { isoYear: number; isoWeek: number } }) {
+export function PackShipmentsWeek({
+  refreshKey = 0,
+  initialWeek,
+  onChanged
+}: {
+  refreshKey?: number;
+  initialWeek?: { isoYear: number; isoWeek: number };
+  /** Called after manual entries or the week's source change, so other totals on the page can refresh. */
+  onChanged?: () => void;
+}) {
   const [selected, setSelected] = useState(() => initialWeek ?? isoWeekOf(new Date()));
   const [data, setData] = useState<PackWeekResponse | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -120,6 +152,8 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<{ busy: boolean; message: string | null }>({ busy: false, message: null });
+  const [entryModal, setEntryModal] = useState<{ kind: "create" } | { kind: "edit"; entry: ManualEntry } | null>(null);
+  const [entryStatus, setEntryStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -130,9 +164,24 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
         const body = (await response.json().catch(() => null)) as { message?: string } | null;
         throw new Error(body?.message ?? `Failed to load pack shipments (${response.status})`);
       }
-      const body = (await response.json()) as PackWeekResponse;
+      const raw = (await response.json()) as Partial<PackWeekResponse> & Pick<PackWeekResponse, "isoYear" | "isoWeek">;
+      // A server from before manual pack entries (e.g. mid-deploy) omits these; read it as "nothing manual".
+      const body: PackWeekResponse = {
+        ...(raw as PackWeekResponse),
+        sourceReason: raw.sourceReason ?? (raw.source === "packs" ? "docklink_scope" : "legacy_only"),
+        needsSourceDecision: raw.needsSourceDecision ?? false,
+        weekSourceChoice: raw.weekSourceChoice ?? null,
+        notCounted: raw.notCounted ?? { manualCases: 0, manualEntries: 0, legacyCases: 0, legacyRows: 0 },
+        manualEntryAllowed: raw.manualEntryAllowed ?? false,
+        manualEntryBlockedReason: raw.manualEntryBlockedReason ?? null,
+        manualEntries: raw.manualEntries ?? [],
+        packs: (raw.packs ?? []).map((p) => ({ ...p, measurementKey: p.measurementKey ?? p.seriesKey ?? null, origin: p.origin ?? "import", counted: p.counted ?? true })),
+        attention: raw.attention ?? [],
+        nonPepper: raw.nonPepper ?? [],
+        legacyRows: raw.legacyRows ?? []
+      } as PackWeekResponse;
       setData(body);
-      setDrafts(Object.fromEntries(body.packs.filter((p) => p.seriesKey).map((p) => [p.seriesKey as string, draftFrom(p)])));
+      setDrafts(Object.fromEntries(body.packs.filter((p) => p.measurementKey).map((p) => [p.measurementKey as string, draftFrom(p)])));
       setRowErrors({});
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load pack shipments");
@@ -145,17 +194,43 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
     void load();
   }, [load, refreshKey]);
 
+  // Manual history can go back further than DockLink's pack capture.
   const yearOptions = useMemo(() => {
     const now = isoWeekOf(new Date()).isoYear;
-    return [now - 2, now - 1, now, now + 1];
+    return Array.from({ length: 8 }, (_, i) => now - 6 + i);
   }, []);
 
-  function setDraft(seriesKey: string, update: (d: Draft) => Draft) {
-    setDrafts((current) => ({ ...current, [seriesKey]: update(current[seriesKey]) }));
+  function setDraft(key: string, update: (d: Draft) => Draft) {
+    setDrafts((current) => ({ ...current, [key]: update(current[key]) }));
+  }
+
+  async function changed(message: string | null) {
+    if (message) setEntryStatus({ kind: "success", message });
+    await load();
+    onChanged?.();
+  }
+
+  async function removeEntry(entry: ManualEntry) {
+    if (!window.confirm(`Delete this entry (${entry.packName}, ${formatCases(entry.cases)} cases${entry.invoiceRef ? `, invoice ${entry.invoiceRef}` : ""})?`)) return;
+    try {
+      const result = await deleteManualEntry(entry.id);
+      await changed(result.releasedWeekSource ? "Entry deleted. The week has no manual entries left, so colour totals count again." : "Entry deleted.");
+    } catch (deleteError) {
+      setEntryStatus({ kind: "error", message: deleteError instanceof Error ? deleteError.message : "Delete failed" });
+    }
+  }
+
+  async function chooseSource(source: WeekSourceChoice) {
+    try {
+      await setWeekSource(selected.isoYear, selected.isoWeek, source);
+      await changed(`${weekLabel(selected)} now counts ${source === "manual_packs" ? "manual pack entries" : "colour totals"}.`);
+    } catch (sourceError) {
+      setEntryStatus({ kind: "error", message: sourceError instanceof Error ? sourceError.message : "Couldn't change the week's source" });
+    }
   }
 
   async function save(row: PackRow) {
-    const seriesKey = row.seriesKey as string;
+    const seriesKey = row.measurementKey as string;
     const draft = drafts[seriesKey];
     setRowErrors((current) => ({ ...current, [seriesKey]: "" }));
     let payload: Record<string, unknown>;
@@ -191,7 +266,8 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
     try {
       const response = await apiFetch(MEASUREMENTS_URL, {
         method: "PUT",
-        body: JSON.stringify({ isoYear: selected.isoYear, isoWeek: selected.isoWeek, seriesKey, ...payload })
+        // seriesKey too for DockLink series, so an older server (series-keyed measurements) still finds the row.
+        body: JSON.stringify({ isoYear: selected.isoYear, isoWeek: selected.isoWeek, measurementKey: seriesKey, ...(row.seriesKey ? { seriesKey: row.seriesKey } : {}), ...payload })
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -206,10 +282,11 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
   }
 
   async function clear(row: PackRow) {
-    const seriesKey = row.seriesKey as string;
+    const seriesKey = row.measurementKey as string;
     setSavingKey(seriesKey);
     try {
-      const params = new URLSearchParams({ isoYear: String(selected.isoYear), isoWeek: String(selected.isoWeek), seriesKey });
+      const params = new URLSearchParams({ isoYear: String(selected.isoYear), isoWeek: String(selected.isoWeek), measurementKey: seriesKey });
+      if (row.seriesKey) params.set("seriesKey", row.seriesKey);
       const response = await apiFetch(`${MEASUREMENTS_URL}?${params.toString()}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`Clear failed (${response.status})`);
       await load();
@@ -292,12 +369,133 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       {loading && !data ? <p>Loading…</p> : null}
 
-      {data && data.source === "legacy" ? (
-        <div className="pack-week-legacy">
+      {data ? (
+        <div
+          className={`pack-week-source pack-week-source--${data.source}${data.needsSourceDecision ? " pack-week-source--decide" : ""}`}
+          role="region"
+          aria-label={`Source for ${weekLabel(data)}`}
+        >
           <p>
-            <strong>{weekLabel(data)} uses colour totals.</strong> Pack measurements don't apply to this week
-            {data.sync?.firstWeek && data.sync.scopeStatus === "available" ? ` — pack totals start at ${weekLabel(data.sync.firstWeek)}` : ""}.
+            <span className="pack-week-source-label">Counted for {weekLabel(data)}:</span> <strong>{WEEK_SOURCE_LABELS[data.source]}</strong>
           </p>
+          <p className="pack-week-note">{WEEK_SOURCE_REASON_LABELS[data.sourceReason]}</p>
+          {notCountedText(data) ? <p className="pack-week-not-counted">{notCountedText(data)}</p> : null}
+          {data.source !== "packs" && data.manualEntries.length > 0 && data.legacyRows.length > 0 ? (
+            <div className="pack-week-source-actions">
+              {data.source !== "manual" ? (
+                <button type="button" onClick={() => void chooseSource("manual_packs")}>
+                  Count manual pack entries
+                </button>
+              ) : null}
+              {data.source !== "legacy" ? (
+                <button type="button" className="secondary" onClick={() => void chooseSource("legacy_colours")}>
+                  Count colour totals instead
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {data ? (
+        <div className="pack-week-manual" role="region" aria-label="Manual pack entries">
+          <div className="pack-week-manual-header">
+            <h3>Manual pack entries</h3>
+            {data.manualEntryAllowed ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setEntryStatus(null);
+                  setEntryModal({ kind: "create" });
+                }}
+              >
+                Add entries for {weekLabel(data)}
+              </button>
+            ) : null}
+          </div>
+          {!data.manualEntryAllowed ? <p className="pack-week-note">{data.manualEntryBlockedReason}</p> : null}
+          {entryStatus ? (
+            <p className={`cases-sync-status cases-sync-status--${entryStatus.kind}`} role={entryStatus.kind === "error" ? "alert" : "status"}>
+              {entryStatus.message}
+            </p>
+          ) : null}
+          {data.manualEntries.length === 0 ? (
+            data.manualEntryAllowed ? <p className="pack-week-note">No manual entries for this week.</p> : null
+          ) : (
+            <div className="varieties-table-wrapper">
+              <table className="varieties-table pack-week-entries">
+                <thead>
+                  <tr>
+                    <th scope="col">Invoice</th>
+                    <th scope="col">Pack</th>
+                    <th scope="col">Colour</th>
+                    <th scope="col">Cases</th>
+                    <th scope="col">Note</th>
+                    <th scope="col">
+                      <span className="ya-visually-hidden">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.manualEntries.map((e) => (
+                    <tr key={e.id} className={e.duplicates.length > 0 ? "pack-week-entry--duplicate" : undefined}>
+                      <td>
+                        {e.invoiceRef ?? <span className="pack-week-note">No reference</span>}
+                        {e.duplicates.length > 0 ? (
+                          <span className="pack-week-badge pack-week-badge--warn" title="Same invoice and pack, or same week, pack and cases without a reference">
+                            Possible duplicate of{" "}
+                            {e.duplicates.map((d) => `${weekLabel(d)} · ${formatCases(d.cases)}${d.invoiceRef ? ` · ${d.invoiceRef}` : ""}`).join("; ")}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className="pack-week-name">{e.packName}</span>
+                        {e.packCode ? <span className="pack-week-code">{e.packCode}</span> : null}
+                        {e.packSource === "historical" ? <span className="pack-week-badge">Historical</span> : null}
+                      </td>
+                      <td>{classificationLabel({ colorKind: e.colorKind as "single" | "mixed" | "none", colorKey: e.colorKey, cropType: e.cropType, trackingUnit: e.trackingUnit })}</td>
+                      <td>{formatCases(e.cases)}</td>
+                      <td>{e.note ?? ""}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEntryStatus(null);
+                              setEntryModal({ kind: "edit", entry: e });
+                            }}
+                            aria-label={`Edit entry: ${e.packName}${e.invoiceRef ? `, invoice ${e.invoiceRef}` : ""}`}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => void removeEntry(e)}
+                            aria-label={`Delete entry: ${e.packName}${e.invoiceRef ? `, invoice ${e.invoiceRef}` : ""}`}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {data && (data.source === "legacy" || data.legacyRows.length > 0) ? (
+        <div className={`pack-week-legacy${data.source === "legacy" ? "" : " pack-week-legacy--not-counted"}`}>
+          <h3>Colour totals{data.source === "legacy" ? "" : " (not counted this week)"}</h3>
+          {data.source === "legacy" && data.packs.length === 0 ? (
+            <p>
+              Pack measurements don't apply to colour-total weeks
+              {data.sync?.firstWeek && data.sync.scopeStatus === "available" ? ` — DockLink pack totals start at ${weekLabel(data.sync.firstWeek)}` : ""}.
+            </p>
+          ) : null}
           {data.legacyRows.length === 0 ? (
             <p>No colour totals recorded for this week.</p>
           ) : (
@@ -327,8 +525,14 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
         </div>
       ) : null}
 
-      {data && data.source === "packs" ? (
+      {data && data.packs.length > 0 ? (
         <>
+          {data.source !== "packs" ? (
+            <h3 className="pack-week-subheading">
+              Packs entered for {weekLabel(data)}
+              {data.source === "manual" ? " — kg from this week's measurements" : " (not counted this week)"}
+            </h3>
+          ) : null}
           {data.copySource ? (
             <div className="pack-week-copy">
               <p>
@@ -348,17 +552,18 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                 <tr>
                   <th scope="col">Pack</th>
                   <th scope="col">Colour (at ship time)</th>
-                  <th scope="col">Shipped cases</th>
+                  <th scope="col">{data.source === "packs" ? "Shipped cases" : "Entered cases"}</th>
                   <th scope="col">Measurement for {weekLabel(selected)}</th>
                   <th scope="col">Shipped kg</th>
                 </tr>
               </thead>
               <tbody>
                 {data.packs.map((row) => {
-                  const key = row.seriesKey ?? `pack:${row.packId}`;
+                  const key = row.measurementKey ?? row.seriesKey ?? `pack:${row.packId}`;
+                  const mk = row.measurementKey;
                   const status = statusText(row);
-                  const draft = row.seriesKey ? drafts[row.seriesKey] : undefined;
-                  const editable = Boolean(row.seriesKey && draft) && row.status !== "no_shipments";
+                  const draft = mk ? drafts[mk] : undefined;
+                  const editable = Boolean(mk && draft) && row.status !== "no_shipments";
                   return (
                     <tr key={key} className={`pack-week-row pack-week-row--${row.status}`} data-series-key={row.seriesKey ?? undefined}>
                       <th scope="row">
@@ -366,6 +571,7 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                         {row.packCode ? <span className="pack-week-code">{row.packCode}</span> : null}
                         {row.packStatus === "archived" ? <span className="pack-week-badge">Archived</span> : null}
                         {row.packStatus === "not_in_catalogue" ? <span className="pack-week-badge">No longer in DockLink</span> : null}
+                        {row.packStatus === "historical" ? <span className="pack-week-badge">Historical pack</span> : null}
                         {row.currentName || row.currentPackCode ? (
                           <span className="pack-week-note">Now “{row.currentName ?? row.name}”{row.currentPackCode ? ` (${row.currentPackCode})` : ""}</span>
                         ) : null}
@@ -390,6 +596,7 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                       <td>
                         {formatCases(row.cases)}
                         {row.loadCount ? <span className="pack-week-note">{row.loadCount} load{row.loadCount === 1 ? "" : "s"}</span> : null}
+                        {row.entryCount ? <span className="pack-week-note">{row.entryCount} entr{row.entryCount === 1 ? "y" : "ies"}</span> : null}
                       </td>
                       <td>
                         {!editable ? (
@@ -405,7 +612,7 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                                 step="0.01"
                                 value={draft!.netKgPerCase}
                                 aria-label={`Average net pepper kg per shipping case for ${row.name}`}
-                                onChange={(e) => setDraft(row.seriesKey!, (d) => ({ ...d, netKgPerCase: e.target.value }))}
+                                onChange={(e) => setDraft(mk!, (d) => ({ ...d, netKgPerCase: e.target.value }))}
                               />
                             </label>
                           </div>
@@ -437,7 +644,7 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                                         value={draft!.components[color].piecesPerCase}
                                         aria-label={`${COLOR_LABEL[color]} peppers per shipping case for ${row.name}`}
                                         onChange={(e) =>
-                                          setDraft(row.seriesKey!, (d) => ({ ...d, components: { ...d.components, [color]: { ...d.components[color], piecesPerCase: e.target.value } } }))
+                                          setDraft(mk!, (d) => ({ ...d, components: { ...d.components, [color]: { ...d.components[color], piecesPerCase: e.target.value } } }))
                                         }
                                       />
                                     </td>
@@ -450,7 +657,7 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                                         value={draft!.components[color].fruitWeightG}
                                         aria-label={`${COLOR_LABEL[color]} average fruit weight in grams for ${row.name}`}
                                         onChange={(e) =>
-                                          setDraft(row.seriesKey!, (d) => ({ ...d, components: { ...d.components, [color]: { ...d.components[color], fruitWeightG: e.target.value } } }))
+                                          setDraft(mk!, (d) => ({ ...d, components: { ...d.components, [color]: { ...d.components[color], fruitWeightG: e.target.value } } }))
                                         }
                                       />
                                     </td>
@@ -464,17 +671,17 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
                         {editable ? (
                           <div className="pack-week-actions">
                             <span className={`pack-week-status pack-week-status--${status.tone}`}>{status.label}</span>
-                            <button type="button" onClick={() => void save(row)} disabled={savingKey === row.seriesKey}>
-                              {savingKey === row.seriesKey ? "Saving…" : "Save"}
+                            <button type="button" onClick={() => void save(row)} disabled={savingKey === mk}>
+                              {savingKey === mk ? "Saving…" : "Save"}
                             </button>
                             {row.measurement ? (
-                              <button type="button" className="secondary" onClick={() => void clear(row)} disabled={savingKey === row.seriesKey}>
+                              <button type="button" className="secondary" onClick={() => void clear(row)} disabled={savingKey === mk}>
                                 Clear
                               </button>
                             ) : null}
                           </div>
                         ) : null}
-                        {row.seriesKey && rowErrors[row.seriesKey] ? <p className="form-error" role="alert">{rowErrors[row.seriesKey]}</p> : null}
+                        {mk && rowErrors[mk] ? <p className="form-error" role="alert">{rowErrors[mk]}</p> : null}
                       </td>
                       <td>{row.status === "measured" && row.kg !== null ? formatShippedKg(row.kg) : row.cases > 0 ? "Not measured" : "—"}</td>
                     </tr>
@@ -522,7 +729,7 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
       {totals ? (
         <div className="pack-week-totals" role="region" aria-label="Week totals">
           <h3>
-            {weekLabel(selected)} shipped peppers {totals.source === "legacy" ? "(colour totals)" : "(pack totals)"}
+            {weekLabel(selected)} shipped peppers ({WEEK_SOURCE_LABELS[totals.source].toLowerCase()})
           </h3>
           <dl className="weekly-docklink-rows">
             {PEPPER_COLORS.filter((c) => totals.colors[c].kg > 0 || totals.colors[c].cases > 0).map((c) => (
@@ -552,6 +759,17 @@ export function PackShipmentsWeek({ refreshKey = 0, initialWeek }: { refreshKey?
           </dl>
           {incomplete ? <p className="pack-week-incomplete">{incomplete}</p> : <p className="pack-week-complete">Every shipped case this week is measured.</p>}
         </div>
+      ) : null}
+
+      {entryModal ? (
+        <ManualPackEntryModal
+          mode={entryModal.kind === "create" ? { kind: "create", initialWeek: selected } : entryModal}
+          onClose={() => setEntryModal(null)}
+          onSaved={(message) => {
+            setEntryModal(null);
+            void changed(message);
+          }}
+        />
       ) : null}
     </section>
   );

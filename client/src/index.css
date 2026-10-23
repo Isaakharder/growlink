@@ -11919,3 +11919,312 @@ textarea.cleaning-checklist-response-input {
     flex-wrap: wrap;
   }
 }
+
+/* ------------------------------------------------------------------------ */
+/* Manual pack entries (Add Case Entry) and the week's source                */
+/* ------------------------------------------------------------------------ */
+
+.pack-week-source {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--brand);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.pack-week-source p {
+  margin: 0;
+}
+
+.pack-week-source--legacy {
+  border-left-color: #8a96a3;
+}
+
+.pack-week-source--manual {
+  border-left-color: #1f6fa8;
+}
+
+.pack-week-source--decide {
+  border-color: #f0c27a;
+  border-left-color: #e7a33a;
+  background: #fff8ec;
+}
+
+.pack-week-source-label {
+  color: var(--text-muted);
+}
+
+.pack-week-not-counted,
+.weekly-docklink-not-counted {
+  margin: 0.3rem 0 0;
+  color: #5b6470;
+  font-size: 0.82rem;
+}
+
+.pack-week-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.pack-week-manual {
+  margin: 0 0 0.9rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.pack-week-manual-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pack-week-manual-header h3,
+.pack-week-legacy h3,
+.pack-week-subheading {
+  margin: 0 0 0.35rem;
+  font-size: 0.98rem;
+}
+
+.pack-week-entries td {
+  vertical-align: top;
+}
+
+.pack-week-entry--duplicate td:first-child {
+  box-shadow: inset 3px 0 0 #e7a33a;
+}
+
+.pack-week-badge--warn {
+  display: block;
+  width: fit-content;
+  margin-top: 0.25rem;
+  background: #fff1d6;
+  color: #8a4b00;
+  white-space: normal;
+}
+
+.pack-week-legacy--not-counted {
+  background: var(--surface-soft);
+  color: #5b6470;
+}
+
+.manual-pack-modal {
+  width: min(46rem, calc(100vw - 2rem));
+}
+
+.manual-pack-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.manual-pack-week,
+.manual-pack-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.6rem;
+}
+
+.manual-pack-week label,
+.manual-pack-meta label,
+.manual-pack-historical-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.manual-pack-source {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #f0c27a;
+  border-radius: 10px;
+  background: #fff8ec;
+}
+
+.manual-pack-source legend {
+  padding: 0 0.25rem;
+  font-weight: 600;
+}
+
+.manual-pack-source label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  font-size: 0.88rem;
+}
+
+.manual-pack-source-note {
+  margin: 0;
+  padding: 0.45rem 0.7rem;
+  border-left: 3px solid #1f6fa8;
+  background: var(--surface-soft);
+  border-radius: 6px;
+  font-size: 0.86rem;
+}
+
+.manual-pack-lines {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.manual-pack-lines th {
+  padding: 0 0.3rem 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.manual-pack-lines td {
+  padding: 0.25rem 0.3rem;
+  vertical-align: top;
+}
+
+.manual-pack-lines td:first-child {
+  width: 100%;
+}
+
+.manual-pack-lines select {
+  width: 100%;
+}
+
+.manual-pack-lines input[type="number"] {
+  width: 8rem;
+}
+
+.manual-pack-add-line {
+  align-self: flex-start;
+}
+
+.manual-pack-historical {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.manual-pack-historical h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.manual-pack-historical-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.manual-pack-historical-note {
+  grid-column: 1 / -1;
+}
+
+.manual-pack-duplicates {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #f0c27a;
+  border-radius: 10px;
+  background: #fff8ec;
+}
+
+.manual-pack-duplicates p,
+.manual-pack-duplicates ul {
+  margin: 0 0 0.4rem;
+}
+
+@media (max-width: 720px) {
+  .manual-pack-lines,
+  .manual-pack-lines > tbody,
+  .manual-pack-lines > tbody > tr,
+  .manual-pack-lines > tbody > tr > td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .manual-pack-lines > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .manual-pack-lines > tbody > tr {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .manual-pack-lines input[type="number"] {
+    width: 100%;
+  }
+
+  .pack-week-entries.varieties-table {
+    min-width: 0;
+  }
+}
+
+/* Controls in the manual entry form and week panel, matching .yield-entry-form controls. */
+.manual-pack-form input:not([type="radio"]),
+.manual-pack-form select,
+.manual-pack-form button,
+.manual-pack-historical button,
+.pack-week-manual-header button,
+.pack-week-source-actions button,
+.manual-pack-duplicates button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.manual-pack-form input:not([type="radio"]),
+.manual-pack-form select {
+  padding: 0.45rem 0.55rem;
+}
+
+.manual-pack-form button,
+.pack-week-manual-header button,
+.pack-week-source-actions button {
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+}
+
+/* Long pack names in a select must not widen the modal past the screen. */
+.manual-pack-form,
+.manual-pack-form label,
+.manual-pack-lines td {
+  min-width: 0;
+}
+
+.manual-pack-form select,
+.manual-pack-form input:not([type="radio"]) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.manual-pack-week select {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .manual-pack-modal {
+    width: calc(100vw - 1.5rem);
+    box-sizing: border-box;
+  }
+
+  .manual-pack-week,
+  .manual-pack-meta,
+  .manual-pack-historical-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -31,11 +31,16 @@ const SYNC = {
   diagnostics: {}
 };
 
-const pack = (o: Partial<PackWeekResponse["packs"][number]>): PackWeekResponse["packs"][number] => ({
-  seriesKey: null, packId: "p", name: "Pack", packCode: null, currentName: null, currentPackCode: null, description: null,
-  packStatus: "active", colorKind: "single", colorKey: "red", colorLabel: null, reclassifiedSince: false, cases: 0, loadCount: 0,
-  status: "missing", kg: null, kgByColor: null, measurement: null, ...o
-});
+const pack = (o: Partial<PackWeekResponse["packs"][number]>): PackWeekResponse["packs"][number] => {
+  const row: PackWeekResponse["packs"][number] = {
+    seriesKey: null, measurementKey: null, origin: "import", entryCount: null, packId: "p", name: "Pack", packCode: null, currentName: null,
+    currentPackCode: null, description: null, packStatus: "active", colorKind: "single", colorKey: "red", colorLabel: null,
+    reclassifiedSince: false, cases: 0, loadCount: 0, status: "missing", counted: true, kg: null, kgByColor: null, measurement: null, ...o
+  };
+  // As the server does: a shipped series is measured by pack + ship-time classification.
+  if (row.seriesKey && !o.measurementKey) row.measurementKey = `docklink:${row.packId}|${row.colorKind}|${row.colorKey}|pepper|kg`;
+  return row;
+};
 
 function week47(): PackWeekResponse {
   return {
@@ -134,7 +139,7 @@ describe("Weekly Pack Shipments", () => {
     expect(calls.find((c) => c.method === "PUT")).toEqual({
       path: "/api/pack-shipments/measurements",
       method: "PUT",
-      body: { isoYear: 2026, isoWeek: 47, seriesKey: "s-yellow-5kg", netKgPerCase: 5.05 }
+      body: { isoYear: 2026, isoWeek: 47, measurementKey: "docklink:a2|single|yellow|pepper|kg", seriesKey: "s-yellow-5kg", netKgPerCase: 5.05 }
     });
   });
 
@@ -147,7 +152,7 @@ describe("Weekly Pack Shipments", () => {
     await user.click(within(row("Tri-Colour 3pk")).getAllByRole("button", { name: "Save" }).at(-1)!);
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
     expect(calls.find((c) => c.method === "PUT")!.body).toEqual({
-      isoYear: 2026, isoWeek: 47, seriesKey: "s-tri-3pk",
+      isoYear: 2026, isoWeek: 47, measurementKey: "docklink:a4|mixed|mixed|pepper|kg", seriesKey: "s-tri-3pk",
       components: [{ color: "red", piecesPerCase: 15, fruitWeightG: 180 }, { color: "yellow", piecesPerCase: 15, fruitWeightG: 175 }]
     });
   });
@@ -215,8 +220,10 @@ describe("Weekly Pack Shipments", () => {
       totals: { ...week47().totals!, source: "legacy", isoWeek: 44, mixedCases: 0, attentionCases: 0, unmeasuredCases: 0, complete: true, kg: 7210, shippedCases: 1400 }
     };
     render(<PackShipmentsWeek initialWeek={{ isoYear: 2026, isoWeek: 44 }} />);
-    expect(await screen.findByText(/2026-W44 uses colour totals\./)).toBeInTheDocument();
-    expect(screen.getByText(/pack totals start at 2026-W45/)).toBeInTheDocument();
+    const source = await screen.findByRole("region", { name: "Source for 2026-W44" });
+    expect(source).toHaveTextContent("Counted for 2026-W44: Colour totals");
+    expect(source).toHaveTextContent("This week only has colour totals.");
+    expect(screen.getByText(/DockLink pack totals start at 2026-W45/)).toBeInTheDocument();
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
     expect(screen.getByText("Every shipped case this week is measured.")).toBeInTheDocument();
   });

@@ -116,7 +116,7 @@ describe("desktop Weekly Case Totals — from the shipped-yield calculation", ()
     expect(cards()).toEqual([
       {
         title: "Week 33 · 2026",
-        source: "Pack totals",
+        source: "DockLink pack totals",
         rows: [["Red", "10.333"], ["Orange", "12.5"], ["Mixed / rainbow", "4"], ["Needs attention", "2"], ["Total", "28.833"], ["Shipped kg", "112.1 kg"]],
         incomplete: "Incomplete: 4 shipped cases have no usable measurement · 2 cases need attention. Shipped kg covers measured cases only."
       },

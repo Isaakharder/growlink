@@ -14,10 +14,20 @@ export const PEPPER_COLORS: PepperColor[] = ["red", "orange", "yellow", "green"]
 export type ColorTotals = Record<PepperColor, { kg: number; cases: number }>;
 export type NonPepperTotal = { cropType: string; trackingUnit: string | null; cases: number };
 
+/** Which data counts for a week (exactly one): DockLink pack shipments, manual pack entries, or colour totals. */
+export type WeekSource = "packs" | "manual" | "legacy";
+export type WeekSourceReason = "docklink_scope" | "chosen_manual" | "chosen_legacy" | "manual_only" | "legacy_only" | "undecided";
+
+/** Data recorded for a week that does not count because another source is authoritative. */
+export type NotCounted = { manualCases: number; manualEntries: number; legacyCases: number; legacyRows: number };
+
 export type ShippedWeekTotals = {
   isoYear: number;
   isoWeek: number;
-  source: "packs" | "legacy";
+  source: WeekSource;
+  sourceReason: WeekSourceReason;
+  needsSourceDecision: boolean;
+  notCounted: NotCounted;
   colors: ColorTotals;
   mixedCases: number;
   shippedCases: number;
@@ -30,11 +40,45 @@ export type ShippedWeekTotals = {
   supersededLegacyRows: number;
 };
 
-export type ShippedTotals = Omit<ShippedWeekTotals, "isoYear" | "isoWeek" | "source" | "supersededLegacyRows"> & {
+export type ShippedTotals = Omit<
+  ShippedWeekTotals,
+  "isoYear" | "isoWeek" | "source" | "sourceReason" | "needsSourceDecision" | "notCounted" | "supersededLegacyRows"
+> & {
   weekCount: number;
   packWeeks: number;
+  manualWeeks: number;
   legacyWeeks: number;
+  weeksNeedingSourceDecision: number;
+  weeksWithUncountedManualEntries: number;
 };
+
+export const WEEK_SOURCE_LABELS: Record<WeekSource, string> = {
+  packs: "DockLink pack totals",
+  manual: "Manual pack entries",
+  legacy: "Colour totals"
+};
+
+export const WEEK_SOURCE_REASON_LABELS: Record<WeekSourceReason, string> = {
+  docklink_scope: "DockLink pack totals are authoritative for this week.",
+  chosen_manual: "Manual pack entries were chosen for this week.",
+  chosen_legacy: "Colour totals were chosen for this week.",
+  manual_only: "This week only has manual pack entries.",
+  legacy_only: "This week only has colour totals.",
+  undecided: "This week has both manual pack entries and colour totals. Colour totals count until you choose."
+};
+
+/**
+ * "Not counted: 1,700 cases in colour totals · 2 manual entries (77 cases)",
+ * or null when nothing recorded for the week is left out.
+ */
+export function notCountedText(week: Pick<ShippedWeekTotals, "notCounted"> | null | undefined): string | null {
+  const n = week?.notCounted;
+  if (!n) return null;
+  const parts: string[] = [];
+  if (n.legacyRows > 0) parts.push(`${formatCases(n.legacyCases)} cases in colour totals`);
+  if (n.manualEntries > 0) parts.push(`${n.manualEntries} manual pack entr${n.manualEntries === 1 ? "y" : "ies"} (${formatCases(n.manualCases)} cases)`);
+  return parts.length ? `Not counted: ${parts.join(" · ")}` : null;
+}
 
 export type IsoWeek = { isoYear: number; isoWeek: number };
 
