@@ -273,7 +273,7 @@ describe("Weekly Pack Shipments — manual weeks", () => {
   it("measurements for manual packs are keyed by pack and classification (no DockLink series)", async () => {
     const { user } = await renderManualWeek();
     expect(screen.getByRole("heading", { name: /Packs entered for 2026-W44 — kg from this week's measurements/ })).toBeInTheDocument();
-    const red = screen.getAllByText("Red 5kg").map((e) => e.closest("tr")!).find((tr) => tr.classList.contains("pack-week-row"))!;
+    const red = screen.getAllByText("Red 5kg").map((e) => e.closest(".pack-card")!).find(Boolean) as HTMLElement;
     expect(within(red).getByText("2 entries")).toBeInTheDocument();
     await user.type(within(red).getByLabelText(/net pepper kg/), "5.1");
     await user.click(within(red).getByRole("button", { name: "Save" }));

@@ -73,7 +73,7 @@ async function renderWeek(waitFor = "Red 5kg") {
   await screen.findByText(waitFor);
   return { user, onChanged };
 }
-const row = (name: string) => screen.getAllByText(name)[0].closest("tr.pack-week-row") as HTMLElement;
+const row = (name: string) => screen.getAllByText(name)[0].closest(".pack-card") as HTMLElement;
 const writes = () => calls.filter((c) => c.method !== "GET");
 
 describe("Remembered pack measurements", () => {
@@ -171,6 +171,11 @@ describe("Remembered pack measurements", () => {
     await user.type(within(r).getByRole("spinbutton", { name: "Red average fruit weight in grams for Tri-Colour 3pk" }), "200");
     await user.type(within(r).getByRole("spinbutton", { name: "Yellow average fruit weight in grams for Tri-Colour 3pk" }), "180");
     await user.click(within(r).getByRole("button", { name: "Remember fruit weights for future weeks" }));
+    // Counts equal to the remembered ones can't be remembered again; changing one can.
+    expect(within(row("Tri-Colour 3pk")).getByRole("button", { name: "Remember counts for future weeks" })).toBeDisabled();
+    const redCount = within(row("Tri-Colour 3pk")).getByRole("spinbutton", { name: "Red peppers per shipping case for Tri-Colour 3pk" });
+    await user.clear(redCount);
+    await user.type(redCount, "6");
     await user.click(within(row("Tri-Colour 3pk")).getByRole("button", { name: "Remember counts for future weeks" }));
     expect(writes()).toEqual([
       {
@@ -181,17 +186,21 @@ describe("Remembered pack measurements", () => {
       {
         path: "/api/pack-shipments/measurement-defaults",
         method: "PUT",
-        body: { isoYear: 2026, isoWeek: 31, measurementKey: TRI_KEY, valueKind: "counts", counts: [{ color: "red", piecesPerCase: 5 }, { color: "yellow", piecesPerCase: 5 }] }
+        body: { isoYear: 2026, isoWeek: 31, measurementKey: TRI_KEY, valueKind: "counts", counts: [{ color: "red", piecesPerCase: 6 }, { color: "yellow", piecesPerCase: 5 }] }
       }
     ]);
     expect(within(row("Tri-Colour 3pk")).queryByRole("button", { name: "Remember for future weeks" })).not.toBeInTheDocument();
   });
 
-  it("asks for a value before remembering", async () => {
+  it("Remember needs a valid value: disabled while empty or invalid, with the reason shown inline", async () => {
     weekBody = weekBodyWith([packRow({})], { rememberedCases: 0 });
     const { user } = await renderWeek();
-    await user.click(within(row("Red 5kg")).getByRole("button", { name: "Remember for future weeks" }));
+    const remember = () => within(row("Red 5kg")).getByRole("button", { name: "Remember for future weeks" });
+    expect(remember()).toBeDisabled();
+    await user.type(within(row("Red 5kg")).getByRole("spinbutton"), "0");
+    expect(remember()).toBeDisabled();
     expect(within(row("Red 5kg")).getByRole("alert")).toHaveTextContent("Enter the average net pepper kg per shipping case");
+    await user.click(remember());
     expect(writes()).toEqual([]);
   });
 });

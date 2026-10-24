@@ -89,14 +89,14 @@ async function renderWeek() {
   await screen.findByText("Red 5kg");
   return user;
 }
-const row = (name: string) => screen.getAllByText(name)[0].closest("tr") as HTMLElement;
+const row = (name: string) => screen.getAllByText(name)[0].closest(".pack-card") as HTMLElement;
 
 describe("Weekly Pack Shipments", () => {
   it("lists DockLink's packs by display order with names and product codes, in the ISO week", async () => {
     await renderWeek();
     expect(calls[0].path).toBe("/api/pack-shipments/week?isoYear=2026&isoWeek=47");
     expect(screen.getByText(/Mon 16 Nov – Sun 22 Nov 2026/)).toBeInTheDocument();
-    const names = Array.from(document.querySelectorAll(".pack-week-table > tbody > tr .pack-week-name")).map((e) => e.textContent);
+    const names = Array.from(document.querySelectorAll(".pack-cards .pack-week-name")).map((e) => e.textContent);
     expect(names).toEqual(["Red 5kg", "Yellow 5kg", "Orange 5kg", "Tri-Colour 3pk", "Sweet Bite 250g"]);
     expect(within(row("Red 5kg")).getByText("RL5")).toBeInTheDocument();
     expect(within(row("Tri-Colour 3pk")).getByText("Archived")).toBeInTheDocument();
@@ -106,7 +106,7 @@ describe("Weekly Pack Shipments", () => {
 
   it("distinguishes a shipping case from an inner retail pack", async () => {
     await renderWeek();
-    expect(screen.getByText(/A shipping case can hold several inner retail packs/)).toBeInTheDocument();
+    expect(screen.getByText(/not the retail packs inside it/)).toBeInTheDocument();
     expect(within(row("Tri-Colour 3pk")).getByText("15 retail 3-packs per shipping case")).toBeInTheDocument();
   });
 
@@ -185,7 +185,7 @@ describe("Weekly Pack Shipments", () => {
     await renderWeek();
     const sweet = row("Sweet Bite 250g");
     expect(within(sweet).getByText("Now “Sweet Bite 250 g”")).toBeInTheDocument();
-    expect(within(sweet).getByText(/Classification changed since; this row keeps its ship-time colour/)).toBeInTheDocument();
+    expect(within(sweet).getByText(/Classification changed since; kg uses its ship-time colour/)).toBeInTheDocument();
   });
 
   it("unattributed shipments and unsupported colours are listed as needing attention, never given a colour or an input", async () => {

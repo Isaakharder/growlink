@@ -11632,9 +11632,400 @@ textarea.cleaning-checklist-response-input {
   margin: 0;
 }
 
-.pack-week-table th[scope="row"] {
-  text-align: left;
-  min-width: 11rem;
+/* One card per pack: identity, what shipped and its kg, then this week's measurement. */
+.pack-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr));
+  align-items: start;
+  gap: 0.85rem;
+}
+
+.pack-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(31, 42, 46, 0.05);
+}
+
+.pack-card--measured {
+  border-left-color: var(--brand);
+}
+
+.pack-card--remembered {
+  border-left-color: #7bb37f;
+}
+
+.pack-card--missing,
+.pack-card--incompatible {
+  border-left-color: #e7a33a;
+}
+
+.pack-card--compact {
+  gap: 0;
+  padding: 0.6rem 0.85rem;
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+.pack-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+}
+
+.pack-card-title {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.pack-card-title h4 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.pack-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pack-card-tags .pack-week-code {
+  margin-right: 0;
+}
+
+.pack-card-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pack-card-chip--mixed {
+  background: linear-gradient(90deg, #fde2e2, #fdebd3, #fdf6cc, #ddf3df);
+}
+
+.pack-card-rainbow-dots {
+  display: inline-flex;
+  margin-right: 0.35rem;
+}
+
+.pack-card .pack-card-rainbow-dots .weekly-docklink-dot {
+  margin-right: -0.15rem;
+}
+
+.pack-card-chip-note {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.pack-card-status {
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pack-card-status--ok {
+  background: #e3f2ec;
+  color: #1b5e20;
+}
+
+.pack-card-status--remembered {
+  border: 1px dashed #7bb37f;
+  background: #f1f8f1;
+  color: #2e6b33;
+}
+
+.pack-card-status--warn {
+  background: #fff1d6;
+  color: #8a4b00;
+}
+
+.pack-card-status--muted {
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.pack-card-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.pack-card-stats div {
+  min-width: 0;
+}
+
+.pack-card-stats dt {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pack-card-stats dd {
+  margin: 0.1rem 0 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pack-card-stat-note {
+  display: block;
+  color: #2e6b33;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.pack-card-notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.pack-card input[type="number"] {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.pack-card input[type="number"]:focus {
+  border-color: var(--brand);
+  outline: 2px solid var(--brand-soft);
+}
+
+.pack-card-single {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.pack-card-input-unit {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text);
+}
+
+.pack-card-input-unit input[type="number"] {
+  max-width: 9rem;
+}
+
+.pack-card-rainbow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.pack-card-rainbow-row {
+  display: grid;
+  grid-template-columns: minmax(4.6rem, 0.9fr) minmax(0, 1fr) minmax(0, 1fr) minmax(3.4rem, 0.8fr);
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pack-card-rainbow-head {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pack-card-rainbow-head span:last-child,
+.pack-card-rainbow-kg {
+  text-align: right;
+}
+
+.pack-card-rainbow-colour {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.pack-card-rainbow-kg {
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pack-card-hint {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.pack-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+.pack-card-actions-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.pack-card-button,
+.pack-week-copy button {
+  min-height: 40px;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.pack-card-button:hover:not(:disabled),
+.pack-week-copy button:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--active);
+}
+
+.pack-card-button--primary {
+  border-color: #0c6a56;
+  background: var(--brand);
+  color: #ffffff;
+}
+
+.pack-card-button--primary:hover:not(:disabled) {
+  background: #0c6a56;
+}
+
+.pack-card-button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.pack-card-button:disabled,
+.pack-week-copy button:disabled {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: #8a9893;
+  cursor: not-allowed;
+}
+
+.pack-card-save-state {
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pack-card-save-state--saved {
+  color: #1b5e20;
+}
+
+.pack-card-save-state--unsaved {
+  color: #9a5b00;
+}
+
+.pack-card-save-state--saving {
+  color: var(--text-muted);
+}
+
+.pack-card-notices {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #1b5e20;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.pack-card-remembered {
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  background: #f3f8f3;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.pack-card-remembered p {
+  margin: 0.1rem 0;
+}
+
+.pack-card-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pack-card-error {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .pack-card {
+    padding: 0.75rem;
+  }
+
+  .pack-card-actions-main {
+    width: 100%;
+  }
+
+  .pack-card-actions-main .pack-card-button {
+    flex: 1 1 auto;
+  }
+
+  .pack-card-rainbow-row {
+    grid-template-columns: minmax(4rem, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(3rem, 0.7fr);
+    gap: 0.3rem;
+  }
 }
 
 .pack-week-name {
@@ -11669,101 +12060,6 @@ textarea.cleaning-checklist-response-input {
   color: var(--text-muted);
   font-size: 0.78rem;
   font-weight: 400;
-}
-
-.pack-week-colour {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  white-space: nowrap;
-}
-
-.pack-week-colour--mixed {
-  padding: 0.05rem 0.45rem;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #fde2e2, #fdebd3, #fdf6cc, #ddf3df);
-  font-weight: 600;
-  font-size: 0.82rem;
-}
-
-.pack-week-measure label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-
-.pack-week-measure input {
-  max-width: 9rem;
-}
-
-.pack-week-components {
-  border-collapse: collapse;
-  font-size: 0.85rem;
-}
-
-.pack-week-components th,
-.pack-week-components td {
-  padding: 0.2rem 0.4rem;
-  text-align: left;
-}
-
-.pack-week-components input {
-  width: 6.5rem;
-}
-
-.pack-week-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.4rem;
-}
-
-.pack-week-status {
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-
-.pack-week-status--ok {
-  color: #1b5e20;
-}
-
-.pack-week-status--warn {
-  color: #9a5b00;
-}
-
-.pack-week-status--muted {
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.pack-week-remembered {
-  margin-top: 0.35rem;
-}
-
-.pack-week-remembered p {
-  margin: 0.15rem 0;
-}
-
-.pack-week-remembered .link-button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent, #1b5e20);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.pack-week-row--remembered th[scope="row"] {
-  box-shadow: inset 3px 0 0 #7bb37f;
-}
-
-.pack-week-row--missing th[scope="row"],
-.pack-week-row--incompatible th[scope="row"] {
-  box-shadow: inset 3px 0 0 #e7a33a;
 }
 
 .pack-week-attention,
@@ -11832,104 +12128,16 @@ textarea.cleaning-checklist-response-input {
   font-size: 0.85rem;
 }
 
-/* Phones: each pack row becomes a stacked card so nothing is cut off. */
+/* Phones: nothing in the weekly pack screen may widen the page. */
 @media (max-width: 720px) {
   .pack-week .varieties-table-wrapper {
     overflow-x: visible;
-  }
-
-  .pack-week-table.varieties-table {
-    min-width: 0;
-  }
-
-  .pack-week-table,
-  .pack-week-table > tbody,
-  .pack-week-table > tbody > tr,
-  .pack-week-table > tbody > tr > th,
-  .pack-week-table > tbody > tr > td {
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .pack-week-table > thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-
-  .pack-week-table > tbody > tr {
-    padding: 0.6rem 0.2rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .pack-week-table > tbody > tr > th,
-  .pack-week-table > tbody > tr > td {
-    padding: 0.2rem 0.4rem;
-    border: 0;
-  }
-
-  .pack-week-table > tbody > tr > td::before {
-    display: block;
-    color: var(--text-muted);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-
-  .pack-week-table > tbody > tr > td:nth-of-type(1)::before { content: "Colour at ship time"; }
-  .pack-week-table > tbody > tr > td:nth-of-type(2)::before { content: "Shipped cases"; }
-  .pack-week-table > tbody > tr > td:nth-of-type(4)::before { content: "Shipped kg"; }
-
-  .pack-week-measure input,
-  .pack-week-components input {
-    width: 100%;
-    max-width: none;
-    box-sizing: border-box;
   }
 
   .yield-entry-layout > .pack-week {
     min-width: 0;
     max-width: 100%;
     overflow-wrap: anywhere;
-  }
-
-  .pack-week-components,
-  .pack-week-components > tbody {
-    display: block;
-    width: 100%;
-  }
-
-  .pack-week-components > thead {
-    display: none;
-  }
-
-  .pack-week-components > tbody > tr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 0.25rem 0.5rem;
-    padding: 0.35rem 0;
-    border-bottom: 1px dashed var(--border);
-  }
-
-  .pack-week-components > tbody > tr > th {
-    grid-column: 1 / -1;
-  }
-
-  .pack-week-components > tbody > tr > td {
-    padding: 0;
-  }
-
-  .pack-week-components > tbody > tr > td:nth-of-type(1)::before { content: "Peppers per shipping case"; }
-  .pack-week-components > tbody > tr > td:nth-of-type(2)::before { content: "Avg fruit weight (g)"; }
-  .pack-week-components > tbody > tr > td:nth-of-type(3) { grid-column: 1 / -1; color: var(--text-muted); font-size: 0.8rem; }
-
-  .pack-week-components > tbody > tr > td::before {
-    display: block;
-    color: var(--text-muted);
-    font-size: 0.72rem;
   }
 
   .pack-week-copy {
