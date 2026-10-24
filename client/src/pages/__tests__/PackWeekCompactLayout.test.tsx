@@ -145,4 +145,37 @@ describe("compact weekly pack screen", () => {
     // One slim row: cases, entries and kg (the "·" separators are CSS).
     expect([...card.querySelectorAll(".pack-card-stats dd")].map((d) => d.textContent)).toEqual(["900 cases", "2 entries", "4,608 kg"]);
   });
+
+  it("renders the source line into a page slot when given one, keeping the week named", async () => {
+    const page = document.createElement("div");
+    page.innerHTML = `<div class="other-panel">Weekly Case Totals</div><div class="slot"></div>`;
+    document.body.appendChild(page);
+    const slot = page.querySelector<HTMLElement>(".slot")!;
+    render(<PackShipmentsWeek initialWeek={{ isoYear: 2026, isoWeek: 43 }} sourceSlot={slot} />);
+    const source = await screen.findByRole("region", { name: "Source for 2026-W43" });
+    expect(slot.contains(source)).toBe(true);
+    expect(source.closest(".pack-week")).toBeNull();
+    expect(within(slot).getByRole("heading", { level: 2 })).toHaveTextContent("Week source & completion · 2026-W43");
+    expect(within(source).getByRole("button", { name: "Undo confirmation" })).toBeInTheDocument();
+    page.remove();
+  });
+
+  it("the source-decision notice links to the source line at the bottom of the page", async () => {
+    body = week({
+      source: "legacy", sourceReason: "undecided", needsSourceDecision: true, manualStatus: null, confirmation: null,
+      legacyRows: [{ color: "red", totalCases: 880, caseWeightKg: 5.1, totalKg: 4488, source: "docklink" }],
+      notCounted: { manualCases: 900, manualEntries: 12, legacyCases: 0, legacyRows: 0 }
+    });
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    const slot = document.body.appendChild(document.createElement("div"));
+    const user = userEvent.setup();
+    render(<PackShipmentsWeek initialWeek={{ isoYear: 2026, isoWeek: 43 }} sourceSlot={slot} />);
+    const source = await screen.findByRole("region", { name: "Source for 2026-W43" });
+    await user.click(screen.getByRole("button", { name: "Choose the week's source at the bottom of the page" }));
+    expect(scrolled).toHaveBeenCalled();
+    expect(document.activeElement).toBe(source);
+    expect(within(source).getByRole("button", { name: "Count manual pack entries" })).toBeInTheDocument();
+    slot.remove();
+  });
 });

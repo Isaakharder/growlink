@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiFetch } from "../lib/api";
 import { isoWeekOf, isoWeekRangeLabel, isoWeeksInYear, shiftIsoWeek } from "../lib/isoWeek";
 import {
@@ -149,13 +150,17 @@ function ColourTotals({ data, counted }: { data: PackWeekResponse; counted: bool
 export function PackShipmentsWeek({
   refreshKey = 0,
   initialWeek,
-  onChanged
+  onChanged,
+  sourceSlot = null
 }: {
   refreshKey?: number;
   initialWeek?: { isoYear: number; isoWeek: number };
   /** Called after manual entries or the week's source change, so other totals on the page can refresh. */
   onChanged?: () => void;
+  /** Where to render the week source/completion line (the bottom of the Cases page); inline at the end of this section when absent. */
+  sourceSlot?: HTMLElement | null;
 }) {
+  const sourceRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState(() => initialWeek ?? isoWeekOf(new Date()));
   const [data, setData] = useState<PackWeekResponse | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -371,7 +376,84 @@ export function PackShipmentsWeek({
   const totals = data?.totals ?? null;
   const incomplete = totals ? incompleteShippedText(totals) : null;
 
+  // The week source/completion line: inline at the end of this section, or (on the Cases page)
+  // in a slot at the very bottom of the page, after every other panel.
+  const sourceRegion = data ? (
+    <div
+      className={`pack-week-source pack-week-source--${data.source}${data.needsSourceDecision ? " pack-week-source--decide" : ""}`}
+      role="region"
+      aria-label={`Source for ${weekLabel(data)}`}
+      ref={sourceRef}
+      tabIndex={-1}
+    >
+      <div className="pack-week-source-line">
+        <p>
+          <strong>{weekLabel(data)}</strong> · {SOURCE_SHORT[data.source]}
+          {data.source === "manual" && data.manualStatus ? (
+            <>
+              {" · "}
+              <span className={`pack-week-source-status pack-week-source-status--${data.manualStatus}`}>{MANUAL_STATUS_SHORT[data.manualStatus]}</span>
+            </>
+          ) : null}
+          {data.needsSourceDecision ? <span className="pack-week-source-status pack-week-source-status--decide"> · Choose a source</span> : null}
+        </p>
+        {data.source === "manual" && data.manualStatus && data.manualEntryAllowed ? (
+          data.manualStatus === "confirmed" ? (
+            <button type="button" className="pack-card-button pack-card-button--quiet" aria-label="Undo confirmation" onClick={() => void setConfirmed(false)}>
+              Undo
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="pack-card-button"
+              aria-label={data.manualEntries.length === 0 ? "Confirm no shipments this week" : "Confirm week complete"}
+              onClick={() => void setConfirmed(true)}
+            >
+              {data.manualEntries.length === 0 ? "Confirm no shipments" : "Confirm complete"}
+            </button>
+          )
+        ) : null}
+      </div>
+      <details className="pack-week-source-details" open={data.needsSourceDecision}>
+        <summary>Details</summary>
+        <p>
+          <span className="pack-week-source-label">Counted for {weekLabel(data)}:</span> <strong>{WEEK_SOURCE_LABELS[data.source]}</strong>.{" "}
+          {WEEK_SOURCE_REASON_LABELS[data.sourceReason]}
+          {data.rebuildRange ? ` Rebuild range: ${weekLabel(data.rebuildRange.from)} to ${weekLabel(data.rebuildRange.to)}.` : ""}
+        </p>
+        {data.source === "manual" && data.manualStatus ? (
+          <p>
+            {MANUAL_STATUS_LABELS[data.manualStatus]}
+            {data.manualStatus === "not_entered"
+              ? " — nothing entered for this week. Its shipments are unknown, not zero."
+              : data.manualStatus === "entered"
+                ? " — add any remaining invoices, then confirm the week."
+                : ` — ${data.manualEntries.length === 0 ? "no shipments this week" : "every invoice entered"} (confirmed ${new Date(data.confirmation?.confirmedAt ?? "").toLocaleDateString()}).`}
+          </p>
+        ) : null}
+        <p>{scopeText(data.sync)}</p>
+        {notCountedText(data) ? <p className="pack-week-not-counted">{notCountedText(data)}</p> : null}
+        {data.source !== "packs" && data.manualEntries.length > 0 && data.legacyRows.length > 0 ? (
+          <div className="pack-week-source-actions">
+            {data.source !== "manual" ? (
+              <button type="button" onClick={() => void chooseSource("manual_packs")}>
+                Count manual pack entries
+              </button>
+            ) : null}
+            {data.source !== "legacy" ? (
+              <button type="button" className="secondary" onClick={() => void chooseSource("legacy_colours")}>
+                Count colour totals instead
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {data.source !== "legacy" && data.legacyRows.length > 0 ? <ColourTotals data={data} counted={false} /> : null}
+      </details>
+    </div>
+  ) : null;
+
   return (
+    <>
     <section className="coming-soon-card pack-week" aria-labelledby="pack-week-title">
       <div className="recent-entries-header">
         <h2 id="pack-week-title">Weekly Pack Shipments</h2>
@@ -435,7 +517,17 @@ export function PackShipmentsWeek({
       ) : null}
       {data?.needsSourceDecision ? (
         <p className="pack-week-decide-banner" role="status">
-          This week has manual pack entries and colour totals. Colour totals count until you choose — see the week's source at the bottom.
+          This week has manual pack entries and colour totals. Colour totals count until you choose.{" "}
+          <button
+            type="button"
+            className="pack-card-link"
+            onClick={() => {
+              sourceRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+              sourceRef.current?.focus({ preventScroll: true });
+            }}
+          >
+            Choose the week's source{sourceSlot ? " at the bottom of the page" : " below"}
+          </button>
         </p>
       ) : null}
 
@@ -644,77 +736,7 @@ export function PackShipmentsWeek({
         </details>
       ) : null}
 
-      {data ? (
-        <div
-          className={`pack-week-source pack-week-source--${data.source}${data.needsSourceDecision ? " pack-week-source--decide" : ""}`}
-          role="region"
-          aria-label={`Source for ${weekLabel(data)}`}
-        >
-          <div className="pack-week-source-line">
-            <p>
-              <strong>{weekLabel(data)}</strong> · {SOURCE_SHORT[data.source]}
-              {data.source === "manual" && data.manualStatus ? (
-                <>
-                  {" · "}
-                  <span className={`pack-week-source-status pack-week-source-status--${data.manualStatus}`}>{MANUAL_STATUS_SHORT[data.manualStatus]}</span>
-                </>
-              ) : null}
-              {data.needsSourceDecision ? <span className="pack-week-source-status pack-week-source-status--decide"> · Choose a source</span> : null}
-            </p>
-            {data.source === "manual" && data.manualStatus && data.manualEntryAllowed ? (
-              data.manualStatus === "confirmed" ? (
-                <button type="button" className="pack-card-button pack-card-button--quiet" aria-label="Undo confirmation" onClick={() => void setConfirmed(false)}>
-                  Undo
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="pack-card-button"
-                  aria-label={data.manualEntries.length === 0 ? "Confirm no shipments this week" : "Confirm week complete"}
-                  onClick={() => void setConfirmed(true)}
-                >
-                  {data.manualEntries.length === 0 ? "Confirm no shipments" : "Confirm complete"}
-                </button>
-              )
-            ) : null}
-          </div>
-          <details className="pack-week-source-details" open={data.needsSourceDecision}>
-            <summary>Details</summary>
-            <p>
-              <span className="pack-week-source-label">Counted for {weekLabel(data)}:</span> <strong>{WEEK_SOURCE_LABELS[data.source]}</strong>.{" "}
-              {WEEK_SOURCE_REASON_LABELS[data.sourceReason]}
-              {data.rebuildRange ? ` Rebuild range: ${weekLabel(data.rebuildRange.from)} to ${weekLabel(data.rebuildRange.to)}.` : ""}
-            </p>
-            {data.source === "manual" && data.manualStatus ? (
-              <p>
-                {MANUAL_STATUS_LABELS[data.manualStatus]}
-                {data.manualStatus === "not_entered"
-                  ? " — nothing entered for this week. Its shipments are unknown, not zero."
-                  : data.manualStatus === "entered"
-                    ? " — add any remaining invoices, then confirm the week."
-                    : ` — ${data.manualEntries.length === 0 ? "no shipments this week" : "every invoice entered"} (confirmed ${new Date(data.confirmation?.confirmedAt ?? "").toLocaleDateString()}).`}
-              </p>
-            ) : null}
-            <p>{scopeText(data.sync)}</p>
-            {notCountedText(data) ? <p className="pack-week-not-counted">{notCountedText(data)}</p> : null}
-            {data.source !== "packs" && data.manualEntries.length > 0 && data.legacyRows.length > 0 ? (
-              <div className="pack-week-source-actions">
-                {data.source !== "manual" ? (
-                  <button type="button" onClick={() => void chooseSource("manual_packs")}>
-                    Count manual pack entries
-                  </button>
-                ) : null}
-                {data.source !== "legacy" ? (
-                  <button type="button" className="secondary" onClick={() => void chooseSource("legacy_colours")}>
-                    Count colour totals instead
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {data.source !== "legacy" && data.legacyRows.length > 0 ? <ColourTotals data={data} counted={false} /> : null}
-          </details>
-        </div>
-      ) : null}
+      {sourceSlot ? null : sourceRegion}
 
       {entryModal ? (
         <ManualPackEntryModal
@@ -727,5 +749,18 @@ export function PackShipmentsWeek({
         />
       ) : null}
     </section>
+    {sourceSlot && data
+      ? createPortal(
+          <section className="coming-soon-card cases-week-source" aria-labelledby="cases-week-source-title">
+            <h2 id="cases-week-source-title">
+              Week source &amp; completion · {weekLabel(data)}
+              <span className="cases-week-source-dates">{isoWeekRangeLabel(data.isoYear, data.isoWeek)}</span>
+            </h2>
+            {sourceRegion}
+          </section>,
+          sourceSlot
+        )
+      : null}
+    </>
   );
 }
