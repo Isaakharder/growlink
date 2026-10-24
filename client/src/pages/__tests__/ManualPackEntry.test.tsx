@@ -333,7 +333,8 @@ describe("Historical rebuild weeks", () => {
     expect(within(source).queryByRole("button", { name: /Count colour totals/ })).not.toBeInTheDocument();
     await user.click(within(source).getByRole("button", { name: "Confirm no shipments this week" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/api/case-week-confirmations")!.body).toEqual({ isoYear: 2026, isoWeek: 44, note: null }));
-    expect(await within(source).findByText("Confirmed complete")).toBeInTheDocument();
+    expect(await within(source).findByText("Complete ✓")).toBeInTheDocument();
+    expect(source).toHaveTextContent("Confirmed complete");
     expect(source).toHaveTextContent("no shipments this week");
     expect(within(source).getByRole("button", { name: "Undo confirmation" })).toBeInTheDocument();
   });

@@ -239,6 +239,7 @@ describe("Weekly Pack Shipments", () => {
   it("says when pack capture isn't active yet", async () => {
     weekBody = { ...week47(), sync: { ...SYNC, scopeStatus: "capture_not_active", firstWeek: null, lastWeek: null }, source: "legacy", packs: [] };
     render(<PackShipmentsWeek initialWeek={{ isoYear: 2026, isoWeek: 47 }} />);
-    expect(await screen.findByText(/Pack capture isn't active in DockLink yet. Every week uses colour totals./)).toBeInTheDocument();
+    expect(await screen.findByText(/DockLink pack capture isn't active yet, so DockLink pack totals don't cover any week./)).toBeInTheDocument();
+    expect(screen.queryByText(/Every week uses colour totals/)).not.toBeInTheDocument();
   });
 });

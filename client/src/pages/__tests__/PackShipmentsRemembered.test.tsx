@@ -85,7 +85,8 @@ describe("Remembered pack measurements", () => {
     const r = row("Red 5kg");
     expect(within(r).getByText("Remembered weight · 5 kg/case")).toBeInTheDocument();
     expect(within(r).queryByText("Measured")).not.toBeInTheDocument();
-    expect(within(r).getByText(/Remembered weight: 5 kg\/case \(from 2026-W30\); changes from 2026-W40/)).toBeInTheDocument();
+    expect(within(r).getByText("Remembered 5 kg/case from W30")).toBeInTheDocument();
+    expect(within(r).getByText("A different remembered value takes over from 2026-W40.")).toBeInTheDocument();
     expect(within(r).getByText("500 kg")).toBeInTheDocument();
     expect(within(r).getByRole("spinbutton", { name: /Average net pepper kg per shipping case/ })).toHaveValue(5);
     expect(within(r).queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
@@ -125,7 +126,7 @@ describe("Remembered pack measurements", () => {
     await renderWeek();
     const r = row("Red 5kg");
     expect(within(r).getByText("Measured")).toBeInTheDocument();
-    expect(within(r).getByText(/Remembered weight: 5 kg\/case \(from 2026-W30\)/)).toBeInTheDocument();
+    expect(within(r).getByText("Remembered 5 kg/case from W30")).toBeInTheDocument();
     expect(within(r).getByText(/This week's own measurement is used instead/)).toBeInTheDocument();
     expect(within(r).getByRole("spinbutton")).toHaveValue(6);
     expect(within(r).getByRole("button", { name: "Clear" })).toBeInTheDocument();
@@ -163,7 +164,7 @@ describe("Remembered pack measurements", () => {
     const { user } = await renderWeek("Tri-Colour 3pk");
     const r = row("Tri-Colour 3pk");
     expect(within(r).getByText("Missing measurement")).toBeInTheDocument();
-    expect(within(r).getByText(/Remembered peppers per case: Red 5, Yellow 5 \(from 2026-W20\)/)).toBeInTheDocument();
+    expect(within(r).getByText("Remembered counts R 5 · Y 5 from W20")).toBeInTheDocument();
     expect(within(r).getByText(/Remembered counts are filled in. Enter this week's fruit weights and Save/)).toBeInTheDocument();
     expect(within(r).getByRole("spinbutton", { name: "Red peppers per shipping case for Tri-Colour 3pk" })).toHaveValue(5);
     expect(within(r).getByRole("spinbutton", { name: "Red average fruit weight in grams for Tri-Colour 3pk" })).toHaveValue(null);
