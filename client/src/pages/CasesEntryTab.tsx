@@ -134,6 +134,8 @@ function formatRounded(value: number, decimals: number) {
 
 export function CasesEntryTab() {
   const currentYear = new Date().getFullYear();
+  // Slot at the bottom of the page for the selected week's source/completion line.
+  const [weekSourceSlot, setWeekSourceSlot] = useState<HTMLDivElement | null>(null);
   const [colors, setColors] = useState<VarietyColor[]>([]);
   const [entries, setEntries] = useState<CaseEntry[]>([]);
   // The authoritative weekly shipped totals for the selected year (packs or colour totals per week).
@@ -528,7 +530,7 @@ export function CasesEntryTab() {
       ) : null}
 
       <LazyRoute>
-        <PackShipmentsWeek refreshKey={packRefreshKey} onChanged={() => void loadShipped(Number(selectedSummaryYear))} />
+        <PackShipmentsWeek refreshKey={packRefreshKey} onChanged={() => void loadShipped(Number(selectedSummaryYear))} sourceSlot={weekSourceSlot} />
       </LazyRoute>
 
       <LazyRoute>
@@ -724,7 +726,7 @@ export function CasesEntryTab() {
                   </dl>
                   {incomplete ? <p className="weekly-docklink-incomplete">{incomplete}</p> : null}
                   {card.needsSourceDecision ? (
-                    <p className="weekly-docklink-incomplete">Has manual pack entries and colour totals: choose which counts on the Weekly Pack Shipments panel.</p>
+                    <p className="weekly-docklink-incomplete">Has manual pack entries and colour totals: choose which counts in the week's source at the bottom of the page.</p>
                   ) : notCountedText(card) ? (
                     <p className="weekly-docklink-not-counted">{notCountedText(card)}</p>
                   ) : null}
@@ -734,6 +736,9 @@ export function CasesEntryTab() {
           </div>
         )}
       </div>
+
+      {/* The selected week's source/completion line (rendered by PackShipmentsWeek): the very bottom of the page. */}
+      <div ref={setWeekSourceSlot} className="cases-week-source-slot" />
 
       {isPackEntryOpen ? (
         <LazyRoute>

@@ -217,3 +217,24 @@ describe("desktop Sync DockLink Cases — pinned behaviour", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Synced DockLink cases: imported=1 · Pack sync failed:"));
   });
 });
+
+describe("the selected week's source/completion line", () => {
+  it("is at the very bottom of the Cases page, after Rebuild Ranges, Colour Totals and Weekly Case Totals", async () => {
+    await renderTab();
+    const source = await screen.findByRole("region", { name: "Source for 2026-W33" });
+    const layout = document.querySelector(".yield-entry-layout") as HTMLElement;
+    const slot = source.closest(".cases-week-source-slot") as HTMLElement;
+    expect(slot).not.toBeNull();
+    expect(slot.parentElement).toBe(layout);
+    expect(layout.lastElementChild).toBe(slot);
+    // Not inside the Weekly Pack Shipments panel any more.
+    expect(source.closest(".pack-week")).toBeNull();
+    for (const name of ["Colour Totals", "Weekly Case Totals"]) {
+      const panel = screen.getByRole("heading", { name }).closest(".coming-soon-card")!;
+      expect(panel.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    // The selected week stays clear: the card names it and its dates.
+    expect(within(slot).getByRole("heading", { level: 2 })).toHaveTextContent("Week source & completion · 2026-W33");
+    expect(within(slot).getByRole("heading", { level: 2 })).toHaveTextContent("10 Aug");
+  });
+});

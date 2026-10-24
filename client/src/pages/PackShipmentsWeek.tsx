@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiFetch } from "../lib/api";
 import { isoWeekOf, isoWeekRangeLabel, isoWeeksInYear, shiftIsoWeek } from "../lib/isoWeek";
 import {
@@ -84,27 +85,82 @@ async function failureMessage(response: Response, fallback: string): Promise<str
   return body?.message ?? `${fallback} (${response.status})`;
 }
 
+/**
+ * DockLink's pack coverage. It only says which weeks DockLink's pack totals
+ * cover; what counts for a given week (manual entries or colour totals
+ * outside that coverage) is the week's own source, shown beside it.
+ */
 function scopeText(sync: PackSyncSummary | null): string {
-  if (!sync) return "Pack shipments haven't been synced from DockLink yet. Weekly totals use colour totals.";
+  if (!sync) return "DockLink pack totals haven't been synced yet, so they don't cover any week.";
   if (sync.scopeStatus === "available" && sync.firstWeek && sync.lastWeek) {
-    const transition = sync.transitionWeek ? ` ${weekLabel(sync.transitionWeek)} and earlier use colour totals or manual pack entries.` : "";
-    return `Pack totals from ${weekLabel(sync.firstWeek)} to ${weekLabel(sync.lastWeek)}.${transition} Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}.`;
+    const transition = sync.transitionWeek ? ` ${weekLabel(sync.transitionWeek)} and earlier use manual pack entries or colour totals.` : "";
+    return `DockLink pack totals cover ${weekLabel(sync.firstWeek)} to ${weekLabel(sync.lastWeek)}.${transition} Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}.`;
   }
   return sync.scopeStatus === "pending_first_full_week"
-    ? "DockLink has started capturing packs; pack totals begin after its first full week. Every week uses colour totals until then."
-    : "Pack capture isn't active in DockLink yet. Every week uses colour totals.";
+    ? "DockLink has started capturing packs; its pack totals begin after its first full week and don't cover any week yet."
+    : "DockLink pack capture isn't active yet, so DockLink pack totals don't cover any week.";
+}
+
+const SOURCE_SHORT: Record<WeekSource, string> = { packs: "DockLink packs", manual: "Manual entries", legacy: "Colour totals" };
+const MANUAL_STATUS_SHORT: Record<ManualWeekStatus, string> = { not_entered: "Not entered yet", entered: "In progress", confirmed: "Complete ✓" };
+
+/** The week's colour totals: what counts in a colour-total week, otherwise shown as not counted. */
+function ColourTotals({ data, counted }: { data: PackWeekResponse; counted: boolean }) {
+  return (
+    <div className={`pack-week-legacy${counted ? "" : " pack-week-legacy--not-counted"}`}>
+      <h3>Colour totals{counted ? "" : " (not counted this week)"}</h3>
+      {counted && data.packs.length === 0 ? (
+        <p>
+          Pack measurements don't apply to colour-total weeks
+          {data.sync?.firstWeek && data.sync.scopeStatus === "available" ? ` — DockLink pack totals start at ${weekLabel(data.sync.firstWeek)}` : ""}.
+        </p>
+      ) : null}
+      {data.legacyRows.length === 0 ? (
+        <p>No colour totals recorded for this week.</p>
+      ) : (
+        <div className="varieties-table-wrapper">
+          <table className="varieties-table">
+            <thead>
+              <tr>
+                <th>Colour</th>
+                <th>Cases</th>
+                <th>Case weight (kg)</th>
+                <th>Total kg</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.legacyRows.map((r) => (
+                <tr key={r.color}>
+                  <td>{cap(r.color)}</td>
+                  <td>{formatCases(r.totalCases)}</td>
+                  <td>{r.caseWeightKg > 0 ? r.caseWeightKg : "Missing"}</td>
+                  <td>{r.caseWeightKg > 0 ? formatShippedKg(r.totalKg) : "—"}</td>
+                  <td>{cap(r.source ?? "manual")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function PackShipmentsWeek({
   refreshKey = 0,
   initialWeek,
-  onChanged
+  onChanged,
+  sourceSlot = null
 }: {
   refreshKey?: number;
   initialWeek?: { isoYear: number; isoWeek: number };
   /** Called after manual entries or the week's source change, so other totals on the page can refresh. */
   onChanged?: () => void;
+  /** Where to render the week source/completion line (the bottom of the Cases page); inline at the end of this section when absent. */
+  sourceSlot?: HTMLElement | null;
 }) {
+  const sourceRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState(() => initialWeek ?? isoWeekOf(new Date()));
   const [data, setData] = useState<PackWeekResponse | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -320,7 +376,84 @@ export function PackShipmentsWeek({
   const totals = data?.totals ?? null;
   const incomplete = totals ? incompleteShippedText(totals) : null;
 
+  // The week source/completion line: inline at the end of this section, or (on the Cases page)
+  // in a slot at the very bottom of the page, after every other panel.
+  const sourceRegion = data ? (
+    <div
+      className={`pack-week-source pack-week-source--${data.source}${data.needsSourceDecision ? " pack-week-source--decide" : ""}`}
+      role="region"
+      aria-label={`Source for ${weekLabel(data)}`}
+      ref={sourceRef}
+      tabIndex={-1}
+    >
+      <div className="pack-week-source-line">
+        <p>
+          <strong>{weekLabel(data)}</strong> · {SOURCE_SHORT[data.source]}
+          {data.source === "manual" && data.manualStatus ? (
+            <>
+              {" · "}
+              <span className={`pack-week-source-status pack-week-source-status--${data.manualStatus}`}>{MANUAL_STATUS_SHORT[data.manualStatus]}</span>
+            </>
+          ) : null}
+          {data.needsSourceDecision ? <span className="pack-week-source-status pack-week-source-status--decide"> · Choose a source</span> : null}
+        </p>
+        {data.source === "manual" && data.manualStatus && data.manualEntryAllowed ? (
+          data.manualStatus === "confirmed" ? (
+            <button type="button" className="pack-card-button pack-card-button--quiet" aria-label="Undo confirmation" onClick={() => void setConfirmed(false)}>
+              Undo
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="pack-card-button"
+              aria-label={data.manualEntries.length === 0 ? "Confirm no shipments this week" : "Confirm week complete"}
+              onClick={() => void setConfirmed(true)}
+            >
+              {data.manualEntries.length === 0 ? "Confirm no shipments" : "Confirm complete"}
+            </button>
+          )
+        ) : null}
+      </div>
+      <details className="pack-week-source-details" open={data.needsSourceDecision}>
+        <summary>Details</summary>
+        <p>
+          <span className="pack-week-source-label">Counted for {weekLabel(data)}:</span> <strong>{WEEK_SOURCE_LABELS[data.source]}</strong>.{" "}
+          {WEEK_SOURCE_REASON_LABELS[data.sourceReason]}
+          {data.rebuildRange ? ` Rebuild range: ${weekLabel(data.rebuildRange.from)} to ${weekLabel(data.rebuildRange.to)}.` : ""}
+        </p>
+        {data.source === "manual" && data.manualStatus ? (
+          <p>
+            {MANUAL_STATUS_LABELS[data.manualStatus]}
+            {data.manualStatus === "not_entered"
+              ? " — nothing entered for this week. Its shipments are unknown, not zero."
+              : data.manualStatus === "entered"
+                ? " — add any remaining invoices, then confirm the week."
+                : ` — ${data.manualEntries.length === 0 ? "no shipments this week" : "every invoice entered"} (confirmed ${new Date(data.confirmation?.confirmedAt ?? "").toLocaleDateString()}).`}
+          </p>
+        ) : null}
+        <p>{scopeText(data.sync)}</p>
+        {notCountedText(data) ? <p className="pack-week-not-counted">{notCountedText(data)}</p> : null}
+        {data.source !== "packs" && data.manualEntries.length > 0 && data.legacyRows.length > 0 ? (
+          <div className="pack-week-source-actions">
+            {data.source !== "manual" ? (
+              <button type="button" onClick={() => void chooseSource("manual_packs")}>
+                Count manual pack entries
+              </button>
+            ) : null}
+            {data.source !== "legacy" ? (
+              <button type="button" className="secondary" onClick={() => void chooseSource("legacy_colours")}>
+                Count colour totals instead
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {data.source !== "legacy" && data.legacyRows.length > 0 ? <ColourTotals data={data} counted={false} /> : null}
+      </details>
+    </div>
+  ) : null;
+
   return (
+    <>
     <section className="coming-soon-card pack-week" aria-labelledby="pack-week-title">
       <div className="recent-entries-header">
         <h2 id="pack-week-title">Weekly Pack Shipments</h2>
@@ -360,209 +493,59 @@ export function PackShipmentsWeek({
         </div>
       </div>
 
-      <p className="pack-week-heading">
-        <strong>{weekLabel(selected)}</strong> · {isoWeekRangeLabel(selected.isoYear, selected.isoWeek)} (ISO week, UTC)
-      </p>
-      {data ? <p className="recent-entries-helper-text">{scopeText(data.sync)}</p> : null}
-      <p className="pack-week-explainer">
-        Measure per <strong>shipping case</strong> — the case on the pallet, not the retail packs inside it.
-      </p>
+      <div className="pack-week-topline">
+        <p className="pack-week-heading">
+          <strong>{weekLabel(selected)}</strong> · {isoWeekRangeLabel(selected.isoYear, selected.isoWeek)}
+        </p>
+        {data?.manualEntryAllowed ? (
+          <button
+            type="button"
+            className="pack-card-button"
+            onClick={() => {
+              setEntryStatus(null);
+              setEntryModal({ kind: "create" });
+            }}
+          >
+            Add entries for {weekLabel(data)}
+          </button>
+        ) : null}
+      </div>
+      {entryStatus ? (
+        <p className={`cases-sync-status cases-sync-status--${entryStatus.kind}`} role={entryStatus.kind === "error" ? "alert" : "status"}>
+          {entryStatus.message}
+        </p>
+      ) : null}
+      {data?.needsSourceDecision ? (
+        <p className="pack-week-decide-banner" role="status">
+          This week has manual pack entries and colour totals. Colour totals count until you choose.{" "}
+          <button
+            type="button"
+            className="pack-card-link"
+            onClick={() => {
+              sourceRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+              sourceRef.current?.focus({ preventScroll: true });
+            }}
+          >
+            Choose the week's source{sourceSlot ? " at the bottom of the page" : " below"}
+          </button>
+        </p>
+      ) : null}
 
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       {loading && !data ? <p>Loading…</p> : null}
 
-      {data ? (
-        <div
-          className={`pack-week-source pack-week-source--${data.source}${data.needsSourceDecision ? " pack-week-source--decide" : ""}`}
-          role="region"
-          aria-label={`Source for ${weekLabel(data)}`}
-        >
-          <p>
-            <span className="pack-week-source-label">Counted for {weekLabel(data)}:</span> <strong>{WEEK_SOURCE_LABELS[data.source]}</strong>
-          </p>
-          <p className="pack-week-note">
-            {WEEK_SOURCE_REASON_LABELS[data.sourceReason]}
-            {data.rebuildRange
-              ? ` Rebuild range: ${weekLabel(data.rebuildRange.from)} to ${weekLabel(data.rebuildRange.to)}.`
-              : ""}
-          </p>
-          {data.source === "manual" && data.manualStatus ? (
-            <div className={`pack-week-manual-status pack-week-manual-status--${data.manualStatus}`}>
-              <p>
-                <strong>{MANUAL_STATUS_LABELS[data.manualStatus]}</strong>
-                {data.manualStatus === "not_entered"
-                  ? " — nothing entered for this week. Its shipments are unknown, not zero."
-                  : data.manualStatus === "entered"
-                    ? " — add any remaining invoices, then confirm the week."
-                    : ` — ${data.manualEntries.length === 0 ? "no shipments this week" : "every invoice entered"} (confirmed ${new Date(data.confirmation?.confirmedAt ?? "").toLocaleDateString()}).`}
-              </p>
-              {data.manualEntryAllowed ? (
-                data.manualStatus === "confirmed" ? (
-                  <button type="button" className="secondary" onClick={() => void setConfirmed(false)}>
-                    Undo confirmation
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => void setConfirmed(true)}>
-                    {data.manualEntries.length === 0 ? "Confirm no shipments this week" : "Confirm week complete"}
-                  </button>
-                )
-              ) : null}
-            </div>
-          ) : null}
-          {notCountedText(data) ? <p className="pack-week-not-counted">{notCountedText(data)}</p> : null}
-          {data.source !== "packs" && data.manualEntries.length > 0 && data.legacyRows.length > 0 ? (
-            <div className="pack-week-source-actions">
-              {data.source !== "manual" ? (
-                <button type="button" onClick={() => void chooseSource("manual_packs")}>
-                  Count manual pack entries
-                </button>
-              ) : null}
-              {data.source !== "legacy" ? (
-                <button type="button" className="secondary" onClick={() => void chooseSource("legacy_colours")}>
-                  Count colour totals instead
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {data ? (
-        <div className="pack-week-manual" role="region" aria-label="Manual pack entries">
-          <div className="pack-week-manual-header">
-            <h3>Manual pack entries</h3>
-            {data.manualEntryAllowed ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setEntryStatus(null);
-                  setEntryModal({ kind: "create" });
-                }}
-              >
-                Add entries for {weekLabel(data)}
-              </button>
-            ) : null}
-          </div>
-          {!data.manualEntryAllowed ? <p className="pack-week-note">{data.manualEntryBlockedReason}</p> : null}
-          {entryStatus ? (
-            <p className={`cases-sync-status cases-sync-status--${entryStatus.kind}`} role={entryStatus.kind === "error" ? "alert" : "status"}>
-              {entryStatus.message}
-            </p>
-          ) : null}
-          {data.manualEntries.length === 0 ? (
-            data.manualEntryAllowed ? <p className="pack-week-note">No manual entries for this week.</p> : null
-          ) : (
-            <div className="varieties-table-wrapper">
-              <table className="varieties-table pack-week-entries">
-                <thead>
-                  <tr>
-                    <th scope="col">Invoice</th>
-                    <th scope="col">Pack</th>
-                    <th scope="col">Colour</th>
-                    <th scope="col">Cases</th>
-                    <th scope="col">Note</th>
-                    <th scope="col">
-                      <span className="ya-visually-hidden">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.manualEntries.map((e) => (
-                    <tr key={e.id} className={e.duplicates.length > 0 ? "pack-week-entry--duplicate" : undefined}>
-                      <td>
-                        {e.invoiceRef ?? <span className="pack-week-note">No reference</span>}
-                        {e.duplicates.length > 0 ? (
-                          <span className="pack-week-badge pack-week-badge--warn" title="Same invoice and pack, or same week, pack and cases without a reference">
-                            Possible duplicate of{" "}
-                            {e.duplicates.map((d) => `${weekLabel(d)} · ${formatCases(d.cases)}${d.invoiceRef ? ` · ${d.invoiceRef}` : ""}`).join("; ")}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td>
-                        <span className="pack-week-name">{e.packName}</span>
-                        {e.packCode ? <span className="pack-week-code">{e.packCode}</span> : null}
-                        {e.packSource === "historical" ? <span className="pack-week-badge">Historical</span> : null}
-                      </td>
-                      <td>{classificationLabel({ colorKind: e.colorKind as "single" | "mixed" | "none", colorKey: e.colorKey, cropType: e.cropType, trackingUnit: e.trackingUnit })}</td>
-                      <td>{formatCases(e.cases)}</td>
-                      <td>{e.note ?? ""}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEntryStatus(null);
-                              setEntryModal({ kind: "edit", entry: e });
-                            }}
-                            aria-label={`Edit entry: ${e.packName}${e.invoiceRef ? `, invoice ${e.invoiceRef}` : ""}`}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="danger"
-                            onClick={() => void removeEntry(e)}
-                            aria-label={`Delete entry: ${e.packName}${e.invoiceRef ? `, invoice ${e.invoiceRef}` : ""}`}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      {data && (data.source === "legacy" || data.legacyRows.length > 0) ? (
-        <div className={`pack-week-legacy${data.source === "legacy" ? "" : " pack-week-legacy--not-counted"}`}>
-          <h3>Colour totals{data.source === "legacy" ? "" : " (not counted this week)"}</h3>
-          {data.source === "legacy" && data.packs.length === 0 ? (
-            <p>
-              Pack measurements don't apply to colour-total weeks
-              {data.sync?.firstWeek && data.sync.scopeStatus === "available" ? ` — DockLink pack totals start at ${weekLabel(data.sync.firstWeek)}` : ""}.
-            </p>
-          ) : null}
-          {data.legacyRows.length === 0 ? (
-            <p>No colour totals recorded for this week.</p>
-          ) : (
-            <table className="varieties-table">
-              <thead>
-                <tr>
-                  <th>Colour</th>
-                  <th>Cases</th>
-                  <th>Case weight (kg)</th>
-                  <th>Total kg</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.legacyRows.map((r) => (
-                  <tr key={r.color}>
-                    <td>{cap(r.color)}</td>
-                    <td>{formatCases(r.totalCases)}</td>
-                    <td>{r.caseWeightKg > 0 ? r.caseWeightKg : "Missing"}</td>
-                    <td>{r.caseWeightKg > 0 ? formatShippedKg(r.totalKg) : "—"}</td>
-                    <td>{cap(r.source ?? "manual")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      ) : null}
+      {data && data.source === "legacy" ? <ColourTotals data={data} counted /> : null}
 
       {data && data.packs.length > 0 ? (
         <>
-          {data.source !== "packs" ? (
+          <div className="pack-week-subheading-row">
             <h3 className="pack-week-subheading">
-              Packs entered for {weekLabel(data)}
-              {data.source === "manual" ? " — kg from this week's measurements" : " (not counted this week)"}
+              {data.source === "packs"
+                ? `Packs shipped in ${weekLabel(data)}`
+                : `Packs entered for ${weekLabel(data)}${data.source === "manual" ? " — kg from this week's measurements" : " (not counted this week)"}`}
             </h3>
-          ) : null}
+            <p className="pack-week-hint">Per shipping case — the case on the pallet, not the retail packs inside it.</p>
+          </div>
           {data.copySource ? (
             <div className="pack-week-copy">
               <p>
@@ -678,6 +661,83 @@ export function PackShipmentsWeek({
         </div>
       ) : null}
 
+      {data ? (
+        <details className="pack-week-manual" role="region" aria-label="Manual pack entries">
+          <summary>
+            <span className="pack-week-manual-title">Manual pack entries ({data.manualEntries.length})</span>
+            <span className="pack-week-manual-toggle" aria-hidden="true" />
+          </summary>
+          {!data.manualEntryAllowed ? <p className="pack-week-note">{data.manualEntryBlockedReason}</p> : null}
+          {data.manualEntries.length > 0 ? (
+            <div className="varieties-table-wrapper">
+              <table className="varieties-table pack-week-entries">
+                <thead>
+                  <tr>
+                    <th scope="col">Invoice</th>
+                    <th scope="col">Pack</th>
+                    <th scope="col">Colour</th>
+                    <th scope="col">Cases</th>
+                    <th scope="col">Note</th>
+                    <th scope="col">
+                      <span className="ya-visually-hidden">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.manualEntries.map((e) => (
+                    <tr key={e.id} className={e.duplicates.length > 0 ? "pack-week-entry--duplicate" : undefined}>
+                      <td>
+                        {e.invoiceRef ?? <span className="pack-week-note">No reference</span>}
+                        {e.duplicates.length > 0 ? (
+                          <span className="pack-week-badge pack-week-badge--warn" title="Same invoice and pack, or same week, pack and cases without a reference">
+                            Possible duplicate of{" "}
+                            {e.duplicates.map((d) => `${weekLabel(d)} · ${formatCases(d.cases)}${d.invoiceRef ? ` · ${d.invoiceRef}` : ""}`).join("; ")}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className="pack-week-name">{e.packName}</span>
+                        {e.packCode ? <span className="pack-week-code">{e.packCode}</span> : null}
+                        {e.packSource === "historical" ? <span className="pack-week-badge">Historical</span> : null}
+                      </td>
+                      <td>{classificationLabel({ colorKind: e.colorKind as "single" | "mixed" | "none", colorKey: e.colorKey, cropType: e.cropType, trackingUnit: e.trackingUnit })}</td>
+                      <td>{formatCases(e.cases)}</td>
+                      <td>{e.note ?? ""}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEntryStatus(null);
+                              setEntryModal({ kind: "edit", entry: e });
+                            }}
+                            aria-label={`Edit entry: ${e.packName}${e.invoiceRef ? `, invoice ${e.invoiceRef}` : ""}`}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => void removeEntry(e)}
+                            aria-label={`Delete entry: ${e.packName}${e.invoiceRef ? `, invoice ${e.invoiceRef}` : ""}`}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : data.manualEntryAllowed ? (
+            <p className="pack-week-note">No manual entries for this week.</p>
+          ) : null}
+        </details>
+      ) : null}
+
+      {sourceSlot ? null : sourceRegion}
+
       {entryModal ? (
         <ManualPackEntryModal
           mode={entryModal.kind === "create" ? { kind: "create", initialWeek: selected } : entryModal}
@@ -689,5 +749,18 @@ export function PackShipmentsWeek({
         />
       ) : null}
     </section>
+    {sourceSlot && data
+      ? createPortal(
+          <section className="coming-soon-card cases-week-source" aria-labelledby="cases-week-source-title">
+            <h2 id="cases-week-source-title">
+              Week source &amp; completion · {weekLabel(data)}
+              <span className="cases-week-source-dates">{isoWeekRangeLabel(data.isoYear, data.isoWeek)}</span>
+            </h2>
+            {sourceRegion}
+          </section>,
+          sourceSlot
+        )
+      : null}
+    </>
   );
 }
