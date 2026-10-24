@@ -1,6 +1,6 @@
 // Manual pack case entries end to end over HTTP: the real integrations,
 // pack-shipments, manual-entry and projections routers and permission
-// middleware, on a real Postgres (PGlite) with migrations 0143 + 0144
+// middleware, on a real Postgres (PGlite) with migrations 0143-0146
 // applied. DockLink's export is the mock fixture (scope 2026-W45..W48,
 // transition week 2026-W44). No server, Docker, network or credentials.
 // Run: node --require tsx/cjs --test src/routes/__tests__/manualPackEntries.http.test.ts
@@ -25,7 +25,7 @@ const YELLOW = "a3f00000-0000-4000-8000-000000000002";
 const TRI = "d91b0000-0000-4000-8000-000000000004"; // archived in DockLink
 const GREEN = "a3f00000-0000-4000-8000-000000000005"; // archived in DockLink
 
-const migrations = ["0143_docklink_pack_shipments.sql", "0144_manual_pack_case_entries.sql", "0145_case_rebuild_ranges.sql"].map((f) =>
+const migrations = ["0143_docklink_pack_shipments.sql", "0144_manual_pack_case_entries.sql", "0145_case_rebuild_ranges.sql", "0146_pack_measurement_defaults.sql"].map((f) =>
   readFileSync(path.resolve(__dirname, "../../../../supabase/migrations", f), "utf8")
 );
 const fixture = () => JSON.parse(readFileSync(path.resolve(__dirname, "../../lib/__tests__/fixtures/docklink-pack-export-v1.json"), "utf8"));

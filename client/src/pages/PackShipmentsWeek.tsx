@@ -32,14 +32,26 @@ import { ManualPackEntryModal } from "./ManualPackEntryModal";
 const WEEK_URL = "/api/pack-shipments/week";
 const MEASUREMENTS_URL = "/api/pack-shipments/measurements";
 const COPY_URL = "/api/pack-shipments/measurements/copy";
+const DEFAULTS_URL = "/api/pack-shipments/measurement-defaults";
 
-type SeriesStatus = "measured" | "missing" | "incompatible" | "zero" | "no_shipments";
+/** "remembered": no measurement of the week's own; kg uses the remembered measurement in effect. */
+type SeriesStatus = "measured" | "remembered" | "missing" | "incompatible" | "zero" | "no_shipments";
 
 type MeasurementView = {
   netKgPerCase: number | null;
   components: Array<{ color: PepperColor; piecesPerCase: number; fruitWeightG: number }>;
   copiedFrom: { isoYear: number; isoWeek: number } | null;
 };
+
+type WeekRef = { isoYear: number; isoWeek: number };
+/** A remembered value in effect for this week (value null when none), the week it took effect, and the week a later remembered value takes over. */
+type RememberedSlot<T> = { value: T | null; from: WeekRef | null; nextChange: WeekRef | null };
+type RememberedView = {
+  netKgPerCase: RememberedSlot<number>;
+  counts: RememberedSlot<Array<{ color: PepperColor; piecesPerCase: number }>>;
+  fruitWeights: RememberedSlot<Array<{ color: PepperColor; fruitWeightG: number }>>;
+};
+type RememberKind = "net_kg" | "counts" | "fruit_weights";
 
 type PackRow = {
   seriesKey: string | null;
@@ -65,7 +77,10 @@ type PackRow = {
   counted: boolean;
   kg: number | null;
   kgByColor: Partial<Record<PepperColor, number>> | null;
+  /** The week's own measurement (never a remembered one). */
   measurement: MeasurementView | null;
+  /** Remembered values in effect for this week; absent from servers before remembered measurements. */
+  remembered?: RememberedView | null;
 };
 
 type AttentionRow = { seriesKey: string; name: string; packCode: string | null; cases: number; reason: string; sourcePackRef: string | null; colorKey: string | null; cropType: string | null; trackingUnit: string | null };
@@ -103,12 +118,39 @@ const COLOR_LABEL: Record<PepperColor, string> = { red: "Red", orange: "Orange",
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const weekLabel = (w: { isoYear: number; isoWeek: number }) => `${w.isoYear}-W${String(w.isoWeek).padStart(2, "0")}`;
 
+/** The week's own measurement, or else the remembered values in effect (so they can be saved for this week only, or changed). */
 function draftFrom(row: PackRow): Draft {
   const components = Object.fromEntries(PEPPER_COLORS.map((c) => [c, { piecesPerCase: "", fruitWeightG: "" }])) as Draft["components"];
-  for (const c of row.measurement?.components ?? []) {
-    components[c.color] = { piecesPerCase: String(c.piecesPerCase), fruitWeightG: String(c.fruitWeightG) };
+  if (row.measurement) {
+    for (const c of row.measurement.components) {
+      components[c.color] = { piecesPerCase: String(c.piecesPerCase), fruitWeightG: String(c.fruitWeightG) };
+    }
+    return { netKgPerCase: row.measurement.netKgPerCase != null ? String(row.measurement.netKgPerCase) : "", components };
   }
-  return { netKgPerCase: row.measurement?.netKgPerCase != null ? String(row.measurement.netKgPerCase) : "", components };
+  for (const c of row.remembered?.counts.value ?? []) components[c.color] = { ...components[c.color], piecesPerCase: String(c.piecesPerCase) };
+  for (const c of row.remembered?.fruitWeights.value ?? []) components[c.color] = { ...components[c.color], fruitWeightG: String(c.fruitWeightG) };
+  const net = row.remembered?.netKgPerCase.value;
+  return { netKgPerCase: net != null ? String(net) : "", components };
+}
+
+const formatPerCase = (kg: number) => `${kg.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg/case`;
+const countsText = (list: Array<{ color: PepperColor; piecesPerCase: number }>) => list.map((c) => `${COLOR_LABEL[c.color]} ${c.piecesPerCase}`).join(", ");
+const weightsText = (list: Array<{ color: PepperColor; fruitWeightG: number }>) => list.map((c) => `${COLOR_LABEL[c.color]} ${c.fruitWeightG} g`).join(", ");
+
+/** One line per remembered value in effect this week, with when it took effect and when a later one takes over. */
+function rememberedLines(row: PackRow): string[] {
+  const r = row.remembered;
+  if (!r) return [];
+  const span = (slot: RememberedSlot<unknown>) =>
+    `${slot.from ? ` (from ${weekLabel(slot.from)})` : ""}${slot.nextChange ? `; changes from ${weekLabel(slot.nextChange)}` : ""}`;
+  const lines: string[] = [];
+  if (row.colorKind === "single") {
+    if (r.netKgPerCase.value !== null) lines.push(`Remembered weight: ${formatPerCase(r.netKgPerCase.value)}${span(r.netKgPerCase)}`);
+    return lines;
+  }
+  if (r.counts.value) lines.push(`Remembered peppers per case: ${countsText(r.counts.value)}${span(r.counts)}`);
+  if (r.fruitWeights.value) lines.push(`Remembered fruit weights: ${weightsText(r.fruitWeights.value)}${span(r.fruitWeights)}`);
+  return lines;
 }
 
 function statusText(row: PackRow): { label: string; tone: "ok" | "warn" | "muted" } {
@@ -117,6 +159,10 @@ function statusText(row: PackRow): { label: string; tone: "ok" | "warn" | "muted
       return row.measurement?.copiedFrom
         ? { label: `Measured · copied from ${weekLabel(row.measurement.copiedFrom)}`, tone: "ok" }
         : { label: "Measured", tone: "ok" };
+    case "remembered":
+      return row.colorKind === "single" && row.remembered?.netKgPerCase.value != null
+        ? { label: `Remembered weight · ${formatPerCase(row.remembered.netKgPerCase.value)}`, tone: "ok" }
+        : { label: "Remembered weight", tone: "ok" };
     case "missing":
       return { label: "Missing measurement", tone: "warn" };
     case "incompatible":
@@ -126,6 +172,49 @@ function statusText(row: PackRow): { label: string; tone: "ok" | "warn" | "muted
     default:
       return { label: "No shipments this week", tone: "muted" };
   }
+}
+
+const hasKg = (row: PackRow) => row.status === "measured" || row.status === "remembered";
+const hasRemembered = (row: PackRow) => rememberedLines(row).length > 0;
+
+/** The remembered values in effect this week, what this week uses, and Forget for each. */
+function RememberedNotes({ row, disabled, onForget }: { row: PackRow; disabled: boolean; onForget: (kind: RememberKind) => void }) {
+  const r = row.remembered;
+  if (!r) return null;
+  const slots: Array<{ kind: RememberKind; line: string; label: string }> = [];
+  const lines = rememberedLines(row);
+  if (row.colorKind === "single") {
+    if (r.netKgPerCase.value !== null) slots.push({ kind: "net_kg", line: lines[0], label: "Forget remembered weight" });
+  } else {
+    let i = 0;
+    if (r.counts.value) slots.push({ kind: "counts", line: lines[i++], label: "Forget remembered counts" });
+    if (r.fruitWeights.value) slots.push({ kind: "fruit_weights", line: lines[i++], label: "Forget remembered fruit weights" });
+  }
+  if (slots.length === 0) return null;
+  const overridden = row.status === "measured";
+  const partial = row.colorKind === "mixed" && row.status !== "remembered" && !overridden;
+  return (
+    <div className="pack-week-remembered">
+      {slots.map((s) => (
+        <p key={s.kind} className="pack-week-note">
+          {s.line}{" "}
+          <button type="button" className="link-button" onClick={() => onForget(s.kind)} disabled={disabled}>
+            {s.label}
+          </button>
+        </p>
+      ))}
+      {overridden ? <p className="pack-week-note">This week's own measurement is used instead; Clear it to use the remembered values.</p> : null}
+      {partial ? (
+        <p className="pack-week-note">
+          {r.counts.value && !r.fruitWeights.value
+            ? "Remembered counts are filled in. Enter this week's fruit weights and Save, or remember fruit weights too."
+            : r.fruitWeights.value && !r.counts.value
+              ? "Remembered fruit weights are filled in. Enter this week's peppers per case and Save, or remember counts too."
+              : "The remembered fruit weights don't cover every remembered colour; enter the missing ones and Save or remember them."}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function scopeText(sync: PackSyncSummary | null): string {
@@ -251,18 +340,24 @@ export function PackShipmentsWeek({
     }
   }
 
+  /** kg per case from the draft, or an error message. */
+  function draftNetKg(draft: Draft): { netKgPerCase: number } | string {
+    const value = Number(draft.netKgPerCase);
+    if (!draft.netKgPerCase.trim() || !Number.isFinite(value) || value <= 0) return "Enter the average net pepper kg per shipping case (greater than 0).";
+    return { netKgPerCase: value };
+  }
+
+  const rowError = (key: string, message: string) => setRowErrors((current) => ({ ...current, [key]: message }));
+
   async function save(row: PackRow) {
     const seriesKey = row.measurementKey as string;
     const draft = drafts[seriesKey];
-    setRowErrors((current) => ({ ...current, [seriesKey]: "" }));
+    rowError(seriesKey, "");
     let payload: Record<string, unknown>;
     if (row.colorKind === "single") {
-      const value = Number(draft.netKgPerCase);
-      if (!draft.netKgPerCase.trim() || !Number.isFinite(value) || value <= 0) {
-        setRowErrors((current) => ({ ...current, [seriesKey]: "Enter the average net pepper kg per shipping case (greater than 0)." }));
-        return;
-      }
-      payload = { netKgPerCase: value };
+      const net = draftNetKg(draft);
+      if (typeof net === "string") return rowError(seriesKey, net);
+      payload = net;
     } else {
       const components: Array<{ color: PepperColor; piecesPerCase: number; fruitWeightG: number }> = [];
       for (const color of PEPPER_COLORS) {
@@ -273,15 +368,11 @@ export function PackShipmentsWeek({
         const pieces = Number(c.piecesPerCase);
         const weight = Number(c.fruitWeightG);
         if (!hasPieces || !hasWeight || !(pieces > 0) || !(weight > 0)) {
-          setRowErrors((current) => ({ ...current, [seriesKey]: `${COLOR_LABEL[color]}: enter both peppers per shipping case and fruit weight (g), each greater than 0 — or leave both blank.` }));
-          return;
+          return rowError(seriesKey, `${COLOR_LABEL[color]}: enter both peppers per shipping case and fruit weight (g), each greater than 0 — or leave both blank.`);
         }
         components.push({ color, piecesPerCase: pieces, fruitWeightG: weight });
       }
-      if (components.length === 0) {
-        setRowErrors((current) => ({ ...current, [seriesKey]: "Enter at least one colour in this pack." }));
-        return;
-      }
+      if (components.length === 0) return rowError(seriesKey, "Enter at least one colour in this pack.");
       payload = { components };
     }
     setSavingKey(seriesKey);
@@ -319,6 +410,82 @@ export function PackShipmentsWeek({
     }
   }
 
+  const rowParams = (row: PackRow) => ({
+    isoYear: selected.isoYear,
+    isoWeek: selected.isoWeek,
+    measurementKey: row.measurementKey as string,
+    ...(row.seriesKey ? { seriesKey: row.seriesKey } : {})
+  });
+
+  /**
+   * Remembers this row's draft (kg per case, or a rainbow pack's counts or
+   * fruit weights) for this week and later weeks without a measurement of
+   * their own. Earlier weeks and saved measurements are unchanged.
+   */
+  async function remember(row: PackRow, kind: RememberKind) {
+    const key = row.measurementKey as string;
+    const draft = drafts[key];
+    rowError(key, "");
+    let payload: Record<string, unknown>;
+    if (kind === "net_kg") {
+      const net = draftNetKg(draft);
+      if (typeof net === "string") return rowError(key, net);
+      payload = net;
+    } else {
+      const field = kind === "counts" ? "piecesPerCase" : "fruitWeightG";
+      const list: Array<Record<string, unknown>> = [];
+      for (const color of PEPPER_COLORS) {
+        const raw = draft.components[color][field];
+        if (raw.trim() === "") continue;
+        const value = Number(raw);
+        if (!(value > 0)) {
+          return rowError(key, `${COLOR_LABEL[color]}: ${kind === "counts" ? "peppers per shipping case" : "fruit weight (g)"} must be greater than 0 — or leave it blank.`);
+        }
+        list.push({ color, [field]: value });
+      }
+      if (list.length === 0) {
+        return rowError(key, kind === "counts" ? "Enter peppers per shipping case for at least one colour to remember." : "Enter a fruit weight for at least one colour to remember.");
+      }
+      payload = kind === "counts" ? { counts: list } : { fruitWeights: list };
+    }
+    setSavingKey(key);
+    try {
+      const response = await apiFetch(DEFAULTS_URL, { method: "PUT", body: JSON.stringify({ ...rowParams(row), valueKind: kind, ...payload }) });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Remember failed (${response.status})`);
+      }
+      await load();
+      onChanged?.();
+    } catch (rememberError) {
+      rowError(key, rememberError instanceof Error ? rememberError.message : "Remember failed");
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  async function forget(row: PackRow, kind: RememberKind) {
+    const key = row.measurementKey as string;
+    const what = kind === "net_kg" ? "remembered weight" : kind === "counts" ? "remembered peppers per case" : "remembered fruit weights";
+    if (!window.confirm(`Forget the ${what} from ${weekLabel(selected)} on? Earlier weeks keep it, and weeks with their own measurement are unchanged.`)) return;
+    rowError(key, "");
+    setSavingKey(key);
+    try {
+      const params = new URLSearchParams({ ...Object.fromEntries(Object.entries(rowParams(row)).map(([k, v]) => [k, String(v)])), valueKind: kind });
+      const response = await apiFetch(`${DEFAULTS_URL}?${params.toString()}`, { method: "DELETE" });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message ?? `Forget failed (${response.status})`);
+      }
+      await load();
+      onChanged?.();
+    } catch (forgetError) {
+      rowError(key, forgetError instanceof Error ? forgetError.message : "Forget failed");
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
   async function copyFrom(source: { isoYear: number; isoWeek: number }) {
     setCopyState({ busy: true, message: null });
     try {
@@ -338,6 +505,7 @@ export function PackShipmentsWeek({
 
   const totals = data?.totals ?? null;
   const incomplete = totals ? incompleteShippedText(totals) : null;
+  const rememberHint = `Used from ${weekLabel(selected)} on for this pack and colour, in weeks without their own measurement. Earlier weeks and saved measurements aren't changed.`;
 
   return (
     <section className="coming-soon-card pack-week" aria-labelledby="pack-week-title">
@@ -711,7 +879,7 @@ export function PackShipmentsWeek({
                                         }
                                       />
                                     </td>
-                                    <td>{row.status === "measured" && row.kgByColor?.[color] !== undefined ? formatShippedKg(row.kgByColor[color]!) : "—"}</td>
+                                    <td>{hasKg(row) && row.kgByColor?.[color] !== undefined ? formatShippedKg(row.kgByColor[color]!) : "—"}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -721,19 +889,48 @@ export function PackShipmentsWeek({
                         {editable ? (
                           <div className="pack-week-actions">
                             <span className={`pack-week-status pack-week-status--${status.tone}`}>{status.label}</span>
-                            <button type="button" onClick={() => void save(row)} disabled={savingKey === mk}>
+                            <button
+                              type="button"
+                              onClick={() => void save(row)}
+                              disabled={savingKey === mk}
+                              title={`Saves a measurement for ${weekLabel(selected)} only`}
+                            >
                               {savingKey === mk ? "Saving…" : "Save"}
                             </button>
+                            {row.colorKind === "single" ? (
+                              <button type="button" className="secondary" onClick={() => void remember(row, "net_kg")} disabled={savingKey === mk} title={rememberHint}>
+                                Remember for future weeks
+                              </button>
+                            ) : (
+                              <>
+                                <button type="button" className="secondary" onClick={() => void remember(row, "counts")} disabled={savingKey === mk} title={rememberHint}>
+                                  Remember counts for future weeks
+                                </button>
+                                <button type="button" className="secondary" onClick={() => void remember(row, "fruit_weights")} disabled={savingKey === mk} title={rememberHint}>
+                                  Remember fruit weights for future weeks
+                                </button>
+                              </>
+                            )}
                             {row.measurement ? (
-                              <button type="button" className="secondary" onClick={() => void clear(row)} disabled={savingKey === mk}>
+                              <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => void clear(row)}
+                                disabled={savingKey === mk}
+                                title={hasRemembered(row) ? `Clears ${weekLabel(selected)}'s own measurement; the remembered values apply instead` : undefined}
+                              >
                                 Clear
                               </button>
                             ) : null}
                           </div>
                         ) : null}
+                        {editable ? <RememberedNotes row={row} disabled={savingKey === mk} onForget={(kind) => void forget(row, kind)} /> : null}
                         {mk && rowErrors[mk] ? <p className="form-error" role="alert">{rowErrors[mk]}</p> : null}
                       </td>
-                      <td>{row.status === "measured" && row.kg !== null ? formatShippedKg(row.kg) : row.cases > 0 ? "Not measured" : "—"}</td>
+                      <td>
+                        {hasKg(row) && row.kg !== null ? formatShippedKg(row.kg) : row.cases > 0 ? "Not measured" : "—"}
+                        {row.status === "remembered" ? <span className="pack-week-note">Remembered weight</span> : null}
+                      </td>
                     </tr>
                   );
                 })}
@@ -807,7 +1004,15 @@ export function PackShipmentsWeek({
               </dd>
             </div>
           </dl>
-          {incomplete ? <p className="pack-week-incomplete">{incomplete}</p> : <p className="pack-week-complete">Every shipped case this week is measured.</p>}
+          {incomplete ? (
+            <p className="pack-week-incomplete">{incomplete}</p>
+          ) : (
+            <p className="pack-week-complete">
+              {totals.rememberedCases
+                ? `Every shipped case this week has kg; ${formatCases(totals.rememberedCases)} use${totals.rememberedCases === 1 ? "s" : ""} a remembered weight.`
+                : "Every shipped case this week is measured."}
+            </p>
+          )}
         </div>
       ) : null}
 

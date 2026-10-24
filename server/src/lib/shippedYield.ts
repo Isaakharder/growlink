@@ -32,6 +32,11 @@
 //   * one measurement per week, pack and ship-time classification serves
 //     imported and manual cases alike (not keyed by DockLink's series_key);
 //     missing measurements stay missing (never 0)
+//   * a week with no measurement of its own uses the remembered measurement
+//     (pack_measurement_defaults, migration 0146) in effect for that week, if
+//     any: the latest version taking effect at or before the week. A week's
+//     own measurement always wins. Rainbow packs remember peppers per case and
+//     fruit weights separately; both are needed for a remembered kg
 //   * unattributed shipments and unsupported classifications are counted as
 //     needing attention, never guessed into a colour
 //   * non-pepper products are reported separately and never enter pepper totals
@@ -94,6 +99,27 @@ export type MeasurementRow = {
   components: MeasurementComponent[] | null;
   copied_from_iso_year: number | null;
   copied_from_iso_week: number | null;
+};
+
+/** What a remembered measurement holds: kg per case (single colour), or a rainbow pack's per-colour counts or fruit weights. */
+export type DefaultValueKind = "net_kg" | "counts" | "fruit_weights";
+
+export type DefaultComponent = { color: PepperColor; pieces_per_case?: number; fruit_weight_g?: number };
+
+/** One version of a remembered measurement, in effect from its week until the next version (a forgotten version holds no value). */
+export type MeasurementDefaultRow = {
+  pack_source?: PackSource;
+  pack_id: string;
+  color_kind: "single" | "mixed";
+  color_key: string | null;
+  crop_type: string;
+  tracking_unit: string;
+  value_kind: DefaultValueKind;
+  effective_from_iso_year: number;
+  effective_from_iso_week: number;
+  forgotten: boolean;
+  net_kg_per_case: number | null;
+  components: DefaultComponent[] | null;
 };
 
 export type LegacyRow = {
@@ -196,38 +222,132 @@ export function measurementUsable(m: MeasurementRow): boolean {
   );
 }
 
-export type SeriesStatus = "measured" | "missing" | "incompatible" | "attention" | "non_pepper" | "zero";
+// ---------------------------------------------------------------------------
+// Remembered measurements (defaults for future weeks)
+// ---------------------------------------------------------------------------
+
+/** A remembered value in effect for a week: the value (null when none, or forgotten), the week its version took effect, and the week a later version takes over. */
+export type RememberedSlot<T> = { value: T | null; from: WeekRef | null; nextChange: WeekRef | null };
+
+export type RememberedValues = {
+  netKg: RememberedSlot<number>;
+  counts: RememberedSlot<Array<{ color: PepperColor; pieces_per_case: number }>>;
+  fruitWeights: RememberedSlot<Array<{ color: PepperColor; fruit_weight_g: number }>>;
+};
+
+const effectiveOrd = (d: MeasurementDefaultRow) => weekOrdinal(d.effective_from_iso_year, d.effective_from_iso_week);
+
+function rememberedSlot<T>(versions: MeasurementDefaultRow[], ord: number, value: (d: MeasurementDefaultRow) => T | null): RememberedSlot<T> {
+  let current: MeasurementDefaultRow | null = null;
+  let next: MeasurementDefaultRow | null = null;
+  for (const d of versions) {
+    const o = effectiveOrd(d);
+    if (o <= ord) {
+      if (!current || o > effectiveOrd(current)) current = d;
+    } else if (!next || o < effectiveOrd(next)) next = d;
+  }
+  const v = current && !current.forgotten ? value(current) : null;
+  return {
+    value: v,
+    from: v !== null && current ? { year: current.effective_from_iso_year, week: current.effective_from_iso_week } : null,
+    nextChange: next ? { year: next.effective_from_iso_year, week: next.effective_from_iso_week } : null
+  };
+}
+
+/**
+ * The remembered values in effect for a row's pack and classification in a
+ * week: for each value kind, the latest version taking effect at or before
+ * the week (none when that version was forgotten).
+ */
+export function rememberedFor(defaults: MeasurementDefaultRow[], row: ClassifiedIdentity, year: number, week: number): RememberedValues {
+  const key = measurementKey(row);
+  const ord = weekOrdinal(year, week);
+  const mine = defaults.filter((d) => measurementKey(d) === key);
+  const of = (kind: DefaultValueKind) => mine.filter((d) => d.value_kind === kind);
+  return {
+    netKg: rememberedSlot(of("net_kg"), ord, (d) => (positive(d.net_kg_per_case) ? d.net_kg_per_case : null)),
+    counts: rememberedSlot(of("counts"), ord, (d) => {
+      const list = (d.components ?? []).filter((c) => isPepperColor(c.color) && positive(c.pieces_per_case));
+      return list.length > 0 ? list.map((c) => ({ color: c.color, pieces_per_case: c.pieces_per_case as number })) : null;
+    }),
+    fruitWeights: rememberedSlot(of("fruit_weights"), ord, (d) => {
+      const list = (d.components ?? []).filter((c) => isPepperColor(c.color) && positive(c.fruit_weight_g));
+      return list.length > 0 ? list.map((c) => ({ color: c.color, fruit_weight_g: c.fruit_weight_g as number })) : null;
+    })
+  };
+}
+
+/**
+ * The measurement a row uses from remembered values, when they are complete:
+ * kg per case for a single-colour pack; for a rainbow pack, remembered counts
+ * plus a remembered fruit weight for every counted colour.
+ */
+export function rememberedMeasurement(row: ShipmentRow, remembered: RememberedValues): MeasurementRow | null {
+  if (!row.pack_id) return null;
+  const classification = classifyShipment(row);
+  const identity = {
+    iso_year: row.iso_year, iso_week: row.iso_week, series_key: null, pack_source: row.pack_source ?? "docklink", pack_id: row.pack_id,
+    color_key: norm(row.color_key), crop_type: norm(row.crop_type), tracking_unit: norm(row.tracking_unit),
+    copied_from_iso_year: null, copied_from_iso_week: null
+  };
+  if (classification.kind === "single") {
+    return remembered.netKg.value !== null ? { ...identity, color_kind: "single", net_kg_per_case: remembered.netKg.value, components: null } : null;
+  }
+  if (classification.kind !== "mixed" || !remembered.counts.value || !remembered.fruitWeights.value) return null;
+  const weights = new Map(remembered.fruitWeights.value.map((w) => [w.color, w.fruit_weight_g]));
+  if (!remembered.counts.value.every((c) => weights.has(c.color))) return null;
+  return {
+    ...identity,
+    color_kind: "mixed",
+    net_kg_per_case: null,
+    components: remembered.counts.value.map((c) => ({ color: c.color, pieces_per_case: c.pieces_per_case, fruit_weight_g: weights.get(c.color) as number }))
+  };
+}
+
+/** "remembered": the week has no measurement of its own; kg comes from the remembered measurement in effect. */
+export type SeriesStatus = "measured" | "remembered" | "missing" | "incompatible" | "attention" | "non_pepper" | "zero";
 
 export type SeriesResult = {
   row: ShipmentRow;
   classification: Classification;
   status: SeriesStatus;
+  /** The week's own measurement, or (status "remembered") the remembered measurement used. */
   measurement: MeasurementRow | null;
+  /** Remembered values in effect for the row's week (single and mixed packs). */
+  remembered: RememberedValues | null;
   kgByColor: Partial<Record<PepperColor, number>>;
   kg: number;
 };
 
-/** kg for one series in one week, given every measurement for that week. */
-export function evaluateSeries(row: ShipmentRow, weekMeasurements: MeasurementRow[]): SeriesResult {
+/**
+ * kg for one series in one week, given every measurement for that week and
+ * the organization's remembered measurements (every version). The week's own
+ * measurement for the row's pack and classification wins; otherwise a
+ * complete remembered measurement in effect for the week is used.
+ */
+export function evaluateSeries(row: ShipmentRow, weekMeasurements: MeasurementRow[], defaults: MeasurementDefaultRow[] = []): SeriesResult {
   const classification = classifyShipment(row);
   const cases = Number(row.total_cases) || 0;
-  const base = { row, classification, kgByColor: {}, kg: 0 };
+  const base = { row, classification, kgByColor: {}, kg: 0, remembered: null };
 
   if (classification.kind === "non_pepper") return { ...base, status: "non_pepper", measurement: null };
   if (classification.kind === "attention") return { ...base, status: cases > 0 ? "attention" : "zero", measurement: null };
 
-  const measurement = weekMeasurements.find((m) => measurementMatches(m, row)) ?? null;
-  if (cases === 0) return { ...base, status: "zero", measurement };
+  const remembered = row.pack_id ? rememberedFor(defaults, row, row.iso_year, row.iso_week) : null;
+  const own = weekMeasurements.find((m) => measurementMatches(m, row)) ?? null;
+  const measurement = own ?? (remembered ? rememberedMeasurement(row, remembered) : null);
+  if (cases === 0) return { ...base, remembered, status: "zero", measurement };
   if (!measurement) {
     // "incompatible": this pack has a measurement this week, but for another ship-time classification.
     const samePack = weekMeasurements.filter((m) => packIdentity(m) === packIdentity(row));
-    return { ...base, status: samePack.length > 0 ? "incompatible" : "missing", measurement: samePack[0] ?? null };
+    return { ...base, remembered, status: samePack.length > 0 ? "incompatible" : "missing", measurement: samePack[0] ?? null };
   }
-  if (!measurementUsable(measurement)) return { ...base, status: "missing", measurement };
+  if (!measurementUsable(measurement)) return { ...base, remembered, status: "missing", measurement };
+  const status = own ? "measured" : "remembered";
 
   if (classification.kind === "single") {
     const kg = cases * (measurement.net_kg_per_case as number);
-    return { ...base, status: "measured", measurement, kgByColor: { [classification.color]: kg }, kg };
+    return { ...base, remembered, status, measurement, kgByColor: { [classification.color]: kg }, kg };
   }
 
   const kgByColor: Partial<Record<PepperColor, number>> = {};
@@ -237,7 +357,7 @@ export function evaluateSeries(row: ShipmentRow, weekMeasurements: MeasurementRo
     kgByColor[c.color] = (kgByColor[c.color] ?? 0) + colorKg;
     kg += colorKg;
   }
-  return { ...base, status: "measured", measurement, kgByColor, kg };
+  return { ...base, remembered, status, measurement, kgByColor, kg };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +405,10 @@ export type WeekTotals = {
   mixedCases: number;
   /** All pepper shipping cases this week, each counted once. */
   shippedCases: number;
+  /** Cases with usable kg: from the week's own measurement or a remembered one. */
   measuredCases: number;
+  /** Of measuredCases, those using a remembered measurement. */
+  rememberedCases: number;
   /** Cases of supported packs with no usable measurement (missing or entered against another classification). */
   unmeasuredCases: number;
   /** Unattributed shipments and unsupported classifications. */
@@ -424,17 +547,17 @@ type WeekHeader = Pick<WeekTotals, "isoYear" | "isoWeek" | "source" | "sourceRea
 
 function emptyWeek(header: WeekHeader): WeekTotals {
   return {
-    ...header, colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, unmeasuredCases: 0,
+    ...header, colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, rememberedCases: 0, unmeasuredCases: 0,
     attentionCases: 0, kg: 0, complete: true, nonPepper: [], supersededLegacyRows: header.notCounted.legacyRows
   };
 }
 
 /** Pack-based totals: DockLink pack shipments or aggregated manual pack entries. */
-function packRowsTotals(header: WeekHeader, rows: ShipmentRow[], measurements: MeasurementRow[]): WeekTotals {
+function packRowsTotals(header: WeekHeader, rows: ShipmentRow[], measurements: MeasurementRow[], defaults: MeasurementDefaultRow[]): WeekTotals {
   const totals = emptyWeek(header);
   for (const row of rows) {
     const cases = Number(row.total_cases) || 0;
-    const result = evaluateSeries(row, measurements);
+    const result = evaluateSeries(row, measurements, defaults);
     if (result.status === "non_pepper") {
       if (cases > 0) addNonPepper(totals.nonPepper, norm(row.crop_type), row.tracking_unit, cases);
       continue;
@@ -444,8 +567,10 @@ function packRowsTotals(header: WeekHeader, rows: ShipmentRow[], measurements: M
     if (result.classification.kind === "single") totals.colors[result.classification.color].cases += cases;
     if (result.classification.kind === "mixed") totals.mixedCases += cases;
     if (result.status === "attention") totals.attentionCases += cases;
-    else if (result.status === "measured") totals.measuredCases += cases;
-    else totals.unmeasuredCases += cases;
+    else if (result.status === "measured" || result.status === "remembered") {
+      totals.measuredCases += cases;
+      if (result.status === "remembered") totals.rememberedCases += cases;
+    } else totals.unmeasuredCases += cases;
     for (const color of PEPPER_COLORS) {
       const kg = result.kgByColor[color] ?? 0;
       totals.colors[color].kg += kg;
@@ -492,6 +617,8 @@ export function computeShippedYield(input: {
   scope: PackScopeState;
   shipments: ShipmentRow[];
   measurements: MeasurementRow[];
+  /** The organization's remembered measurements (every version; each week uses the one in effect). */
+  defaults?: MeasurementDefaultRow[];
   legacy: LegacyRow[];
   manual?: ManualEntryRow[];
   weekSources?: WeekSourceChoice[];
@@ -568,11 +695,12 @@ export function computeShippedYield(input: {
       needsSourceDecision: decision.needsSourceDecision, inRebuildRange: rebuild, manualStatus, notCounted
     };
     const measurements = measurementsByWeek.get(ord) ?? [];
+    const defaults = input.defaults ?? [];
     const week =
       decision.source === "packs"
-        ? packRowsTotals(header, shipmentsByWeek.get(ord) ?? [], measurements)
+        ? packRowsTotals(header, shipmentsByWeek.get(ord) ?? [], measurements, defaults)
         : decision.source === "manual"
-          ? packRowsTotals(header, aggregateManualEntries(manualEntries), measurements)
+          ? packRowsTotals(header, aggregateManualEntries(manualEntries), measurements, defaults)
           : legacyWeekTotals(header, legacyRows);
     // Shipments of a week not entered yet are unknown: incomplete, never a confirmed zero.
     if (manualStatus === "not_entered") week.complete = false;
@@ -580,7 +708,7 @@ export function computeShippedYield(input: {
   }
 
   const totals: ShippedYieldTotals = {
-    colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, unmeasuredCases: 0, attentionCases: 0,
+    colors: emptyColors(), mixedCases: 0, shippedCases: 0, measuredCases: 0, rememberedCases: 0, unmeasuredCases: 0, attentionCases: 0,
     kg: 0, complete: true, nonPepper: [], weekCount: weeks.length, packWeeks: 0, manualWeeks: 0, legacyWeeks: 0,
     weeksNeedingSourceDecision: 0, weeksWithUncountedManualEntries: 0, weeksNotEntered: 0, weeksConfirmed: 0
   };
@@ -599,6 +727,7 @@ export function computeShippedYield(input: {
     totals.mixedCases += w.mixedCases;
     totals.shippedCases += w.shippedCases;
     totals.measuredCases += w.measuredCases;
+    totals.rememberedCases += w.rememberedCases;
     totals.unmeasuredCases += w.unmeasuredCases;
     totals.attentionCases += w.attentionCases;
     totals.kg += w.kg;
