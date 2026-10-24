@@ -1,6 +1,6 @@
 // DockLink pack shipments end to end over HTTP: the real integrations and
 // pack-shipments routers and permission middleware, on a real Postgres
-// (PGlite) with migration 0143 applied. DockLink's growlink_pack_export_v1 is
+// (PGlite) with migrations 0143-0146 applied. DockLink's growlink_pack_export_v1 is
 // stubbed with the mock export fixture. No server, Docker, network or
 // credentials.
 // Run: node --require tsx/cjs --test src/routes/__tests__/packShipments.http.test.ts
@@ -25,6 +25,7 @@ const fixturePath = path.resolve(__dirname, "../../lib/__tests__/fixtures/dockli
 const migration = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0143_docklink_pack_shipments.sql"), "utf8");
 const migration0144 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0144_manual_pack_case_entries.sql"), "utf8");
 const migration0145 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0145_case_rebuild_ranges.sql"), "utf8");
+const migration0146 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0146_pack_measurement_defaults.sql"), "utf8");
 type Doc = ReturnType<typeof JSON.parse>;
 const freshFixture = (): Doc => JSON.parse(readFileSync(fixturePath, "utf8"));
 
@@ -60,6 +61,7 @@ async function resetDatabase() {
   await db.exec(migration);
   await db.exec(migration0144);
   await db.exec(migration0145);
+  await db.exec(migration0146);
 }
 
 before(async () => {

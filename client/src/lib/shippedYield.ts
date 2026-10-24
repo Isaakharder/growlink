@@ -37,6 +37,8 @@ export type ShippedWeekTotals = {
   mixedCases: number;
   shippedCases: number;
   measuredCases: number;
+  /** Of measuredCases, those using a remembered measurement (absent from servers before remembered measurements). */
+  rememberedCases?: number;
   unmeasuredCases: number;
   attentionCases: number;
   kg: number;

@@ -2,7 +2,8 @@
 // entry screen's data, its measurements, and GET /shipped-yield — the single
 // shipped-yield calculation every screen uses (lib/shippedYield.ts).
 //
-// Measurements are user data: only these routes write pack_case_measurements,
+// Measurements are user data: only these routes write pack_case_measurements
+// and pack_measurement_defaults (remembered measurements, migration 0146),
 // and a DockLink sync never does.
 import { Router } from "express";
 import { supabase } from "../config/supabase";
@@ -19,11 +20,16 @@ import {
   isPackWeek,
   measurementKey,
   measurementMatches,
+  rememberedFor,
   resolveWeekSource,
+  type DefaultComponent,
+  type DefaultValueKind,
   type LegacyRow,
   type ManualEntryRow,
   type MeasurementComponent,
+  type MeasurementDefaultRow,
   type MeasurementRow,
+  type RememberedValues,
   type PackScopeState,
   type PackSource,
   type PepperColor,
@@ -195,6 +201,64 @@ async function loadMeasurements(organizationId: string, fromYear: number, toYear
   return rows.map(toMeasurement);
 }
 
+const DEFAULT_COLUMNS =
+  "pack_source, pack_id, color_kind, color_key, crop_type, tracking_unit, value_kind, effective_from_iso_year, effective_from_iso_week, forgotten, net_kg_per_case, components, updated_at";
+
+function toDefault(r: Record<string, unknown>): MeasurementDefaultRow {
+  const components = Array.isArray(r.components)
+    ? (r.components as Array<Record<string, unknown>>).map((c) => ({
+        color: c.color as PepperColor,
+        ...(c.pieces_per_case !== undefined ? { pieces_per_case: Number(c.pieces_per_case) } : {}),
+        ...(c.fruit_weight_g !== undefined ? { fruit_weight_g: Number(c.fruit_weight_g) } : {})
+      }))
+    : null;
+  return {
+    pack_source: r.pack_source === "historical" ? "historical" : "docklink",
+    pack_id: String(r.pack_id),
+    color_kind: r.color_kind === "mixed" ? "mixed" : "single",
+    color_key: (r.color_key as string | null) ?? null,
+    crop_type: String(r.crop_type),
+    tracking_unit: String(r.tracking_unit),
+    value_kind: r.value_kind === "counts" ? "counts" : r.value_kind === "fruit_weights" ? "fruit_weights" : "net_kg",
+    effective_from_iso_year: Number(r.effective_from_iso_year),
+    effective_from_iso_week: Number(r.effective_from_iso_week),
+    forgotten: r.forgotten === true,
+    net_kg_per_case: numeric(r.net_kg_per_case),
+    components
+  };
+}
+
+/** Postgres "undefined table", or PostgREST's "table not in the schema cache". */
+const isMissingTable = (error: unknown) => {
+  const code = (error as { code?: string } | null)?.code;
+  return code === "42P01" || code === "PGRST205";
+};
+
+/**
+ * Every remembered-measurement version for the organization (a week can be
+ * governed by a version from any earlier year). Before migration 0146 is
+ * applied there are none: totals read exactly as without the feature, and
+ * only remembering itself fails.
+ */
+export async function loadDefaults(organizationId: string): Promise<MeasurementDefaultRow[]> {
+  try {
+    const rows = await selectAll<Record<string, unknown>>(() =>
+      supabase
+        .from("pack_measurement_defaults")
+        .select(DEFAULT_COLUMNS)
+        .eq("organization_id", organizationId)
+        .order("effective_from_iso_year")
+        .order("effective_from_iso_week")
+        .order("id")
+    );
+    return rows.map(toDefault);
+  } catch (error) {
+    if (!isMissingTable(error)) throw error;
+    console.warn("pack_measurement_defaults is missing (migration 0146 not applied); no remembered measurements are used.");
+    return [];
+  }
+}
+
 async function loadLegacy(organizationId: string, fromYear: number | null, toYear: number | null): Promise<LegacyRow[]> {
   const rows = await selectAll<Record<string, unknown>>(() => {
     let q = supabase
@@ -323,9 +387,10 @@ export async function loadShippedYield(organizationId: string, range: WeekRange)
   const fromYear = range ? Math.min(range.from.year, range.to.year) : 2000;
   const toYear = range ? Math.max(range.from.year, range.to.year) : 2100;
   // Measurements are loaded with or without a DockLink sync: manual pack weeks use them too.
-  const [shipments, measurements, legacy, manual, weekSources, rebuildRanges, confirmations] = await Promise.all([
+  const [shipments, measurements, defaults, legacy, manual, weekSources, rebuildRanges, confirmations] = await Promise.all([
     state ? loadShipments(organizationId, fromYear, toYear) : Promise.resolve([]),
     loadMeasurements(organizationId, fromYear, toYear),
+    loadDefaults(organizationId),
     loadLegacy(organizationId, range ? fromYear : null, range ? toYear : null),
     loadManualEntries(organizationId, fromYear, toYear),
     loadWeekSources(organizationId, fromYear, toYear),
@@ -334,7 +399,7 @@ export async function loadShippedYield(organizationId: string, range: WeekRange)
   ]);
   return {
     sync: syncSummary(state),
-    ...computeShippedYield({ range, scope, shipments, measurements, legacy, manual, weekSources, rebuildRanges, confirmations })
+    ...computeShippedYield({ range, scope, shipments, measurements, defaults, legacy, manual, weekSources, rebuildRanges, confirmations })
   };
 }
 
@@ -378,6 +443,26 @@ type CatalogPack = {
 };
 
 const isActivePack = (p: CatalogPack) => p.status === "active" && !p.archived_at && p.in_latest_export;
+
+const weekView = (w: { year: number; week: number } | null) => (w ? { isoYear: w.year, isoWeek: w.week } : null);
+
+/** The remembered values in effect for a pack row's week, as the weekly screen shows them. */
+export function rememberedView(r: RememberedValues | null) {
+  if (!r) return null;
+  return {
+    netKgPerCase: { value: r.netKg.value, from: weekView(r.netKg.from), nextChange: weekView(r.netKg.nextChange) },
+    counts: {
+      value: r.counts.value?.map((c) => ({ color: c.color, piecesPerCase: c.pieces_per_case })) ?? null,
+      from: weekView(r.counts.from),
+      nextChange: weekView(r.counts.nextChange)
+    },
+    fruitWeights: {
+      value: r.fruitWeights.value?.map((c) => ({ color: c.color, fruitWeightG: c.fruit_weight_g })) ?? null,
+      from: weekView(r.fruitWeights.from),
+      nextChange: weekView(r.fruitWeights.nextChange)
+    }
+  };
+}
 
 async function findCopySource(organizationId: string, year: number, week: number, needing: ShipmentRow[]) {
   if (needing.length === 0) return null;
@@ -471,7 +556,7 @@ async function loadWeek(organizationId: string, year: number, week: number) {
   const state = await loadSyncState(organizationId);
   const scope = toScope(state);
 
-  const [catalogResult, historicalResult, shipmentsAll, measurementsAll, legacy, manualAll, choices, rebuildRanges, confirmations] = await Promise.all([
+  const [catalogResult, historicalResult, shipmentsAll, measurementsAll, defaults, legacy, manualAll, choices, rebuildRanges, confirmations] = await Promise.all([
     supabase
       .from("docklink_packs")
       .select("pack_id, name, pack_code, description, color_label, color_key, color_kind, display_order, crop_type, tracking_unit, status, archived_at, in_latest_export")
@@ -479,6 +564,7 @@ async function loadWeek(organizationId: string, year: number, week: number) {
     supabase.from("historical_packs").select("id, name, pack_code, note").eq("organization_id", organizationId),
     state ? loadShipments(organizationId, year, year) : Promise.resolve([] as ShipmentRow[]),
     loadMeasurements(organizationId, year, year),
+    loadDefaults(organizationId),
     loadLegacy(organizationId, year, year),
     loadManualEntries(organizationId, year, year),
     loadWeekSources(organizationId, year, year),
@@ -507,6 +593,7 @@ async function loadWeek(organizationId: string, year: number, week: number) {
       scope,
       shipments,
       measurements,
+      defaults,
       legacy: legacyRows,
       manual: manualEntries,
       weekSources: choice ? [{ iso_year: year, iso_week: week, source: choice }] : [],
@@ -525,7 +612,7 @@ async function loadWeek(organizationId: string, year: number, week: number) {
   const shownPackIds = new Set<string>();
 
   for (const row of rows) {
-    const result = evaluateSeries(row, measurements);
+    const result = evaluateSeries(row, measurements, defaults);
     const isHistorical = row.pack_source === "historical";
     const pack = row.pack_id && !isHistorical ? catalogById.get(row.pack_id) : undefined;
     if (row.pack_id && !isHistorical) shownPackIds.add(row.pack_id);
@@ -566,10 +653,11 @@ async function loadWeek(organizationId: string, year: number, week: number) {
       loadCount: row.origin === "manual" ? null : row.load_count ?? null,
       status: result.status,
       counted: rowsCount,
-      kg: result.status === "measured" ? result.kg : null,
-      kgByColor: result.status === "measured" ? result.kgByColor : null,
+      kg: result.status === "measured" || result.status === "remembered" ? result.kg : null,
+      kgByColor: result.status === "measured" || result.status === "remembered" ? result.kgByColor : null,
+      // The week's own measurement only; a remembered one is under `remembered`.
       measurement:
-        result.measurement && result.status !== "incompatible"
+        result.measurement && result.status !== "incompatible" && result.status !== "remembered" && measurements.includes(result.measurement)
           ? {
               netKgPerCase: result.measurement.net_kg_per_case,
               components: (result.measurement.components ?? []).map((c) => ({ color: c.color, piecesPerCase: c.pieces_per_case, fruitWeightG: c.fruit_weight_g })),
@@ -578,7 +666,8 @@ async function loadWeek(organizationId: string, year: number, week: number) {
                   ? { isoYear: result.measurement.copied_from_iso_year, isoWeek: result.measurement.copied_from_iso_week }
                   : null
             }
-          : null
+          : null,
+      remembered: rememberedView(result.remembered)
     });
   }
 
@@ -615,7 +704,8 @@ async function loadWeek(organizationId: string, year: number, week: number) {
         counted: true,
         kg: null,
         kgByColor: null,
-        measurement: null
+        measurement: null,
+        remembered: null
       });
     }
   }
@@ -626,7 +716,7 @@ async function loadWeek(organizationId: string, year: number, week: number) {
   });
 
   const needing = rows.filter((row) => {
-    const r = evaluateSeries(row, measurements);
+    const r = evaluateSeries(row, measurements, defaults);
     return r.status === "missing" || r.status === "incompatible";
   });
   const duplicates = await findDuplicates(organizationId, manualEntries);
@@ -803,6 +893,140 @@ packShipmentsRouter.delete("/pack-shipments/measurements", canEdit, async (req, 
   } catch (error) {
     if (error instanceof RouteError) return res.status(error.status).json({ message: error.message });
     return sendSafeError(res, 500, "Failed to clear the measurement.", "pack measurement delete error:", error);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Remembered measurements ("Remember for future weeks")
+// ---------------------------------------------------------------------------
+//
+// Remembering, changing or forgetting at week W writes only the version for
+// W (pack_measurement_defaults_version): weeks before W keep what they used,
+// a version already set for a later week still takes over there, and no
+// week's own measurement is touched.
+
+const DEFAULT_CONFLICT =
+  "organization_id,pack_source,pack_id,color_kind,color_key,crop_type,tracking_unit,value_kind,effective_from_iso_year,effective_from_iso_week";
+
+const VALUE_KINDS: Record<"single" | "mixed", DefaultValueKind[]> = { single: ["net_kg"], mixed: ["counts", "fruit_weights"] };
+
+function parseValueKind(raw: unknown, kind: "single" | "mixed"): DefaultValueKind {
+  const valueKind = (typeof raw === "string" ? raw : kind === "single" ? "net_kg" : "") as DefaultValueKind;
+  if (!VALUE_KINDS[kind].includes(valueKind)) {
+    throw new RouteError(
+      400,
+      kind === "single"
+        ? "A single-colour pack remembers kg per shipping case (valueKind \"net_kg\")."
+        : "A rainbow pack remembers peppers per case (valueKind \"counts\") or fruit weights (valueKind \"fruit_weights\"), separately."
+    );
+  }
+  return valueKind;
+}
+
+export function parseDefaultBody(body: unknown, kind: "single" | "mixed"): { valueKind: DefaultValueKind; netKgPerCase: number | null; components: DefaultComponent[] | null } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const valueKind = parseValueKind(b.valueKind, kind);
+  if (valueKind === "net_kg") {
+    if (!positiveNumber(b.netKgPerCase)) throw new RouteError(400, "Average net pepper kg per shipping case must be a number greater than 0.");
+    return { valueKind, netKgPerCase: b.netKgPerCase as number, components: null };
+  }
+  const field = valueKind === "counts" ? "counts" : "fruitWeights";
+  const list = b[field];
+  if (!Array.isArray(list) || list.length === 0 || list.length > PEPPER_COLORS.length) {
+    throw new RouteError(400, `Enter at least one colour's ${valueKind === "counts" ? "peppers per shipping case" : "fruit weight"} to remember.`);
+  }
+  const seen = new Set<string>();
+  const components = list.map((raw) => {
+    const c = (raw ?? {}) as Record<string, unknown>;
+    if (!(PEPPER_COLORS as readonly string[]).includes(c.color as string)) throw new RouteError(400, `Unknown colour ${JSON.stringify(c.color)}.`);
+    if (seen.has(c.color as string)) throw new RouteError(400, `Colour ${c.color} is listed twice.`);
+    seen.add(c.color as string);
+    if (valueKind === "counts") {
+      if (!positiveNumber(c.piecesPerCase)) throw new RouteError(400, `Peppers per shipping case for ${c.color} must be greater than 0.`);
+      return { color: c.color as PepperColor, pieces_per_case: c.piecesPerCase as number };
+    }
+    if (!positiveNumber(c.fruitWeightG)) throw new RouteError(400, `Average fruit weight (g) for ${c.color} must be greater than 0.`);
+    return { color: c.color as PepperColor, fruit_weight_g: c.fruitWeightG as number };
+  });
+  return { valueKind, netKgPerCase: null, components };
+}
+
+/** The week's pack row a remembered measurement is set from, with its measurable kind. */
+async function rowForDefault(organizationId: string, year: number, week: number, params: Record<string, unknown>) {
+  const row = await loadRowForMeasurement(organizationId, year, week, params);
+  if (!row) throw new RouteError(404, "That pack shipment was not found for this week.");
+  const classification = classifyShipment(row);
+  if (classification.kind !== "single" && classification.kind !== "mixed") {
+    throw new RouteError(422, "This shipment's classification can't take a pepper measurement. It's listed under Needs attention.");
+  }
+  return { row, kind: classification.kind };
+}
+
+packShipmentsRouter.put("/pack-shipments/measurement-defaults", canEdit, async (req, res) => {
+  try {
+    const { year, week } = parseWeekParam(req.body?.isoYear, req.body?.isoWeek, "");
+    const { row, kind } = await rowForDefault(req.organizationId, year, week, (req.body ?? {}) as Record<string, unknown>);
+    const values = parseDefaultBody(req.body, kind);
+    const { data, error } = await supabase
+      .from("pack_measurement_defaults")
+      .upsert(
+        {
+          organization_id: req.organizationId,
+          ...identityFor(row, kind),
+          value_kind: values.valueKind,
+          effective_from_iso_year: year,
+          effective_from_iso_week: week,
+          forgotten: false,
+          net_kg_per_case: values.netKgPerCase,
+          components: values.components,
+          updated_by: req.userId,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: DEFAULT_CONFLICT }
+      )
+      .select(DEFAULT_COLUMNS)
+      .single();
+    if (error) throw error;
+    const saved = toDefault(data as Record<string, unknown>);
+    const defaults = await loadDefaults(req.organizationId);
+    return res.json({ default: saved, remembered: rememberedView(rememberedFor(defaults, row, year, week)) });
+  } catch (error) {
+    if (error instanceof RouteError) return res.status(error.status).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to remember the measurement.", "pack measurement default save error:", error);
+  }
+});
+
+// Forgets from this week on: a tombstone for this week (earlier weeks keep the
+// value they used). Nothing to forget when no value is in effect this week.
+packShipmentsRouter.delete("/pack-shipments/measurement-defaults", canEdit, async (req, res) => {
+  try {
+    const { year, week } = parseWeekParam(req.query.isoYear, req.query.isoWeek, "");
+    const { row, kind } = await rowForDefault(req.organizationId, year, week, req.query as Record<string, unknown>);
+    const valueKind = parseValueKind(req.query.valueKind, kind);
+    const inEffect = rememberedFor(await loadDefaults(req.organizationId), row, year, week);
+    const slot = valueKind === "net_kg" ? inEffect.netKg : valueKind === "counts" ? inEffect.counts : inEffect.fruitWeights;
+    if (slot.value !== null) {
+      const { error } = await supabase.from("pack_measurement_defaults").upsert(
+        {
+          organization_id: req.organizationId,
+          ...identityFor(row, kind),
+          value_kind: valueKind,
+          effective_from_iso_year: year,
+          effective_from_iso_week: week,
+          forgotten: true,
+          net_kg_per_case: null,
+          components: null,
+          updated_by: req.userId,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: DEFAULT_CONFLICT }
+      );
+      if (error) throw error;
+    }
+    return res.status(204).send();
+  } catch (error) {
+    if (error instanceof RouteError) return res.status(error.status).json({ message: error.message });
+    return sendSafeError(res, 500, "Failed to forget the remembered measurement.", "pack measurement default forget error:", error);
   }
 });
 
