@@ -31,7 +31,7 @@ describe("YieldDataEntryPage tabs", () => {
     renderAt();
     const tablist = await screen.findByRole("tablist", { name: "Yield data views" });
     expect(within(tablist).getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "CSV Templates", "Kg Entries", "Cases Entry", "Pack History", "Waste Imports", "Projected"
+      "CSV Templates", "Kg Entry", "Cases Entry", "Pack History", "Waste Imports", "Projected"
     ]);
     expect(screen.getByRole("tab", { name: "CSV Templates" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("CSV Templates tab content")).toBeInTheDocument();
@@ -46,8 +46,8 @@ describe("YieldDataEntryPage tabs", () => {
 
   it("updates the selected view when tabs are clicked", () => {
     renderAt();
-    fireEvent.click(screen.getByRole("tab", { name: "Kg Entries" }));
-    expect(screen.getByRole("tab", { name: "Kg Entries" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Kg Entry" }));
+    expect(screen.getByRole("tab", { name: "Kg Entry" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Kg tab content")).toBeInTheDocument();
     expect(screen.getByTestId("current-search")).toHaveTextContent("tab=kg");
   });

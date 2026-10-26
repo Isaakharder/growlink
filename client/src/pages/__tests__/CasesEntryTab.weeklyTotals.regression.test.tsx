@@ -150,15 +150,16 @@ describe("desktop Weekly Case Totals — from the shipped-yield calculation", ()
   });
 });
 
-describe("desktop Recent Entries — stored values, superseded colour rows marked", () => {
-  it("shows each colour row's stored case weight and kg, and marks rows in pack-covered weeks as superseded", async () => {
-    const user = await renderTab();
-    await user.click(screen.getByRole("button", { name: "Expand" }));
-    const rows = Array.from(document.querySelectorAll(".yield-entry-table-cases tbody tr")).map((tr) =>
-      Array.from(tr.querySelectorAll("td")).slice(0, 8).map((td) => td.textContent)
-    );
-    expect(rows).toContainEqual(["Red", "2026", "33", "10", "5", "50", "—", "DocklinkSuperseded by pack totals"]);
-    expect(rows).toContainEqual(["Red", "2026", "30", "3", "5", "15", "—", "Docklink"]);
+describe("Cases page layout", () => {
+  it("has no Colour Totals card; Sync DockLink Cases sits in the page header beside Add Case Entry", async () => {
+    await renderTab();
+    expect(screen.queryByRole("heading", { name: "Colour Totals" })).not.toBeInTheDocument();
+    expect(document.querySelector(".yield-entry-table-cases")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Edit Colour Total" })).not.toBeInTheDocument();
+    const header = screen.getByRole("heading", { name: "Cases Entry" }).closest(".cases-entry-header") as HTMLElement;
+    expect(within(header).getAllByRole("button").map((b) => b.textContent)).toEqual(["Sync DockLink Cases", "Add Case Entry"]);
+    // Colour-total rows still feed the year list (2025 comes only from a colour row).
+    expect(within(section()).getAllByRole("option").map((o) => o.textContent)).toEqual(["2026", "2025"]);
   });
 });
 
@@ -219,7 +220,7 @@ describe("desktop Sync DockLink Cases — pinned behaviour", () => {
 });
 
 describe("the selected week's source/completion line", () => {
-  it("is at the very bottom of the Cases page, after Rebuild Ranges, Colour Totals and Weekly Case Totals", async () => {
+  it("is at the very bottom of the Cases page, after Rebuild Ranges and Weekly Case Totals", async () => {
     await renderTab();
     const source = await screen.findByRole("region", { name: "Source for 2026-W33" });
     const layout = document.querySelector(".yield-entry-layout") as HTMLElement;
@@ -229,10 +230,8 @@ describe("the selected week's source/completion line", () => {
     expect(layout.lastElementChild).toBe(slot);
     // Not inside the Weekly Pack Shipments panel any more.
     expect(source.closest(".pack-week")).toBeNull();
-    for (const name of ["Colour Totals", "Weekly Case Totals"]) {
-      const panel = screen.getByRole("heading", { name }).closest(".coming-soon-card")!;
-      expect(panel.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
+    const totals = screen.getByRole("heading", { name: "Weekly Case Totals" }).closest(".coming-soon-card")!;
+    expect(totals.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The selected week stays clear: the card names it and its dates.
     expect(within(slot).getByRole("heading", { level: 2 })).toHaveTextContent("Week source & completion · 2026-W33");
     expect(within(slot).getByRole("heading", { level: 2 })).toHaveTextContent("10 Aug");

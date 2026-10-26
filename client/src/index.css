@@ -1182,8 +1182,6 @@ body.native-shell #root {
 
 .yield-data-entry-page .yield-entry-table-kg th:nth-child(n+5):not(:last-child),
 .yield-data-entry-page .yield-entry-table-kg td:nth-child(n+5):not(:last-child),
-.yield-data-entry-page .yield-entry-table-cases th:nth-child(n+4):nth-child(-n+7),
-.yield-data-entry-page .yield-entry-table-cases td:nth-child(n+4):nth-child(-n+7),
 .yield-data-entry-page .yield-entry-table-waste th:nth-child(4),
 .yield-data-entry-page .yield-entry-table-waste td:nth-child(4) {
   text-align: right;
@@ -1548,10 +1546,16 @@ body.native-shell #root {
   cursor: not-allowed;
 }
 
-.kg-entry-header-buttons {
+.kg-entry-header-buttons,
+.cases-entry-header-buttons {
   display: flex;
   align-items: center;
   gap: 0.7rem;
+}
+
+.yield-entry-layout > .cases-entry-error {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .yield-entry-weekly-summary {
@@ -5360,14 +5364,23 @@ body.keyboard-open .mobile-bottom-nav {
     white-space: nowrap;
   }
 
-  .yield-data-entry-page .kg-entry-header-buttons {
+  /* Cases Entry: title on its own line, Sync / Add as a full-width pair beneath it. */
+  .yield-data-entry-page .cases-entry-header:has(> .cases-entry-header-buttons) {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  .yield-data-entry-page .kg-entry-header-buttons,
+  .yield-data-entry-page .cases-entry-header-buttons {
     width: 100%;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.55rem;
   }
 
-  .yield-data-entry-page .kg-entry-header-buttons .cases-entry-open-button {
+  .yield-data-entry-page .kg-entry-header-buttons .cases-entry-open-button,
+  .yield-data-entry-page .cases-entry-header-buttons .cases-entry-open-button,
+  .yield-data-entry-page .cases-entry-header-buttons .sync-button {
     width: 100%;
     min-height: 42px;
     padding: 0.58rem 0.68rem;
