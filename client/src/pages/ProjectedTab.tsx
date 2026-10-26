@@ -379,7 +379,7 @@ function ProjectionModal({ editing, varieties, onSave, onClose }: ModalProps) {
 
           {level === "variety" && unit === "cases" ? (
             <p className="projection-note" style={{ marginTop: "0.4rem" }}>
-              Variety case actuals come from Kg Entries (total cases via case weight).
+              Variety case actuals come from Kg Entry (total cases via case weight).
             </p>
           ) : null}
 

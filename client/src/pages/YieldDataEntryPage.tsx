@@ -19,7 +19,7 @@ type TabType = "kg" | "cases" | "packHistory" | "waste" | "projected" | "csvTemp
 
 const TABS: Array<{ id: TabType; label: string }> = [
   { id: "csvTemplates", label: "CSV Templates" },
-  { id: "kg", label: "Kg Entries" },
+  { id: "kg", label: "Kg Entry" },
   { id: "cases", label: "Cases Entry" },
   { id: "packHistory", label: "Pack History" },
   { id: "waste", label: "Waste Imports" },
