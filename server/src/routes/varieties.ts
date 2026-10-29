@@ -89,6 +89,39 @@ function validatePayload(input: unknown): VarietyPayload {
   };
 }
 
+class ProductSelectionError extends Error {}
+
+// A variety belongs to a product its organization has enabled and is using
+// (migration 0148). A request without product_code — what every client sent
+// before products existed — gets the organization's only active product.
+async function resolveProductCode(organizationId: string, requested: unknown): Promise<string> {
+  const { data, error } = await supabase
+    .from("organization_products")
+    .select("product_code")
+    .eq("organization_id", organizationId)
+    .eq("status", "active");
+
+  if (error) {
+    throw error;
+  }
+
+  const activeCodes = (data ?? []).map((row) => row.product_code as string);
+
+  if (requested !== undefined && requested !== null && requested !== "") {
+    const code = typeof requested === "string" ? requested.trim() : "";
+    if (!activeCodes.includes(code)) {
+      throw new ProductSelectionError("product_code must be an active product enabled for your organization");
+    }
+    return code;
+  }
+
+  if (activeCodes.length !== 1) {
+    throw new ProductSelectionError("product_code is required");
+  }
+
+  return activeCodes[0];
+}
+
 const varietiesRouter = Router();
 
 const canView = requireAnyPermission(["greenhouse_setup:view", "greenhouse_setup:edit"]);
@@ -121,11 +154,27 @@ varietiesRouter.post("/varieties", canEdit, async (req, res) => {
     return res.status(400).json({ message });
   }
 
+  let product_code: string;
+
+  try {
+    product_code = await resolveProductCode(organizationId, (req.body as Record<string, unknown>).product_code);
+  } catch (error) {
+    if (error instanceof ProductSelectionError) {
+      return res.status(400).json({ message: error.message });
+    }
+    return sendSafeError(res, 500, "Failed to create variety.", "Variety product lookup error:", error);
+  }
+
   const { data, error } = await supabase
     .from("varieties")
-    .insert({ ...payload, organization_id: organizationId })
+    .insert({ ...payload, product_code, organization_id: organizationId })
     .select("*")
     .single();
+
+  // The database's product rules (migration 0148) explain themselves.
+  if (error?.code === "23514") {
+    return res.status(409).json({ message: error.message });
+  }
 
   if (error) {
     return sendSafeError(res, 500, "Failed to create variety.", "Variety insert error:", error);
@@ -146,13 +195,32 @@ varietiesRouter.put("/varieties/:id", canEdit, async (req, res) => {
     return res.status(400).json({ message });
   }
 
+  // Without product_code the variety keeps its product.
+  const requestedProduct = (req.body as Record<string, unknown>).product_code;
+  let productUpdate: { product_code?: string } = {};
+
+  if (requestedProduct !== undefined) {
+    try {
+      productUpdate = { product_code: await resolveProductCode(organizationId, requestedProduct) };
+    } catch (error) {
+      if (error instanceof ProductSelectionError) {
+        return res.status(400).json({ message: error.message });
+      }
+      return sendSafeError(res, 500, "Failed to update variety.", "Variety product lookup error:", error);
+    }
+  }
+
   const { data, error } = await supabase
     .from("varieties")
-    .update({ ...payload, updated_at: new Date().toISOString() })
+    .update({ ...payload, ...productUpdate, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("organization_id", organizationId)
     .select("*")
     .single();
+
+  if (error?.code === "23514") {
+    return res.status(409).json({ message: error.message });
+  }
 
   if (error) {
     return sendSafeError(res, 500, "Failed to update variety.", "Variety update error:", error);

@@ -76,6 +76,7 @@ const navItems: NavItem[] = [
       { label: "Pest Control Setup", to: "/setup/pest-control",  permission: "pest:view" },
       { label: "Greenhouse Setup",   to: "/setup/greenhouse",    permission: "greenhouse_setup:view" },
       { label: "Irrigation Setup",   to: "/setup/irrigation",    permission: "irrigation:view" },
+      { label: "Products Setup",     to: "/setup/products",      permission: "greenhouse_setup:view" },
       { label: "Varieties Setup",    to: "/setup/varieties",     permission: "greenhouse_setup:view" },
       { label: "Food Safety Setup",  to: "/setup/food-safety",   permission: "food_safety:view" },
       { label: "Settings",           to: "/setup/settings" }, // visible to everyone
