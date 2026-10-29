@@ -4,7 +4,6 @@ import { KgEntriesTab } from "./KgEntriesTab";
 import { CasesEntryTab } from "./CasesEntryTab";
 import { PackHistoryTab } from "./PackHistoryTab";
 import { WasteImportsTab } from "./WasteImportsTab";
-import { ProjectedTab } from "./ProjectedTab";
 import { LazyRoute } from "../components/LazyRoute";
 
 // The CSV Template Builder is a large, admin-oriented tool only opened from
@@ -15,15 +14,14 @@ const CsvTemplateBuilderTab = lazy(() =>
   import("./CsvTemplateBuilderTab").then((m) => ({ default: m.CsvTemplateBuilderTab }))
 );
 
-type TabType = "kg" | "cases" | "packHistory" | "waste" | "projected" | "csvTemplates";
+type TabType = "kg" | "cases" | "packHistory" | "waste" | "csvTemplates";
 
 const TABS: Array<{ id: TabType; label: string }> = [
   { id: "csvTemplates", label: "CSV Templates" },
   { id: "kg", label: "Kg Entry" },
   { id: "cases", label: "Cases Entry" },
   { id: "packHistory", label: "Pack History" },
-  { id: "waste", label: "Waste Imports" },
-  { id: "projected", label: "Projected" }
+  { id: "waste", label: "Waste Imports" }
 ];
 
 function isTabType(value: string | null): value is TabType {
@@ -76,7 +74,6 @@ export function YieldDataEntryPage() {
         {activeTab === "cases" ? <div className="yield-data-entry-tab yield-data-entry-tab-cases"><CasesEntryTab /></div> : null}
         {activeTab === "packHistory" ? <div className="yield-data-entry-tab yield-data-entry-tab-pack-history"><PackHistoryTab /></div> : null}
         {activeTab === "waste" ? <div className="yield-data-entry-tab yield-data-entry-tab-waste"><WasteImportsTab /></div> : null}
-        {activeTab === "projected" ? <div className="yield-data-entry-tab yield-data-entry-tab-projected"><ProjectedTab /></div> : null}
         {activeTab === "csvTemplates" ? (
           <div className="yield-data-entry-tab yield-data-entry-tab-csvTemplates">
             <LazyRoute>

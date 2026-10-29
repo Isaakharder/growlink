@@ -6,7 +6,6 @@ vi.mock("../KgEntriesTab", () => ({ KgEntriesTab: () => <div>Kg tab content</div
 vi.mock("../CasesEntryTab", () => ({ CasesEntryTab: () => <div>Cases tab content</div> }));
 vi.mock("../PackHistoryTab", () => ({ PackHistoryTab: () => <div>Pack History tab content</div> }));
 vi.mock("../WasteImportsTab", () => ({ WasteImportsTab: () => <div>Waste Imports tab content</div> }));
-vi.mock("../ProjectedTab", () => ({ ProjectedTab: () => <div>Projected tab content</div> }));
 vi.mock("../CsvTemplateBuilderTab", () => ({ CsvTemplateBuilderTab: () => <div>CSV Templates tab content</div> }));
 vi.mock("../../components/LazyRoute", () => ({ LazyRoute: ({ children }: { children: React.ReactNode }) => children }));
 
@@ -31,7 +30,7 @@ describe("YieldDataEntryPage tabs", () => {
     renderAt();
     const tablist = await screen.findByRole("tablist", { name: "Yield data views" });
     expect(within(tablist).getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "CSV Templates", "Kg Entry", "Cases Entry", "Pack History", "Waste Imports", "Projected"
+      "CSV Templates", "Kg Entry", "Cases Entry", "Pack History", "Waste Imports"
     ]);
     expect(screen.getByRole("tab", { name: "CSV Templates" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("CSV Templates tab content")).toBeInTheDocument();
@@ -42,6 +41,12 @@ describe("YieldDataEntryPage tabs", () => {
     renderAt("/yield/data-entry?tab=cases");
     expect(screen.getByRole("tab", { name: "Cases Entry" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Cases tab content")).toBeInTheDocument();
+  });
+
+  it("falls back to CSV Templates for the removed Projected tab's old link", () => {
+    renderAt("/yield/data-entry?tab=projected");
+    expect(screen.queryByRole("tab", { name: "Projected" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "CSV Templates" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("updates the selected view when tabs are clicked", () => {
