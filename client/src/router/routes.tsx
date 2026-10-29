@@ -57,6 +57,11 @@ import { PrivacyPolicyPage } from "../pages/PrivacyPolicyPage";
 const MobileMaintenancePage = lazy(() =>
   import("../pages/MobileMaintenancePage").then((m) => ({ default: m.MobileMaintenancePage }))
 );
+// Setup → Products is a small, rarely opened page; lazy so it stays out of
+// the first-load bundle like the pages above.
+const ProductsSetupPage = lazy(() =>
+  import("../pages/ProductsSetupPage").then((m) => ({ default: m.ProductsSetupPage }))
+);
 const MobileMaintenanceEquipmentDetailPage = lazy(() =>
   import("../pages/MobileMaintenanceEquipmentDetailPage").then((m) => ({ default: m.MobileMaintenanceEquipmentDetailPage }))
 );
@@ -318,6 +323,16 @@ export const appRouteConfig: RouteObject[] = [
             element: (
               <RequirePermission permission="irrigation:view">
                 <IrrigationSetupPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "setup/products",
+            element: (
+              <RequirePermission permission="greenhouse_setup:view">
+                <LazyRoute>
+                  <ProductsSetupPage />
+                </LazyRoute>
               </RequirePermission>
             )
           },
