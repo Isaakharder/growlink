@@ -119,6 +119,18 @@ assert_no_redirect() {
   echo "ok  ($desc)"
 }
 
+assert_header() {
+  local desc="$1" url="$2" header="$3" expected="$4"
+  local value
+  value="$(curl -s -o /dev/null -D - "$url" 2>/dev/null | tr -d '\r' | grep -i "^$header:" | head -1 | cut -d' ' -f2- || true)"
+  if [ "$value" != "$expected" ]; then
+    echo "FAIL ($desc): $url sent $header '$value', expected '$expected'"
+    fail=1
+    return
+  fi
+  echo "ok  ($desc)"
+}
+
 assert_contains "desktop root serves desktop shell"        "$BASE/"                              '<title>GrowLink</title>'
 assert_contains "desktop root links desktop manifest"       "$BASE/"                              'manifest.webmanifest'
 assert_contains "/privacy direct load serves SPA shell"      "$BASE/privacy"                      '<title>GrowLink</title>'
@@ -136,6 +148,12 @@ assert_status "sw.js is served"                              "$BASE/sw.js"      
 assert_status "desktop manifest is served"                   "$BASE/manifest.webmanifest"          200
 assert_status "mobile manifest is served"                    "$BASE/manifest-mobile.webmanifest"   200
 assert_status "/health returns bare 200 (not swallowed by SPA fallback)" "$BASE/health"             200
+assert_header "sw.js is revalidated on every load"           "$BASE/sw.js"                         Cache-Control no-cache
+assert_header "registerSW.js is revalidated on every load"   "$BASE/registerSW.js"                 Cache-Control no-cache
+assert_header "desktop shell is revalidated on every load"   "$BASE/"                              Cache-Control no-cache
+assert_header "SPA fallback is revalidated on every load"    "$BASE/yield/data-entry"              Cache-Control no-cache
+assert_header "mobile shell is revalidated on every load"    "$BASE/mobile/maintenance"            Cache-Control no-cache
+assert_header "desktop manifest is revalidated on every load" "$BASE/manifest.webmanifest"         Cache-Control no-cache
 
 REAL_ASSET="$(curl -fsS "$BASE/" | grep -oE '/assets/main-[^"]+\.js' | head -1)"
 if [ -z "$REAL_ASSET" ]; then
@@ -149,6 +167,12 @@ else
     fail=1
   else
     echo "ok  (real static asset $REAL_ASSET served as JS, not HTML fallback)"
+  fi
+  if curl -s -o /dev/null -D - "$BASE$REAL_ASSET" | grep -qi '^cache-control:'; then
+    echo "FAIL: hashed asset $REAL_ASSET should keep its default caching, but got a Cache-Control header"
+    fail=1
+  else
+    echo "ok  (hashed asset $REAL_ASSET keeps its default caching)"
   fi
 fi
 
