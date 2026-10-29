@@ -20,6 +20,7 @@ import type {
   ValueMapping
 } from "../utils/csvTemplateTypes";
 import { writeSourceColumn } from "../utils/writeSource";
+import { calculateYieldTotals } from "../utils/yieldTotals";
 
 const csvMappingTemplatesRouter = Router();
 
@@ -1877,13 +1878,6 @@ export function mergeAppendAverageFruitWeight(
   return ((existingKg + incoming.kg) * 1000) / (existingPieces + incoming.pieces);
 }
 
-function calculateGroupTotals(sizeKgById: Record<string, number>, variety: { area_m2: number; case_kg: number }) {
-  const total_kg = Object.values(sizeKgById).reduce((sum, v) => sum + v, 0);
-  const kg_per_m2 = variety.area_m2 > 0 ? total_kg / variety.area_m2 : 0;
-  const total_cases = variety.case_kg > 0 ? total_kg / variety.case_kg : 0;
-  return { total_kg, kg_per_m2, total_cases };
-}
-
 export async function importCsvTemplateGroup(
   organizationId: string,
   userId: string,
@@ -1983,7 +1977,7 @@ export async function importCsvTemplateGroup(
       for (const [id, kg] of Object.entries(sizeKgById)) {
         mergedSizeKg[id] = (mergedSizeKg[id] ?? 0) + kg;
       }
-      const mergedTotals = calculateGroupTotals(mergedSizeKg, varietyForCalc);
+      const mergedTotals = calculateYieldTotals(mergedSizeKg, varietyForCalc);
       const existingKg = Object.values((existingEntry.size_kg as Record<string, number>) ?? {}).reduce((sum, v) => sum + v, 0);
 
       const { data: updated, error: updateErr } = await supabase
@@ -2007,7 +2001,7 @@ export async function importCsvTemplateGroup(
       entryId = updated.id as string;
     } else {
       mode = "create";
-      const totals = calculateGroupTotals(sizeKgById, varietyForCalc);
+      const totals = calculateYieldTotals(sizeKgById, varietyForCalc);
       const { data: created, error: createErr } = await supabase
         .from("yield_entries")
         .insert({

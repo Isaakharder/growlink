@@ -6,6 +6,7 @@ import { requirePermission, requireAnyPermission } from "../middleware/requirePe
 import { resolveVarietyFootprints } from "../utils/varietyAreaFootprints";
 import { writeSourceColumn } from "../utils/writeSource";
 import { mergeAverageFruitWeightG } from "../utils/averageFruitWeight";
+import { calculateYieldTotals } from "../utils/yieldTotals";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -108,14 +109,6 @@ function validatePayload(input: unknown): YieldEntryPayload {
     average_fruit_weight_g,
     packed_date
   };
-}
-
-function calculateTotals(sizeKg: Record<string, number>, variety: VarietyForCalc) {
-  const total_kg = Object.values(sizeKg).reduce((sum, value) => sum + value, 0);
-  const kg_per_m2 = variety.area_m2 > 0 ? total_kg / variety.area_m2 : 0;
-  const total_cases = variety.case_kg > 0 ? total_kg / variety.case_kg : 0;
-
-  return { total_kg, kg_per_m2, total_cases };
 }
 
 async function fetchVarietyForCalc(
@@ -457,7 +450,7 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
         mergedSizeKg[sizeId] = (mergedSizeKg[sizeId] ?? 0) + incomingKg;
       }
 
-      const mergedTotals = calculateTotals(mergedSizeKg, variety);
+      const mergedTotals = calculateYieldTotals(mergedSizeKg, variety);
       const mergedPackedDate = existing.packed_date !== null ? existing.packed_date : (payload.packed_date ?? null);
 
       const { data: updated, error: updateError } = await supabase
@@ -507,7 +500,7 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
       });
     }
 
-    const totals = calculateTotals(payload.size_kg, variety);
+    const totals = calculateYieldTotals(payload.size_kg, variety);
 
     const { data, error } = await supabase
       .from("yield_entries")
@@ -556,7 +549,7 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
 
   try {
     const variety = await fetchVarietyForCalc(payload.variety_id, organizationId);
-    const totals = calculateTotals(payload.size_kg, variety);
+    const totals = calculateYieldTotals(payload.size_kg, variety);
 
     const { data, error } = await supabase
       .from("yield_entries")
