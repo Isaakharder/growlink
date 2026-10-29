@@ -73,6 +73,16 @@
 			respond 200
 		}
 
+		# Everything outside /assets/ must be revalidated on every load:
+		# sw.js, registerSW.js, the HTML shells and the manifests keep their
+		# names across deploys. Without an origin Cache-Control, Cloudflare
+		# (growlink.lltech.io) stamps them max-age=14400, so a browser could
+		# answer the service worker's update check from its own cache for up
+		# to 4 hours and keep serving the previous deployment's precached
+		# app. /assets/* is content-hashed and keeps its default caching.
+		@revalidate not path /assets/*
+		header @revalidate Cache-Control "no-cache"
+
 		# Internally rewrite /mobile and every /mobile/* request to the
 		# mobile SPA shell. `rewrite` changes only the request URI that
 		# try_files/file_server see next — it is not a redirect, so the

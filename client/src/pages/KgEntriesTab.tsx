@@ -1885,7 +1885,7 @@ export function KgEntriesTab() {
 
       <div className="yield-entry-layout">
         <div className="cases-entry-header">
-          <h2>Kg Entry</h2>
+          <h2>Manual Entry</h2>
           <div className="kg-entry-header-buttons">
             <button
               type="button"

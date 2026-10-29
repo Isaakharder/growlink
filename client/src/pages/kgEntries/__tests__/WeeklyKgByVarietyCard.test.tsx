@@ -186,7 +186,7 @@ describe("Weekly kg by Variety card", () => {
     expect(await within(card()).findByRole("table")).toBeInTheDocument();
   });
 
-  it("an unexpected response shows the error instead of breaking the Kg Entry tab", async () => {
+  it("an unexpected response shows the error instead of breaking the Manual Entry tab", async () => {
     server.weekly.latest = () => ({ status: 200, body: [] });
     render(<WeeklyKgByVarietyCard refreshKey={0} />);
     expect(await within(card()).findByRole("alert")).toHaveTextContent("Weekly kg by variety came back incomplete. Totals are hidden until the full year loads.");
@@ -204,7 +204,7 @@ describe("Weekly kg by Variety card", () => {
   });
 });
 
-describe("Weekly kg by Variety in the Kg Entry tab", () => {
+describe("Weekly kg by Variety in the Manual Entry tab", () => {
   it("sits below Recent Entries and reloads after an entry is saved", async () => {
     const user = userEvent.setup();
     render(<KgEntriesTab />);
