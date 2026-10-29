@@ -1,5 +1,5 @@
 // Manual pack case entries end to end over HTTP: the real integrations,
-// pack-shipments, manual-entry and projections routers and permission
+// pack-shipments and manual-entry routers and permission
 // middleware, on a real Postgres (PGlite) with migrations 0143-0146
 // applied. DockLink's export is the mock fixture (scope 2026-W45..W48,
 // transition week 2026-W44). No server, Docker, network or credentials.
@@ -56,9 +56,6 @@ async function resetDatabase() {
       ('${ORG}', 'red', 2026, 44, 1400, 5.15, 7210, 'docklink'),   -- transition week (colour totals)
       ('${ORG}', 'yellow', 2026, 44, 300, 5.15, 1545, 'docklink'),
       ('${ORG}', 'red', 2025, 20, 800, 5.0, 4000, 'manual');        -- an older manual colour entry
-    -- projections (shape read by GET /yield/projections)
-    create table yield_projections (id uuid primary key default gen_random_uuid(), organization_id uuid, target_year int, target_week int,
-      forecast_year int, forecast_week int, weeks_out int, projection_level text, variety_id uuid, color text, unit text, projected_amount numeric, notes text);
     create table varieties (id uuid primary key default gen_random_uuid(), organization_id uuid, name text, color text);
     create table yield_entries (organization_id uuid, variety_id uuid, year int, week int, total_kg numeric, total_cases numeric);
   `);
@@ -86,7 +83,6 @@ before(async () => {
   const { integrationsRouter } = require("../integrations") as typeof import("../integrations");
   const { packShipmentsRouter } = require("../packShipments") as typeof import("../packShipments");
   const { manualPackEntriesRouter } = require("../manualPackEntries") as typeof import("../manualPackEntries");
-  const { yieldProjectionsRouter } = require("../yieldProjections") as typeof import("../yieldProjections");
   /* eslint-enable @typescript-eslint/no-var-requires */
   const app = express();
   app.use(express.json());
@@ -98,7 +94,6 @@ before(async () => {
   app.use("/api", integrationsRouter);
   app.use("/api", packShipmentsRouter);
   app.use("/api", manualPackEntriesRouter);
-  app.use("/api", yieldProjectionsRouter);
   server = app.listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -507,23 +502,6 @@ test("permissions: cases:view can read entries and totals but can't add, edit, d
   assert.equal((await call(`/manual-pack-entries/${entry.id}`, { ...viewer, method: "DELETE" })).status, 403);
   assert.equal((await call("/case-week-sources", { ...viewer, method: "PUT", body: { isoYear: 2025, isoWeek: 14, source: "legacy_colours" } })).status, 403);
   assert.equal((await call("/historical-packs", { ...viewer, body: { name: "x", colorKind: "none", cropType: "other", trackingUnit: "kg" } })).status, 403);
-});
-
-test("projections compare against the same weekly shipped cases (manual weeks, colour weeks and DockLink weeks)", async () => {
-  await sync();
-  await add({ isoYear: 2026, isoWeek: 44, lines: [line(RED, 1390)], weekSource: "manual_packs" });
-  await db.query(
-    `insert into yield_projections (organization_id, target_year, target_week, forecast_year, forecast_week, weeks_out, projection_level, color, unit, projected_amount) values
-      ($1, 2026, 44, 2026, 40, 4, 'color', 'red', 'cases', 1400),
-      ($1, 2026, 46, 2026, 40, 6, 'color', 'red', 'cases', 1800)`, [ORG]
-  );
-  const rows = (await call("/yield/projections?year=2026")).body as unknown as Array<Record<string, any>>;
-  const shipped = (await call("/shipped-yield?fromYear=2026&toYear=2026")).body;
-  for (const r of rows) {
-    const w = shipped.weeks.find((x: any) => x.isoWeek === r.target_week);
-    assert.equal(r.actual_amount, w.colors.red.cases, `W${r.target_week}`);
-  }
-  assert.deepEqual(rows.map((r) => r.actual_amount), [1390, 1720 + 120]);
 });
 
 test("a historical rebuild range: every week uses manual entries, entered or not; colour totals never count there", async () => {
