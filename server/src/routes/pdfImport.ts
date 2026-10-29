@@ -17,6 +17,7 @@ import { isPdfBuffer } from "../utils/detectFileType";
 import { previewManualCsvUpload } from "./csvMappingTemplates";
 import type { NormalizedPreview } from "../utils/csvTemplateTypes";
 import { writeSourceColumn } from "../utils/writeSource";
+import { calculateYieldTotals } from "../utils/yieldTotals";
 
 const pdfImportRouter = Router();
 
@@ -286,13 +287,8 @@ export function parseFlowMasterStartTimeToIso(value: string | null): string | nu
   return d.toISOString();
 }
 
-export function calculateTotals(sizeKg: Record<string, number>, variety: VarietyForCalc) {
-  const total_kg = Object.values(sizeKg).reduce((sum, value) => sum + value, 0);
-  const kg_per_m2 = variety.area_m2 > 0 ? total_kg / variety.area_m2 : 0;
-  const total_cases = variety.case_kg > 0 ? total_kg / variety.case_kg : 0;
-
-  return { total_kg, kg_per_m2, total_cases };
-}
+// The shared yield totals, under the name the import tests use.
+export const calculateTotals = calculateYieldTotals;
 
 function parsePdfImportPayload(input: unknown): PdfImportPayload {
   if (!input || typeof input !== "object") {
