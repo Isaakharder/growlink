@@ -169,11 +169,12 @@ export function entrySizeFields(
     fields.push({ id: size.id, name: size.name, retired: true });
     shown.add(size.id);
   }
-  for (const [id, amount] of Object.entries(entrySizes ?? {})) {
-    if (!shown.has(id) && Number(amount) !== 0) {
-      fields.push({ id, name: "Removed size", retired: true });
-    }
-  }
+  // A size deleted before sizes had crops has no name left; each keeps its
+  // own field (numbered when there are several) so its amount stays.
+  const removed = Object.entries(entrySizes ?? {}).filter(([id, amount]) => !shown.has(id) && Number(amount) !== 0);
+  removed.forEach(([id], index) => {
+    fields.push({ id, name: removed.length > 1 ? `Removed size ${index + 1}` : "Removed size", retired: true });
+  });
   return fields;
 }
 

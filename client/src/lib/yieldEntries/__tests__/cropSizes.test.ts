@@ -50,6 +50,11 @@ describe("sizes per crop", () => {
       { id: "gone", name: "Removed size", retired: true }
     ]);
     expect(sizeFieldValues(fields, { "p-lg": 60, "p-md": 5, "gone": 2 })).toEqual({ "p-lg": "60", "p-xl": "0", "p-md": "5", "gone": "2" });
+    // Several deleted sizes each keep a numbered field.
+    expect(entrySizeFields(SIZES, "bell_pepper", { "gone-a": 30, "gone-b": 20, "gone-c": 0 }).slice(2)).toEqual([
+      { id: "gone-a", name: "Removed size 1", retired: true },
+      { id: "gone-b", name: "Removed size 2", retired: true }
+    ]);
     // Another crop's sizes never appear, even with the same name.
     expect(entrySizeFields(SIZES, "cucumber").map((f) => f.id)).toEqual(["c-lg"]);
   });

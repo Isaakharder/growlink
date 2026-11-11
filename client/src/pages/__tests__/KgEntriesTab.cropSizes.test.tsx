@@ -238,6 +238,21 @@ describe("Manual Entry — sizes by crop", () => {
     expect(JSON.parse(writes()[0].body!)).toMatchObject({ unit_code: "pcs", size_pieces: { "c-lg": 40, "c-st": 20 }, unsized_pieces: 800 });
   });
 
+  it("a pepper harvest whose sizes were all deleted shows each one and saves every kg", async () => {
+    // As production has on one organization's weeks 15-19: size ids with no size row left.
+    state.recent = [entry({ id: "e-gone", variety_id: "v-cad", variety_name: "Cadalora", product_code: "bell_pepper", week: 15, size_kg: { "gone-a": 30, "gone-b": 20 }, total_kg: 50 })];
+    const { user, dialog } = await openEdit();
+    expect(sizeLabels(dialog)).toEqual(["Large (kg)", "XL (kg)", "Removed size 1 (kg) · retired", "Removed size 2 (kg) · retired"]);
+    expect(within(dialog).getByLabelText("Removed size 1 (kg) · retired")).toHaveValue(30);
+    expect(within(dialog).getByLabelText("Total kg")).toHaveValue(50);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(JSON.parse(writes()[0].body!)).toEqual({
+      variety_id: "v-cad", year: 2026, week: 15, packed_date: "2026-08-10",
+      size_kg: { "p-lg": 0, "p-xl": 0, "gone-a": 30, "gone-b": 20 }, average_fruit_weight_g: null
+    });
+  });
+
   it("a retired pepper size stays readable and is kept on the harvest that carries it", async () => {
     state.recent = [entry({ id: "e-pep", variety_id: "v-cad", variety_name: "Cadalora", product_code: "bell_pepper", week: 10, size_kg: { "p-lg": 60, "p-xl": 40, "p-md": 5 }, total_kg: 105 })];
     const { user, dialog } = await openEdit();

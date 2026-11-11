@@ -28,6 +28,10 @@ const LG = "c0000000-0000-4000-8000-000000000001";
 const XL = "c0000000-0000-4000-8000-000000000002";
 const MD = "c0000000-0000-4000-8000-000000000003";
 const OTHER_ORG_SIZE = "c0000000-0000-4000-8000-000000000009";
+// Sizes deleted before 0152 (as production has on one organization's weeks 15-19):
+// the ids stay on the harvests, but no yield_sizes row exists for them.
+const GONE_A = "e0000000-0000-4000-8000-00000000000a";
+const GONE_B = "e0000000-0000-4000-8000-00000000000b";
 
 const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../../supabase/migrations", name), "utf8");
 const MIGRATIONS = [
@@ -94,6 +98,7 @@ async function resetDatabase({ through = "0153" }: { through?: "0151" | "0152" |
     insert into yield_entries (organization_id, variety_id, year, week, size_kg, total_kg, kg_per_m2, total_cases) values
       ('${ORG}', '${RED}', 2026, 10, '{"${LG}": 60, "${XL}": 40, "${MD}": 5}', 105, 0.105, 21),
       ('${ORG}', '${RED}', 2026, 11, '{"${LG}": 50}', 50, 0.05, 10),
+      ('${ORG}', '${RED}', 2026, 12, '{"${GONE_A}": 30, "${GONE_B}": 20}', 50, 0.05, 10),
       ('${PEPPER_ONLY_ORG}', '${OTHER_RED}', 2026, 10, '{"${OTHER_ORG_SIZE}": 999}', 999, 1, 199.8);
     insert into yield_entry_daily_breakdown (organization_id, yield_entry_id, size_kg, total_kg)
       select organization_id, id, size_kg, total_kg from yield_entries where week = 10 and organization_id = '${ORG}';
@@ -471,6 +476,37 @@ test("Bell Peppers: sizes, totals and history unchanged; a retired size stays on
   const historyAfter = (await pepperHistory()).filter((row: any) => row.week !== 10 || row.organization_id !== ORG);
   const expectedAfter = historyBefore.filter((row: any) => row.week !== 10 || row.organization_id !== ORG);
   assert.deepEqual(historyAfter.filter((row: any) => row.week !== 20), expectedAfter);
+});
+
+test("a harvest whose sizes were deleted before 0152 keeps every kg through edits, merges and imports' append", async () => {
+  const w12 = (await db.query<{ id: string }>(`select id from yield_entries where organization_id = '${ORG}' and week = 12`)).rows[0].id;
+
+  // Listed with its sizes as stored.
+  const listed = (await call("/yield-entries?year=2026&week=12")).body.find((e: any) => e.id === w12);
+  assert.deepEqual([listed.total_kg, listed.size_kg], [50, { [GONE_A]: 30, [GONE_B]: 20 }]);
+
+  // An edit that keeps them (as the form sends them back) saves; the total stays their sum.
+  const kept = await call(`/yield-entries/${w12}`, {
+    method: "PUT", body: { ...week(12), variety_id: RED, size_kg: { [LG]: 0, [XL]: 0, [GONE_A]: 30, [GONE_B]: 20 } }
+  });
+  assert.equal(kept.status, 200, JSON.stringify(kept.body));
+  assert.deepEqual(await kgRow(w12), { total_kg: 50, size_kg: { [LG]: 0, [XL]: 0, [GONE_A]: 30, [GONE_B]: 20 }, kg_per_m2: 0.05 });
+
+  // Adding a harvest in the same week keeps them beside the new sizes.
+  const added = await call("/yield-entries", { body: { ...week(12), variety_id: RED, size_kg: { [LG]: 10 } } });
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+  assert.deepEqual(await kgRow(w12), { total_kg: 60, size_kg: { [LG]: 10, [XL]: 0, [GONE_A]: 30, [GONE_B]: 20 }, kg_per_m2: 0.06 });
+
+  // The database lets any writer (an import's append) keep them too.
+  await db.query(`update yield_entries set size_kg = size_kg || '{"${LG}": 11}'::jsonb where id = '${w12}'`);
+
+  // But a deleted size can't be added to a harvest that didn't carry it.
+  const w11 = (await db.query<{ id: string }>(`select id from yield_entries where organization_id = '${ORG}' and week = 11`)).rows[0].id;
+  assert.deepEqual(
+    await call(`/yield-entries/${w11}`, { method: "PUT", body: { ...week(11), variety_id: RED, size_kg: { [LG]: 50, [GONE_A]: 1 } } }),
+    { status: 400, body: { message: "One or more sizes are not Bell Peppers sizes." } }
+  );
+  await assert.rejects(db.query(`update yield_entries set size_kg = '{"${GONE_A}": 1}' where id = '${w11}'`), /is not one of the Bell Peppers sizes/);
 });
 
 test("Analytics: each variety's size mix uses its own crop's sizes", async () => {
