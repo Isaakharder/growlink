@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { IMPORT_SIZE_CROP } from "../utils/cropSizes";
 import { sizedProductVarietiesOnly, unsizedProductName } from "../utils/organizationProducts";
 import { Router } from "express";
 import multer from "multer";
@@ -188,7 +189,7 @@ export function templateRowToDetail(row: TemplateRow) {
 }
 
 export async function loadSizeNameById(organizationId: string): Promise<Map<string, string>> {
-  const { data, error } = await supabase.from("yield_sizes").select("id, name").eq("organization_id", organizationId);
+  const { data, error } = await supabase.from("yield_sizes").select("id, name").eq("organization_id", organizationId).eq("product_code", IMPORT_SIZE_CROP);
   if (error) throw error;
   return new Map((data ?? []).map((s) => [s.id as string, s.name as string]));
 }
@@ -1834,7 +1835,8 @@ async function ensureYieldSizeId(organizationId: string, name: string, knownIds:
   const { data: existingRows, error: existingErr } = await supabase
     .from("yield_sizes")
     .select("id, name")
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .eq("product_code", IMPORT_SIZE_CROP);
   if (existingErr) throw existingErr;
 
   const match = (existingRows ?? []).find((s) => (s.name as string).trim().toLowerCase() === name.trim().toLowerCase());
@@ -1845,7 +1847,7 @@ async function ensureYieldSizeId(organizationId: string, name: string, knownIds:
 
   const { data: created, error: createErr } = await supabase
     .from("yield_sizes")
-    .insert({ organization_id: organizationId, name: name.trim(), sort_order: 0, status: "active" })
+    .insert({ organization_id: organizationId, product_code: IMPORT_SIZE_CROP, name: name.trim(), sort_order: 0, status: "active" })
     .select("id")
     .single();
   if (createErr) throw createErr;
@@ -2106,7 +2108,8 @@ async function findOrCreateYieldSizeByName(organizationId: string, userId: strin
   const { data: existingRows, error: existingErr } = await supabase
     .from("yield_sizes")
     .select("id, name")
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .eq("product_code", IMPORT_SIZE_CROP);
   if (existingErr) throw existingErr;
 
   const match = (existingRows ?? []).find((s) => normalizeSizeName(s.name as string) === normalizeSizeName(name));
@@ -2114,7 +2117,7 @@ async function findOrCreateYieldSizeByName(organizationId: string, userId: strin
 
   const { data: created, error: createErr } = await supabase
     .from("yield_sizes")
-    .insert({ organization_id: organizationId, name, sort_order: 0, status: "active", created_by: userId })
+    .insert({ organization_id: organizationId, product_code: IMPORT_SIZE_CROP, name, sort_order: 0, status: "active", created_by: userId })
     .select("id")
     .single();
   if (createErr) throw createErr;
@@ -2147,7 +2150,12 @@ async function resolveTargetSizeId(
 /** Never trust a client-supplied yield_sizes id without confirming it belongs to this organization first. */
 async function assertYieldSizesBelongToOrg(organizationId: string, sizeIds: string[]): Promise<void> {
   const uniqueIds = Array.from(new Set(sizeIds));
-  const { data, error } = await supabase.from("yield_sizes").select("id").eq("organization_id", organizationId).in("id", uniqueIds);
+  const { data, error } = await supabase
+    .from("yield_sizes")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("product_code", IMPORT_SIZE_CROP)
+    .in("id", uniqueIds);
   if (error) throw error;
   if ((data ?? []).length !== uniqueIds.length) {
     throw new TemplateValidationError("One or more selected sizes were not found in this organization.");

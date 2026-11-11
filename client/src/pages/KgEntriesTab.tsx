@@ -24,6 +24,12 @@ import {
   newEntryUnit,
   piecesPerM2For,
   formTotalPieces,
+  entrySizeFields,
+  formBySize,
+  newHarvestBySize,
+  sizeFieldValues,
+  sizesForCrop,
+  unsizedAmount,
   type EntryUnit,
   type PieceEntryPayload
 } from "../lib/yieldEntries/manualKgEntry";
@@ -57,6 +63,8 @@ type YieldEntry = {
   week: number;
   packed_date: string | null;
   size_kg: Record<string, number>;
+  /** The variety's crop, as the server sends it. */
+  product_code?: string | null;
   total_kg: number;
   average_fruit_weight_g: number | null;
   kg_per_m2: number;
@@ -76,7 +84,10 @@ type PieceEntry = {
   packed_date: string | null;
   unit_code: "pcs";
   total_pieces: number;
+  /** Pieces per size of the crop's own sizes (migration 0152); empty for a count without sizes. */
+  size_pieces?: Record<string, number>;
   pieces_per_m2: number | null;
+  product_code?: string | null;
 };
 
 /** A row of Recent Entries: a kg harvest or a piece count. */
@@ -330,7 +341,15 @@ function calculateMappedTotalKg(sizeBreakdown: Record<string, number>, unknownSi
 export function KgEntriesTab() {
   const currentYear = new Date().getFullYear();
   const [varieties, setVarieties] = useState<VarietyOption[]>([]);
+  // Active Bell Pepper sizes: what the FlowMaster / CSV import screens map labels onto.
   const [yieldSizes, setYieldSizes] = useState<YieldSizeOption[]>([]);
+  // Every crop's sizes, active and retired, each naming its crop: Manual
+  // Entry offers the selected variety's crop's active sizes only.
+  const [allSizes, setAllSizes] = useState<YieldSizeOption[]>([]);
+  // The sizes of the harvest being edited, so a retired size it carries stays on the form.
+  const [editingEntrySizes, setEditingEntrySizes] = useState<Record<string, number> | null>(null);
+  // An edited harvest that has kg or pieces not allocated to any size shows them in their own field.
+  const [showUnsizedField, setShowUnsizedField] = useState(false);
   // The organization's active products, for how the selected variety's kg is entered.
   const [products, setProducts] = useState<ManualKgEntryProduct[]>([]);
   // Entries scoped to the currently selected form.year/form.week — used for
@@ -427,8 +446,18 @@ export function KgEntriesTab() {
   const formUnit: EntryUnit = editingId && editingUnit ? editingUnit : newEntryUnit(selectedProduct);
   const enterPieces = formUnit === "pcs";
 
-  // Bell Peppers: kg per size, summed. Cucumbers in kg: the total typed in.
-  const enterSizes = !enterPieces && entersSizes(selectedProduct);
+  // The harvest is entered per size (the total is their sum) or as one total:
+  // Bell Peppers always per size; another crop per size once it has sizes,
+  // except an old harvest recorded as a total, which stays a total.
+  const enterBySize = formBySize(form, selectedProduct);
+  const enterSizes = !enterPieces && enterBySize;
+  const enterPieceSizes = enterPieces && enterBySize;
+  // The selected variety's crop's active sizes, plus any other size the
+  // harvest being edited carries (a retired size stays readable).
+  const formSizeFields = useMemo(
+    () => entrySizeFields(allSizes, selectedVariety?.product_code, editingId ? editingEntrySizes : null),
+    [allSizes, selectedVariety, editingId, editingEntrySizes]
+  );
 
   const totalKg = useMemo(() => formTotalKg(form, selectedProduct), [form, selectedProduct]);
   const totalPieces = formTotalPieces(form);
@@ -447,6 +476,44 @@ export function KgEntriesTab() {
 
   const totalCases = useMemo(() => totalCasesFor(totalKg, selectedVariety), [selectedVariety, totalKg]);
 
+  // The size part of a fresh form for a variety: zero for each of its crop's
+  // active sizes, entered per size when the crop has sizes (Bell Peppers
+  // always), else one total. Never carries another crop's sizes.
+  function freshSizeState(
+    varietyId: string,
+    {
+      sizes = allSizes,
+      productList = products,
+      varietyList = varieties
+    }: { sizes?: YieldSizeOption[]; productList?: ManualKgEntryProduct[]; varietyList?: VarietyOption[] } = {}
+  ): Pick<ManualKgEntryForm, "size_kg" | "size_pieces" | "by_size" | "unsized" | "total_kg" | "total_pieces"> {
+    const productCode = varietyList.find((variety) => variety.id === varietyId)?.product_code;
+    const product = productList.find((item) => item.code === productCode);
+    const active = sizesForCrop(sizes, productCode);
+    return {
+      size_kg: zeroSizeKgFields(active),
+      size_pieces: zeroSizeKgFields(active),
+      by_size: newHarvestBySize(product, active),
+      unsized: "",
+      total_kg: "",
+      total_pieces: ""
+    };
+  }
+
+  // A variety of another crop starts from that crop's sizes: values typed
+  // for one crop's sizes are never carried over to another's.
+  function changeVariety(varietyId: string) {
+    const fromCrop = varieties.find((variety) => variety.id === form.variety_id)?.product_code;
+    const toCrop = varieties.find((variety) => variety.id === varietyId)?.product_code;
+    if (fromCrop === toCrop) {
+      setForm((current) => ({ ...current, variety_id: varietyId }));
+      return;
+    }
+    setEditingEntrySizes(null);
+    setShowUnsizedField(false);
+    setForm((current) => ({ ...current, variety_id: varietyId, ...freshSizeState(varietyId) }));
+  }
+
   async function fetchOptionsAndEntries() {
     setLoading(true);
     setError(null);
@@ -461,32 +528,30 @@ export function KgEntriesTab() {
       const optionsData = (await optionsResponse.json()) as {
         varieties: VarietyOption[];
         yieldSizes: YieldSizeOption[];
+        /** Every crop's sizes (migration 0152); a server before it sends only yieldSizes, all Bell Peppers. */
+        sizes?: YieldSizeOption[];
         products?: ManualKgEntryProduct[];
       };
 
       const sortedSizes = sortYieldSizes(optionsData.yieldSizes);
+      const cropSizes = optionsData.sizes ?? sortedSizes.map((size) => ({ ...size, product_code: "bell_pepper" }));
+      const loadedProducts = optionsData.products ?? [];
 
       setVarieties(optionsData.varieties);
-      setProducts(optionsData.products ?? []);
+      setProducts(loadedProducts);
       setYieldSizes(sortedSizes);
+      setAllSizes(cropSizes);
 
       setForm((current) => {
         const hasCurrentVariety = optionsData.varieties.some(
           (variety) => variety.id === current.variety_id
         );
-
-        return {
-          ...current,
-          variety_id: hasCurrentVariety
-            ? current.variety_id
-            : (optionsData.varieties[0]?.id ?? ""),
-          size_kg: Object.keys(current.size_kg).length
-            ? {
-                ...zeroSizeKgFields(sortedSizes),
-                ...current.size_kg
-              }
-            : zeroSizeKgFields(sortedSizes)
-        };
+        const variety_id = hasCurrentVariety ? current.variety_id : (optionsData.varieties[0]?.id ?? "");
+        // Values already typed for the same variety stay; anything else starts from its crop's sizes.
+        if (hasCurrentVariety && Object.keys(current.size_kg).length) {
+          return current;
+        }
+        return { ...current, variety_id, ...freshSizeState(variety_id, { sizes: cropSizes, productList: loadedProducts, varietyList: optionsData.varieties }) };
       });
     } catch (fetchError) {
       setError(
@@ -775,7 +840,9 @@ export function KgEntriesTab() {
           body: JSON.stringify({
             name: draft.newSizeName.trim(),
             sort_order: Number.isFinite(sortOrderNum) ? sortOrderNum : 0,
-            status: "active"
+            status: "active",
+            // FlowMaster labels are Bell Pepper sizes.
+            product_code: "bell_pepper"
           })
         });
 
@@ -945,12 +1012,12 @@ export function KgEntriesTab() {
       setSuccessMessage(appendMessage);
       setEditingId(null);
       setEditingUnit(null);
+      setEditingEntrySizes(null);
+      setShowUnsizedField(false);
       setForm((current) => ({
         ...current,
         average_fruit_weight_g: "",
-        size_kg: zeroSizeKgFields(yieldSizes),
-        total_kg: "",
-        total_pieces: ""
+        ...freshSizeState(current.variety_id)
       }));
       setIsEntryModalOpen(false);
 
@@ -974,7 +1041,9 @@ export function KgEntriesTab() {
     setError(null);
     setSuccessMessage(null);
 
-    const built = enterPieces ? buildPieceEntryPayload(form) : buildManualKgEntryPayload(form, yieldSizes, selectedProduct);
+    const built = enterPieces
+      ? buildPieceEntryPayload(form, formSizeFields)
+      : buildManualKgEntryPayload(form, formSizeFields, selectedProduct);
     if (!built.ok) {
       setError(built.error);
       return;
@@ -1004,12 +1073,24 @@ export function KgEntriesTab() {
     await executeSubmit(submitPayload);
   }
 
+  // An old harvest opens as it was recorded: per size if it has sizes (Bell
+  // Peppers always), as one total if it was recorded as one. No size
+  // breakdown is invented for a total, and an amount recorded without a size
+  // keeps its own field so the total stays.
   function beginEdit(entry: RecentEntry) {
-    const nextSizeKg = zeroSizeKgFields(yieldSizes);
+    const productCode =
+      entry.product_code ?? varieties.find((variety) => variety.id === entry.variety_id)?.product_code;
+    const product = products.find((item) => item.code === productCode);
 
     if (isPieceEntry(entry)) {
+      const sizes = entry.size_pieces ?? {};
+      const bySize = Object.keys(sizes).length > 0;
+      const fields = entrySizeFields(allSizes, productCode ?? undefined, sizes);
+      const unsized = bySize ? unsizedAmount(entry.total_pieces, sizes) : 0;
       setEditingId(entry.id);
       setEditingUnit("pcs");
+      setEditingEntrySizes(sizes);
+      setShowUnsizedField(unsized > 0);
       setIsEntryModalOpen(true);
       setForm({
         variety_id: entry.variety_id,
@@ -1017,7 +1098,10 @@ export function KgEntriesTab() {
         week: String(entry.week),
         packed_date: entry.packed_date ?? localIsoDate(new Date()),
         average_fruit_weight_g: "",
-        size_kg: nextSizeKg,
+        size_kg: {},
+        size_pieces: sizeFieldValues(fields, sizes),
+        by_size: bySize,
+        unsized: unsized > 0 ? String(unsized) : "",
         total_kg: "",
         total_pieces: String(entry.total_pieces)
       });
@@ -1025,12 +1109,16 @@ export function KgEntriesTab() {
       return;
     }
 
-    for (const [sizeId, kg] of Object.entries(entry.size_kg ?? {})) {
-      nextSizeKg[sizeId] = String(kg);
-    }
+    const sizes = entry.size_kg ?? {};
+    const bySize = entersSizes(product) || Object.keys(sizes).length > 0;
+    const fields = entrySizeFields(allSizes, productCode ?? undefined, sizes);
+    // Bell Pepper totals are always their sizes' sum; only a crop whose sizes are optional keeps unsized kg.
+    const unsized = bySize && !entersSizes(product) ? Number(roundTo(unsizedAmount(entry.total_kg, sizes), 6)) : 0;
 
     setEditingId(entry.id);
     setEditingUnit("kg");
+    setEditingEntrySizes(sizes);
+    setShowUnsizedField(unsized > 0);
     setIsEntryModalOpen(true);
     setForm({
       variety_id: entry.variety_id,
@@ -1039,7 +1127,9 @@ export function KgEntriesTab() {
       packed_date: entry.packed_date ?? localIsoDate(new Date()),
       average_fruit_weight_g:
         entry.average_fruit_weight_g === null ? "" : String(entry.average_fruit_weight_g),
-      size_kg: nextSizeKg,
+      size_kg: sizeFieldValues(fields, sizes),
+      by_size: bySize,
+      unsized: unsized > 0 ? String(unsized) : "",
       total_kg: String(entry.total_kg ?? ""),
       total_pieces: ""
     });
@@ -1050,15 +1140,16 @@ export function KgEntriesTab() {
     setError(null);
     setEditingId(null);
     setEditingUnit(null);
+    setEditingEntrySizes(null);
+    setShowUnsizedField(false);
+    const varietyId = varieties[0]?.id ?? "";
     setForm({
-      variety_id: varieties[0]?.id ?? "",
+      variety_id: varietyId,
       year: String(currentYear),
       week: String(getCurrentWeek(currentYear)),
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
-      size_kg: zeroSizeKgFields(yieldSizes),
-      total_kg: "",
-      total_pieces: ""
+      ...freshSizeState(varietyId)
     });
     setIsEntryModalOpen(true);
   }
@@ -1067,16 +1158,17 @@ export function KgEntriesTab() {
     setIsEntryModalOpen(false);
     setEditingId(null);
     setEditingUnit(null);
+    setEditingEntrySizes(null);
+    setShowUnsizedField(false);
     setError(null);
+    const varietyId = varieties[0]?.id ?? "";
     setForm({
-      variety_id: varieties[0]?.id ?? "",
+      variety_id: varietyId,
       year: String(currentYear),
       week: String(getCurrentWeek(currentYear)),
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
-      size_kg: zeroSizeKgFields(yieldSizes),
-      total_kg: "",
-      total_pieces: ""
+      ...freshSizeState(varietyId)
     });
   }
 
@@ -2954,9 +3046,7 @@ export function KgEntriesTab() {
                   Variety
                   <select
                     value={form.variety_id}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, variety_id: event.target.value }))
-                    }
+                    onChange={(event) => changeVariety(event.target.value)}
                     required
                   >
                     {varieties.length === 0 && <option value="">No active varieties</option>}
@@ -3011,32 +3101,70 @@ export function KgEntriesTab() {
                   />
                 </label>
 
-                {enterSizes ? (
+                {enterSizes || enterPieceSizes ? (
                 <div className="yield-size-fields">
-                  {yieldSizes.map((size) => (
-                    <label key={size.id}>
-                      {size.name} (kg)
+                  {formSizeFields.map((size) => {
+                    const values = enterPieceSizes ? form.size_pieces ?? {} : form.size_kg;
+                    const key = enterPieceSizes ? "size_pieces" : "size_kg";
+                    return (
+                      <label key={size.id}>
+                        {size.name} ({enterPieceSizes ? "pcs" : "kg"}){size.retired ? " · retired" : ""}
+                        <input
+                          type="number"
+                          min="0"
+                          step={enterPieceSizes ? "1" : "0.01"}
+                          {...(enterPieceSizes ? { inputMode: "numeric" as const } : {})}
+                          value={values[size.id] ?? "0"}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              [key]: {
+                                ...(current[key] ?? {}),
+                                [size.id]: event.target.value
+                              }
+                            }))
+                          }
+                        />
+                      </label>
+                    );
+                  })}
+                  {showUnsizedField ? (
+                    <label>
+                      Not sized ({enterPieceSizes ? "pcs" : "kg"})
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
-                        value={form.size_kg[size.id] ?? "0"}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            size_kg: {
-                              ...current.size_kg,
-                              [size.id]: event.target.value
-                            }
-                          }))
-                        }
+                        step={enterPieceSizes ? "1" : "0.01"}
+                        value={form.unsized ?? ""}
+                        onChange={(event) => setForm((current) => ({ ...current, unsized: event.target.value }))}
                       />
                     </label>
-                  ))}
+                  ) : null}
                 </div>
                 ) : null}
+                {showUnsizedField && (enterSizes || enterPieceSizes) ? (
+                  <p className="form-hint">
+                    Not sized: recorded as a total before this week was entered by size. It stays in the total.
+                  </p>
+                ) : null}
 
-                {enterPieces ? (
+                {enterPieceSizes ? (
+                  <>
+                    <label>
+                      Total pieces
+                      <input type="number" value={totalPieces === null ? "" : totalPieces} readOnly />
+                    </label>
+                    <p className="form-hint">
+                      {editingId
+                        ? "This harvest was recorded in pieces, so it is edited in pieces. Whole counts only."
+                        : `${selectedProduct?.name ?? "This crop"} is recorded in pieces (Setup → Products). Whole counts per size; the total is their sum.`}
+                    </p>
+                    <label>
+                      Pieces/m²
+                      <input type="number" value={piecesPerM2 === null ? "" : roundTo(piecesPerM2, 3)} readOnly />
+                    </label>
+                  </>
+                ) : enterPieces ? (
                   <>
                     <label>
                       Total harvested pieces

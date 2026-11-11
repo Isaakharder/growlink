@@ -60,8 +60,13 @@ async function resetDatabase() {
       ('${RED}', 'Cadalora', 1000, 5, 'active', 'red', '${ORG}'),
       ('${YELLOW}', 'Sunny', 500, 5, 'active', 'yellow', '${ORG}'),
       ('${OTHER_RED}', 'Foxtrot', 999, 5, 'active', 'red', '${PEPPER_ONLY_ORG}');
-    create table yield_sizes (id uuid primary key, organization_id uuid not null, name text not null, sort_order int not null,
-      status text not null default 'active', created_at timestamptz not null default now());
+    -- yield_sizes as production has it before 0152 (0004 + 0018 + 0021)
+    create table yield_sizes (id uuid primary key default gen_random_uuid(), organization_id uuid not null, name text not null,
+      sort_order int not null default 0 check (sort_order >= 0),
+      status text not null default 'active' check (status in ('active', 'inactive')),
+      created_at timestamptz default now(), updated_at timestamptz default now(),
+      constraint yield_sizes_org_name_key unique (organization_id, name));
+    alter table yield_sizes enable row level security;
     insert into yield_sizes (id, organization_id, name, sort_order) values ('${LG}', '${ORG}', 'LG', 1), ('${XL}', '${ORG}', 'XL', 2);
     create table yield_entries (id uuid primary key default gen_random_uuid(), organization_id uuid not null,
       variety_id uuid not null references varieties(id), year int not null, week int not null, size_kg jsonb not null default '{}',
@@ -185,9 +190,12 @@ const pepperTotals = async (org = ORG) =>
 
 
 const m0151 = migration("0151_cucumber_pieces.sql");
+// The server reads per-crop sizes (0152), which production applies right after 0151.
+const m0152 = migration("0152_crop_yield_sizes.sql");
 
 async function applyPieces() {
   await db.exec(m0151);
+  await db.exec(m0152);
 }
 
 async function setDefaultUnit(unit: string, { org = ORG, user = OWNER }: { org?: string; user?: string } = {}) {

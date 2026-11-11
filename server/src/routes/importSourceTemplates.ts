@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { IMPORT_SIZE_CROP } from "../utils/cropSizes";
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { requireAdminUser } from "../middleware/requireAdminUser";
@@ -57,6 +58,7 @@ importSourceTemplatesRouter.get(
         .from("yield_sizes")
         .select("id, name")
         .eq("organization_id", organizationId)
+        .eq("product_code", IMPORT_SIZE_CROP)
         .eq("status", "active")
         .order("sort_order", { ascending: true }),
       supabase

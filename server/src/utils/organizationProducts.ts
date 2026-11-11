@@ -3,7 +3,9 @@ import { supabase } from "../config/supabase";
 // The products an organization has enabled from the GrowLink catalog
 // (migrations 0148/0149), with the capabilities the app branches on:
 //   tracksColour  varieties carry a colour (Bell Peppers) or none (Cucumbers)
-//   tracksSizes   harvests are kg per yield size, or a total kg only
+//   tracksSizes   every harvest is recorded per yield size (Bell Peppers);
+//                 otherwise sizes are optional, from the crop's own size
+//                 list (migration 0152), and imports never target it
 // One lookup shared by Products, Varieties, Manual Entry and Yield Analytics,
 // so they can't disagree about what a product is.
 export type OrganizationProduct = {

@@ -375,7 +375,7 @@ function cadaloraDb(files: Array<[string, string]>) {
     yield_entries: [],
     yield_entry_daily_breakdown: [],
     csv_source_value_overrides: [],
-    yield_sizes: Array.from(SIZE_NAMES, ([id, name]) => ({ id, organization_id: ORG, name })),
+    yield_sizes: Array.from(SIZE_NAMES, ([id, name]) => ({ id, organization_id: ORG, product_code: "bell_pepper", name })),
     varieties: [{ id: "variety-cadalora", organization_id: ORG, name: "Cadalora", status: "active", area_m2: 10000, case_kg: 5 }]
   });
 }

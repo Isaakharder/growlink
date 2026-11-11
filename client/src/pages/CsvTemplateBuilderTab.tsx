@@ -347,7 +347,8 @@ const PARSE_GRID_URL = "/api/csv-templates/parse-grid";
 const PREVIEW_URL = "/api/csv-templates/preview";
 const TEMPLATES_URL = "/api/csv-templates";
 const IMPORT_URL = "/api/csv-templates/import";
-const YIELD_SIZES_URL = "/api/yield-sizes";
+// CSV templates import Bell Pepper packline data, so they map onto the Bell Peppers sizes only.
+const YIELD_SIZES_URL = "/api/yield-sizes?product_code=bell_pepper";
 const PENDING_URL = "/api/csv-templates/pending";
 const WEEKLY_CARDS_URL = "/api/csv-templates/pending/weekly-cards";
 

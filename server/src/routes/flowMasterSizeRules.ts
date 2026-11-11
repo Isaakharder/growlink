@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { IMPORT_SIZE_CROP } from "../utils/cropSizes";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
@@ -99,6 +100,7 @@ flowMasterSizeRulesRouter.post("/flowmaster-size-rules", canEdit, async (req, re
       .from("yield_sizes")
       .select("id")
       .eq("organization_id", organizationId)
+      .eq("product_code", IMPORT_SIZE_CROP)
       .in("id", referencedSizeIds);
 
     if (sizesError) {

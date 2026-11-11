@@ -151,12 +151,12 @@ function liveLikeDb() {
     yield_entry_daily_breakdown: [],
     csv_source_value_overrides: [],
     yield_sizes: [
-      { id: SIZES.SM, organization_id: ORG, name: "Small" },
-      { id: SIZES.MD, organization_id: ORG, name: "Medium" },
-      { id: SIZES.LG, organization_id: ORG, name: "Large" },
-      { id: SIZES.SXL, organization_id: ORG, name: "SXL" },
-      { id: SIZES.XL, organization_id: ORG, name: "XL" },
-      { id: SIZES.XXL, organization_id: ORG, name: "XXL" }
+      { id: SIZES.SM, organization_id: ORG, product_code: "bell_pepper", name: "Small" },
+      { id: SIZES.MD, organization_id: ORG, product_code: "bell_pepper", name: "Medium" },
+      { id: SIZES.LG, organization_id: ORG, product_code: "bell_pepper", name: "Large" },
+      { id: SIZES.SXL, organization_id: ORG, product_code: "bell_pepper", name: "SXL" },
+      { id: SIZES.XL, organization_id: ORG, product_code: "bell_pepper", name: "XL" },
+      { id: SIZES.XXL, organization_id: ORG, product_code: "bell_pepper", name: "XXL" }
     ],
     varieties: [{ id: "variety-0699", organization_id: ORG, name: "0699", status: "active", area_m2: 14600 }]
   });

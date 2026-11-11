@@ -85,7 +85,7 @@ async function cleanupVarietyAndEntries(organizationId: string, varietyId: strin
 async function createTestYieldSize(organizationId: string, name: string): Promise<{ id: string; name: string }> {
   const { data, error } = await supabase
     .from("yield_sizes")
-    .insert({ organization_id: organizationId, name, sort_order: 0, status: "active" })
+    .insert({ organization_id: organizationId, product_code: "bell_pepper", name, sort_order: 0, status: "active" })
     .select("id, name")
     .single();
   if (error) throw error;
