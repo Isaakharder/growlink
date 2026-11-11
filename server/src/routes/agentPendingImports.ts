@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { sizedProductVarietiesOnly, unsizedProductName } from "../utils/organizationProducts";
 import { supabase } from "../config/supabase";
 import { loadOrgSizeContext } from "./pdfImport";
 import { resolveFileSizes, type OrgSizeContext } from "../utils/sizeMapping";
@@ -287,7 +288,7 @@ async function loadBuildContext(
     await Promise.all([
       supabase
         .from("varieties")
-        .select("id, name")
+        .select("id, name, product_code")
         .eq("organization_id", organizationId)
         .eq("status", "active"),
       supabase
@@ -318,7 +319,8 @@ async function loadBuildContext(
     return { ok: false, error: sizeContextResult.error };
   }
 
-  const activeVarieties = (varietiesResult.data ?? []) as ActiveVariety[];
+  // Size-bucket imports never match a variety of a product without sizes.
+  const activeVarieties = (await sizedProductVarietiesOnly((varietiesResult.data ?? []) as Array<ActiveVariety & { product_code?: string }>)) as ActiveVariety[];
   const existingYieldEntries = (yieldEntriesResult.data ?? []) as ExistingYieldEntry[];
   const existingImportRuns = (importRunsResult.data ?? []) as ExistingImportRun[];
 
@@ -466,7 +468,7 @@ agentPendingImportsRouter.patch("/agent-pending-imports/:id", canEdit, async (re
   if (varietyId) {
     const { data: targetVariety, error: varietyError } = await supabase
       .from("varieties")
-      .select("id")
+      .select("id, product_code")
       .eq("id", varietyId)
       .eq("organization_id", organizationId)
       .maybeSingle();
@@ -484,6 +486,13 @@ agentPendingImportsRouter.patch("/agent-pending-imports/:id", canEdit, async (re
     if (!targetVariety) {
       return res.status(400).json({
         message: "Target variety does not belong to this organization."
+      });
+    }
+
+    const unsized = await unsizedProductName((targetVariety as { product_code?: string }).product_code);
+    if (unsized) {
+      return res.status(400).json({
+        message: `${unsized} varieties can't receive imported size data yet. Enter ${unsized.toLowerCase()} harvests in Manual Entry.`
       });
     }
   }

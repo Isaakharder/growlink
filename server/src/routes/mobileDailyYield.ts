@@ -249,7 +249,10 @@ async function fetchRowsLinkedToActiveVarieties(organizationId: string) {
     throw new Error("Failed to load greenhouse groups.");
   }
 
-  const varieties = varietiesResult.data ?? [];
+  // Daily yield sampling projects pepper cases by colour. Varieties without a
+  // colour (Cucumbers, migration 0149) aren't part of it yet: mobile cucumber
+  // entry comes later.
+  const varieties = (varietiesResult.data ?? []).filter((variety) => variety.color);
   const activeVarietyIds = new Set(varieties.map((variety) => variety.id));
   const assignments = (assignmentsResult.data ?? []).filter((assignment) =>
     activeVarietyIds.has(assignment.variety_id)
@@ -339,13 +342,17 @@ async function ensureRowLinkedToVariety(
 ) {
   const { data: varietyData, error: varietyError } = await supabase
     .from("varieties")
-    .select("id")
+    .select("id, color")
     .eq("id", varietyId)
     .eq("organization_id", organizationId)
     .single();
 
   if (varietyError || !varietyData) {
     throw new Error("Selected variety was not found");
+  }
+
+  if (!(varietyData as { color?: string | null }).color) {
+    throw new Error("Daily yield samples are recorded for pepper varieties only");
   }
 
   const { data: rowData, error: rowError } = await supabase

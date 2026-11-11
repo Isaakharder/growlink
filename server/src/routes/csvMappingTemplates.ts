@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { sizedProductVarietiesOnly, unsizedProductName } from "../utils/organizationProducts";
 import { Router } from "express";
 import multer from "multer";
 import { supabase } from "../config/supabase";
@@ -1082,13 +1083,14 @@ export type VarietyMatch = { id: string; name: string; areaM2: number | null };
 export async function loadActiveVarietyByName(organizationId: string): Promise<Map<string, VarietyMatch>> {
   const { data, error } = await supabase
     .from("varieties")
-    .select("id, name, area_m2")
+    .select("id, name, area_m2, product_code")
     .eq("organization_id", organizationId)
     .eq("status", "active");
   if (error) throw error;
 
+  // Size-bucket imports never match a variety of a product without sizes.
   const map = new Map<string, VarietyMatch>();
-  for (const v of data ?? []) {
+  for (const v of await sizedProductVarietiesOnly((data ?? []) as Array<{ id: string; name: string; area_m2: unknown; product_code?: string }>)) {
     map.set((v.name as string).trim().toLowerCase(), {
       id: v.id as string,
       name: v.name as string,
@@ -1812,11 +1814,15 @@ function groupsMatch(fresh: NormalizedGroup, approved: NormalizedGroup): boolean
 async function loadVarietyForCalc(organizationId: string, varietyId: string): Promise<{ id: string; area_m2: number; case_kg: number }> {
   const { data, error } = await supabase
     .from("varieties")
-    .select("id, area_m2, case_kg")
+    .select("id, area_m2, case_kg, product_code")
     .eq("id", varietyId)
     .eq("organization_id", organizationId)
     .single();
   if (error || !data) throw new TemplateValidationError("Selected variety was not found.");
+  const unsized = await unsizedProductName((data as { product_code?: string }).product_code);
+  if (unsized) {
+    throw new TemplateValidationError(`${unsized} varieties can't receive imported size data yet. Enter ${unsized.toLowerCase()} harvests in Manual Entry.`);
+  }
   return data as { id: string; area_m2: number; case_kg: number };
 }
 

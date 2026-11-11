@@ -1,4 +1,5 @@
 import multer from "multer";
+import { loadCatalogProducts } from "../utils/organizationProducts";
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
@@ -1701,6 +1702,8 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
       // Uses group_ids from target_snapshot; silently skips if unavailable.
       let varietyName: string | null = null;
       let datePlanted: string | null = null;
+      // Bell Pepper records keep saying "Peppers"; another product says its catalog name.
+      let currentCrop = "Peppers";
       {
         const groupIds = Array.isArray(h1TargetSnap?.group_ids)
           ? (h1TargetSnap.group_ids as unknown[]).filter((g): g is string => typeof g === "string")
@@ -1715,12 +1718,17 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
           if (assignments && assignments.length > 0) {
             const { data: varietyRow } = await supabase
               .from("varieties")
-              .select("name, planting_date")
+              .select("name, planting_date, product_code")
               .eq("id", assignments[0].variety_id as string)
               .maybeSingle();
             if (varietyRow) {
               varietyName = typeof varietyRow.name === "string" ? varietyRow.name : null;
               datePlanted = typeof varietyRow.planting_date === "string" ? varietyRow.planting_date : null;
+              const productCode = typeof varietyRow.product_code === "string" ? varietyRow.product_code : null;
+              if (productCode && productCode !== "bell_pepper") {
+                const product = (await loadCatalogProducts().catch(() => [])).find((p) => p.code === productCode);
+                if (product) currentCrop = product.name;
+              }
             }
           }
         }
@@ -1782,7 +1790,7 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
           applicator_name:                 null,
           // top-form prefills (written on first log; display reads from that log)
           operation_name:                  operationName,
-          current_crop:                    "Peppers",
+          current_crop:                    currentCrop,
           previous_year_crops:             null,
           variety:                         varietyName,
           production_site_information:     rowHouseZones,

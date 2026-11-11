@@ -16,7 +16,7 @@ const WEEK_COLUMN_WIDTH = 66;
 
 export function buildWeeklyKgPdf(
   table: WeeklyKgTable,
-  { organizationName, exportedAt }: { organizationName: string | null; exportedAt: Date }
+  { organizationName, exportedAt, cropName = null }: { organizationName: string | null; exportedAt: Date; cropName?: string | null }
 ): jsPDF {
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const exportDate = exportedAt.toLocaleDateString("en-CA");
@@ -26,7 +26,7 @@ export function buildWeeklyKgPdf(
 
   doc.setFontSize(15);
   doc.setTextColor(24, 35, 32);
-  doc.text("Weekly kg by Variety", MARGIN, MARGIN + 6);
+  doc.text(cropName ? `Weekly kg by Variety - ${cropName}` : "Weekly kg by Variety", MARGIN, MARGIN + 6);
   doc.setFontSize(9.5);
   doc.setTextColor(75, 90, 85);
   doc.text(

@@ -6,7 +6,8 @@ import { requirePermission, requireAnyPermission } from "../middleware/requirePe
 import { resolveVarietyFootprints } from "../utils/varietyAreaFootprints";
 import { writeSourceColumn } from "../utils/writeSource";
 import { mergeAverageFruitWeightG } from "../utils/averageFruitWeight";
-import { calculateYieldTotals } from "../utils/yieldTotals";
+import { calculateYieldTotals, calculateYieldTotalsFromKg } from "../utils/yieldTotals";
+import { loadOrganizationProducts, productView, type OrganizationProduct } from "../utils/organizationProducts";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -18,11 +19,19 @@ type YieldEntryPayload = {
   packed_date: string | null;
 };
 
+// What a request carries before the variety's product decides how its kg is
+// read: kg per size (Bell Peppers) or one total kg (Cucumbers).
+type YieldEntryRequest = Omit<YieldEntryPayload, "size_kg"> & {
+  size_kg: Record<string, number> | null;
+  total_kg: number | null;
+};
+
 type VarietyForCalc = {
   id: string;
   name: string;
   area_m2: number;
   case_kg: number;
+  product_code: string;
 };
 
 function parseRequiredInteger(value: unknown, fieldName: string): number {
@@ -69,7 +78,7 @@ function parseSizeKg(value: unknown): Record<string, number> {
   return result;
 }
 
-function validatePayload(input: unknown): YieldEntryPayload {
+function validatePayload(input: unknown): YieldEntryRequest {
   if (!input || typeof input !== "object") {
     throw new Error("Invalid request body");
   }
@@ -89,7 +98,15 @@ function validatePayload(input: unknown): YieldEntryPayload {
     throw new Error("week must be between 1 and 53");
   }
 
-  const size_kg = parseSizeKg(body.size_kg);
+  // Parsed here when sent; whether it is required depends on the product.
+  const size_kg = body.size_kg === undefined || body.size_kg === null ? null : parseSizeKg(body.size_kg);
+  let total_kg: number | null = null;
+  if (body.total_kg !== undefined && body.total_kg !== null && body.total_kg !== "") {
+    total_kg = typeof body.total_kg === "number" ? body.total_kg : Number(body.total_kg);
+    if (!Number.isFinite(total_kg) || total_kg < 0) {
+      throw new Error("total_kg must be 0 or greater");
+    }
+  }
   const average_fruit_weight_g = parseOptionalNonNegativeNumber(
     body.average_fruit_weight_g
   );
@@ -106,27 +123,66 @@ function validatePayload(input: unknown): YieldEntryPayload {
     year,
     week,
     size_kg,
+    total_kg,
     average_fruit_weight_g,
     packed_date
   };
 }
 
+class EntryInputError extends Error {}
+
+// The entry as stored, by the variety's product: Bell Peppers are kg per size
+// with the total summed from them, exactly as before; a product without sizes
+// (Cucumbers) is one total kg and stores no size buckets.
+function resolveEntryKg(request: YieldEntryRequest, product: OrganizationProduct): { payload: YieldEntryPayload; totalKg: number } {
+  const { total_kg, size_kg, ...rest } = request;
+
+  if (product.tracksSizes) {
+    if (size_kg === null) {
+      throw new EntryInputError("size_kg must be an object of sizeId -> kg number");
+    }
+    return { payload: { ...rest, size_kg }, totalKg: Object.values(size_kg).reduce((sum, kg) => sum + kg, 0) };
+  }
+
+  if (size_kg && Object.values(size_kg).some((kg) => kg !== 0)) {
+    throw new EntryInputError(`A ${product.name} harvest is a total kg without size buckets`);
+  }
+  if (total_kg === null) {
+    throw new EntryInputError("total_kg is required");
+  }
+  return { payload: { ...rest, size_kg: {} }, totalKg: total_kg };
+}
+
+function entryTotals(payload: YieldEntryPayload, totalKg: number, product: OrganizationProduct, variety: VarietyForCalc) {
+  return product.tracksSizes ? calculateYieldTotals(payload.size_kg, variety) : calculateYieldTotalsFromKg(totalKg, variety);
+}
+
+// The variety and its product. A harvest can only be recorded for a product
+// the organization has enabled and is using.
 async function fetchVarietyForCalc(
   varietyId: string,
   organizationId: string
-): Promise<VarietyForCalc> {
+): Promise<{ variety: VarietyForCalc; product: OrganizationProduct }> {
   const { data, error } = await supabase
     .from("varieties")
-    .select("id, name, area_m2, case_kg")
+    .select("id, name, area_m2, case_kg, product_code")
     .eq("id", varietyId)
     .eq("organization_id", organizationId)
     .single();
 
   if (error || !data) {
-    throw new Error("Selected variety was not found");
+    throw new EntryInputError("Selected variety was not found");
   }
 
-  return data as VarietyForCalc;
+  const variety = data as VarietyForCalc;
+  const products = await loadOrganizationProducts(organizationId);
+  const product = products.find((p) => p.code === variety.product_code);
+
+  if (!product || product.status !== "active") {
+    throw new EntryInputError(`${product?.name ?? "This product"} is not enabled for your organization`);
+  }
+
+  return { variety, product };
 }
 
 const yieldEntriesRouter = Router();
@@ -142,10 +198,18 @@ void (undefined as unknown as YieldEntryStatus);
 yieldEntriesRouter.get("/yield-entry-options", canYieldView, async (req, res) => {
   const organizationId = req.organizationId;
 
+  let products: OrganizationProduct[];
+  try {
+    products = await loadOrganizationProducts(organizationId as string);
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to load products.", "Yield entry options - products error:", error);
+  }
+  const activeProducts = products.filter((p) => p.status === "active");
+
   const [varietiesResult, sizesResult] = await Promise.all([
     supabase
       .from("varieties")
-      .select("id, name, area_m2, case_kg, status, color")
+      .select("id, name, area_m2, case_kg, status, color, product_code")
       .eq("organization_id", organizationId)
       .eq("status", "active")
       .order("name", { ascending: true }),
@@ -165,14 +229,17 @@ yieldEntriesRouter.get("/yield-entry-options", canYieldView, async (req, res) =>
     return sendSafeError(res, 500, "Failed to load yield sizes.", "Yield entry options - sizes error:", sizesResult.error);
   }
 
+  // Harvests are entered only for products the organization is using.
+  const activeCodes = new Set(activeProducts.map((p) => p.code));
   return res.json({
-    varieties: varietiesResult.data ?? [],
-    yieldSizes: sizesResult.data ?? []
+    varieties: (varietiesResult.data ?? []).filter((v) => activeCodes.has((v as { product_code: string }).product_code)),
+    yieldSizes: sizesResult.data ?? [],
+    products: activeProducts.map(productView)
   });
 });
 
 const YIELD_ENTRY_SELECT =
-  "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg, average_fruit_weight_g)";
+  "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, created_at, updated_at, varieties(name, product_code), yield_entry_daily_breakdown(id, packed_date, size_kg, total_kg, average_fruit_weight_g)";
 
 type RawYieldEntryRow = {
   id: string;
@@ -187,7 +254,7 @@ type RawYieldEntryRow = {
   total_cases: number;
   created_at: string;
   updated_at: string;
-  varieties: { name?: string } | Array<{ name?: string }> | null;
+  varieties: { name?: string; product_code?: string } | Array<{ name?: string; product_code?: string }> | null;
   yield_entry_daily_breakdown: Array<{
     id?: string;
     packed_date?: string | null;
@@ -198,10 +265,9 @@ type RawYieldEntryRow = {
 };
 
 function mapYieldEntryRow(entry: RawYieldEntryRow) {
-  const varietyRef = entry.varieties;
-  const varietyName = Array.isArray(varietyRef)
-    ? (varietyRef[0]?.name ?? "-")
-    : (varietyRef?.name ?? "-");
+  const varietyRef = Array.isArray(entry.varieties) ? entry.varieties[0] : entry.varieties;
+  const varietyName = varietyRef?.name ?? "-";
+  const productCode = varietyRef?.product_code ?? null;
 
   const daily_breakdowns = (entry.yield_entry_daily_breakdown ?? []).map((b) => ({
     id: b.id ?? "",
@@ -218,6 +284,7 @@ function mapYieldEntryRow(entry: RawYieldEntryRow) {
   return {
     ...rest,
     variety_name: varietyName,
+    product_code: productCode,
     daily_breakdowns
   };
 }
@@ -411,21 +478,22 @@ yieldEntriesRouter.get("/yield-entries/weekly-by-variety", canYieldView, async (
 
 yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
   const organizationId = req.organizationId;
-  let payload: YieldEntryPayload;
+  let request: YieldEntryRequest;
 
   try {
-    payload = validatePayload(req.body);
+    request = validatePayload(req.body);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
   }
 
   try {
-    const variety = await fetchVarietyForCalc(payload.variety_id, organizationId);
+    const { variety, product } = await fetchVarietyForCalc(request.variety_id, organizationId);
+    const { payload, totalKg: incomingTotal } = resolveEntryKg(request, product);
 
     const { data: existing, error: lookupError } = await supabase
       .from("yield_entries")
-      .select("id, size_kg, average_fruit_weight_g, packed_date")
+      .select("id, size_kg, total_kg, average_fruit_weight_g, packed_date")
       .eq("organization_id", organizationId)
       .eq("variety_id", payload.variety_id)
       .eq("year", payload.year)
@@ -450,17 +518,23 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
         mergedSizeKg[sizeId] = (mergedSizeKg[sizeId] ?? 0) + incomingKg;
       }
 
-      const mergedTotals = calculateYieldTotals(mergedSizeKg, variety);
+      // A product without sizes adds to the stored total; its size buckets stay empty.
+      const existingTotal = product.tracksSizes
+        ? Object.values(existingSizeKg).reduce((sum, kg) => sum + kg, 0)
+        : Number(existing.total_kg ?? 0);
+      const mergedTotals = product.tracksSizes
+        ? calculateYieldTotals(mergedSizeKg, variety)
+        : calculateYieldTotalsFromKg(existingTotal + incomingTotal, variety);
       const mergedPackedDate = existing.packed_date !== null ? existing.packed_date : (payload.packed_date ?? null);
 
       const { data: updated, error: updateError } = await supabase
         .from("yield_entries")
         .update({
-          size_kg: mergedSizeKg,
+          size_kg: product.tracksSizes ? mergedSizeKg : {},
           average_fruit_weight_g: mergeAverageFruitWeightG(
-            Object.values(existingSizeKg).reduce((sum, kg) => sum + kg, 0),
+            existingTotal,
             existing.average_fruit_weight_g == null ? null : Number(existing.average_fruit_weight_g),
-            Object.values(payload.size_kg).reduce((sum, kg) => sum + kg, 0),
+            incomingTotal,
             payload.average_fruit_weight_g
           ),
           packed_date: mergedPackedDate,
@@ -478,7 +552,6 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
       }
 
       // Write a breakdown row for this packing day
-      const incomingTotal = Object.values(payload.size_kg).reduce((sum, v) => sum + v, 0);
       const { error: breakdownError } = await supabase
         .from("yield_entry_daily_breakdown")
         .insert({
@@ -500,7 +573,7 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
       });
     }
 
-    const totals = calculateYieldTotals(payload.size_kg, variety);
+    const totals = entryTotals(payload, incomingTotal, product, variety);
 
     const { data, error } = await supabase
       .from("yield_entries")
@@ -538,18 +611,19 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
 yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
   const organizationId = req.organizationId;
   const { id } = req.params;
-  let payload: YieldEntryPayload;
+  let request: YieldEntryRequest;
 
   try {
-    payload = validatePayload(req.body);
+    request = validatePayload(req.body);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request body";
     return res.status(400).json({ message });
   }
 
   try {
-    const variety = await fetchVarietyForCalc(payload.variety_id, organizationId);
-    const totals = calculateYieldTotals(payload.size_kg, variety);
+    const { variety, product } = await fetchVarietyForCalc(request.variety_id, organizationId);
+    const { payload, totalKg } = resolveEntryKg(request, product);
+    const totals = entryTotals(payload, totalKg, product, variety);
 
     const { data, error } = await supabase
       .from("yield_entries")
@@ -683,7 +757,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
   const [entriesResult, sizesResult, varietiesResult] = await Promise.all([
     supabase
       .from("yield_entries")
-      .select("variety_id, total_kg, average_fruit_weight_g, size_kg, varieties(id, name, area_m2)")
+      .select("variety_id, total_kg, average_fruit_weight_g, size_kg, varieties(id, name, area_m2, product_code)")
       .eq("organization_id", organizationId),
     supabase
       .from("yield_sizes")
@@ -693,10 +767,17 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
       .order("created_at", { ascending: true }),
     supabase
       .from("varieties")
-      .select("id, name, area_m2")
+      .select("id, name, area_m2, product_code")
       .eq("organization_id", organizationId)
       .order("name", { ascending: true })
   ]);
+
+  let products: OrganizationProduct[];
+  try {
+    products = await loadOrganizationProducts(organizationId as string);
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to load yield analytics.", "Yield analytics - products error:", error);
+  }
 
   if (entriesResult.error) {
     return sendSafeError(res, 500, "Failed to load yield analytics.", "Yield analytics - entries error:", entriesResult.error);
@@ -709,7 +790,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
   }
 
   const sizes = sizesResult.data ?? [];
-  const varietiesMap = new Map<string, { id: string; name: string; area_m2: number }>();
+  const varietiesMap = new Map<string, { id: string; name: string; area_m2: number; product_code: string }>();
   for (const v of varietiesResult.data ?? []) {
     varietiesMap.set(v.id, v);
   }
@@ -717,6 +798,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
   type VarietySummary = {
     variety_id: string;
     variety_name: string;
+    product_code: string | null;
     entries_count: number;
     total_kg: number;
     weighted_fw_sum: number;
@@ -737,6 +819,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
       summaryMap.set(entry.variety_id, {
         variety_id: entry.variety_id,
         variety_name: varietyName,
+        product_code: varietiesMap.get(entry.variety_id)?.product_code ?? null,
         entries_count: 0,
         total_kg: 0,
         weighted_fw_sum: 0,
@@ -783,6 +866,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
     return {
       variety_id: row.variety_id,
       variety_name: row.variety_name,
+      product_code: row.product_code,
       entries_count: row.entries_count,
       total_kg: row.total_kg,
       avg_fruit_weight_g,
@@ -793,7 +877,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
 
   rows.sort((a, b) => a.variety_name.localeCompare(b.variety_name));
 
-  return res.json({ sizes, rows });
+  return res.json({ sizes, rows, products: products.map(productView) });
 });
 
 // ── Color Case Entries ────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildManualKgEntryPayload,
+  formTotalKg,
   findExistingWeekEntry,
   kgPerM2For,
   manualKgEntrySaveTarget,
@@ -90,5 +91,37 @@ describe("week options", () => {
     expect(getCurrentWeek(2030)).toBe(1);
     expect(getCurrentWeek(2020)).toBe(53);
     expect(localIsoDate(new Date(2026, 0, 5))).toBe("2026-01-05");
+  });
+});
+
+describe("buildManualKgEntryPayload — a product without size buckets (Cucumbers)", () => {
+  const CUCUMBERS = { code: "cucumber", name: "Cucumbers", tracksSizes: false };
+  const PEPPERS = { code: "bell_pepper", name: "Bell Peppers", tracksSizes: true };
+  const sizes = [{ id: "s1", name: "Large", sort_order: 1, status: "active" as const }];
+  const form = {
+    variety_id: "v-bon", year: "2026", week: "33", packed_date: "2026-08-12",
+    average_fruit_weight_g: "", size_kg: { s1: "5" }, total_kg: "1200"
+  };
+
+  it("sends the typed total and no sizes", () => {
+    expect(buildManualKgEntryPayload(form, sizes, CUCUMBERS)).toEqual({
+      ok: true,
+      payload: { variety_id: "v-bon", year: 2026, week: 33, packed_date: "2026-08-12", size_kg: {}, total_kg: 1200, average_fruit_weight_g: null }
+    });
+    expect(formTotalKg(form, CUCUMBERS)).toBe(1200);
+  });
+
+  it("requires a non-negative total", () => {
+    expect(buildManualKgEntryPayload({ ...form, total_kg: "" }, sizes, CUCUMBERS)).toEqual({ ok: false, error: "Total kg is required." });
+    expect(buildManualKgEntryPayload({ ...form, total_kg: "-3" }, sizes, CUCUMBERS)).toEqual({ ok: false, error: "Kg values must be 0 or greater." });
+  });
+
+  it("leaves Bell Peppers, or an unknown product, exactly as before: sizes summed, no total sent", () => {
+    for (const product of [PEPPERS, undefined]) {
+      const built = buildManualKgEntryPayload(form, sizes, product);
+      expect(built).toEqual(buildManualKgEntryPayload(form, sizes));
+      expect(built.ok && "total_kg" in built.payload).toBe(false);
+      expect(formTotalKg(form, product)).toBe(5);
+    }
   });
 });

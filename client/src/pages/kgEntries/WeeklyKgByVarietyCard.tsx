@@ -7,10 +7,11 @@ import {
   displayMatrix,
   parseWeeklyKgSource,
   weekLabel,
+  weeklyKgCrops,
   weeklyKgCsv,
   weeklyKgFileBase,
-  type WeeklyKgByVarietySource,
-  type WeeklyKgTable
+  weeklyKgSourceForCrop,
+  type WeeklyKgByVarietySource
 } from "../../lib/yieldEntries/weeklyKgByVariety";
 
 // Kg Entries → "Weekly kg by Variety": a read-only week × variety summary of
@@ -20,7 +21,7 @@ import {
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; source: WeeklyKgByVarietySource; table: WeeklyKgTable | null; refreshing: boolean }
+  | { status: "ready"; source: WeeklyKgByVarietySource; refreshing: boolean }
   | { status: "error"; message: string };
 
 async function fetchSource(year: number | null): Promise<WeeklyKgByVarietySource> {
@@ -99,9 +100,14 @@ function ExportMenu({ disabled, onExport }: { disabled: boolean; onExport: (kind
   );
 }
 
-export function WeeklyKgByVarietyCard({ refreshKey }: { refreshKey: number }) {
+/** A crop the organization grows, for naming the picker's options. */
+export type WeeklyKgCrop = { code: string; name: string };
+
+export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: number; crops?: WeeklyKgCrop[] }) {
   const titleId = useId();
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  // The crop the table, totals and exports are for; null until there is a choice.
+  const [cropCode, setCropCode] = useState<string | null>(null);
   // null: the latest year with entries (the server's default).
   const [year, setYear] = useState<number | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -116,9 +122,8 @@ export function WeeklyKgByVarietyCard({ refreshKey }: { refreshKey: number }) {
       if (requestedYear !== null && source.entryCount === 0 && source.years.length > 0 && !source.years.includes(requestedYear)) {
         source = await fetchSource(null);
       }
-      const table = buildWeeklyKgTable(source);
       if (id !== request.current) return;
-      setState({ status: "ready", source, table, refreshing: false });
+      setState({ status: "ready", source, refreshing: false });
     } catch (error) {
       if (id !== request.current) return;
       setState({ status: "error", message: error instanceof Error ? error.message : "Failed to load weekly kg by variety" });
@@ -130,22 +135,33 @@ export function WeeklyKgByVarietyCard({ refreshKey }: { refreshKey: number }) {
   }, [load, year, refreshKey]);
 
   const ready = state.status === "ready" ? state : null;
-  const table = ready?.table ?? null;
   const shownYear = ready?.source.year ?? null;
+
+  // One crop at a time, so a weekly or season total never mixes crops. With a
+  // single crop the card is exactly as before.
+  const cropCodes = ready ? weeklyKgCrops(ready.source) : [];
+  const showCropPicker = cropCodes.length > 1;
+  const shownCrop = cropCode && cropCodes.includes(cropCode) ? cropCode : (cropCodes[0] ?? null);
+  const cropName = (code: string) => crops.find((crop) => crop.code === code)?.name ?? (code === "bell_pepper" ? "Bell Peppers" : code);
+  const exportCropName = showCropPicker && shownCrop ? cropName(shownCrop) : null;
+  const table = ready ? buildWeeklyKgTable(showCropPicker && shownCrop ? weeklyKgSourceForCrop(ready.source, shownCrop) : ready.source) : null;
+  const fileBase = table
+    ? weeklyKgFileBase(table.year, exportCropName ? exportCropName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : null)
+    : "";
 
   async function handleExport(kind: "csv" | "pdf") {
     if (!table) return;
     setExportError(null);
     try {
       if (kind === "csv") {
-        downloadBlobFile(new Blob([weeklyKgCsv(table)], { type: "text/csv;charset=utf-8" }), `${weeklyKgFileBase(table.year)}.csv`);
+        downloadBlobFile(new Blob([weeklyKgCsv(table)], { type: "text/csv;charset=utf-8" }), `${fileBase}.csv`);
       } else {
         const [{ buildWeeklyKgPdf }, organizationName] = await Promise.all([
           import("../../lib/yieldEntries/weeklyKgByVarietyPdf"),
           getOrganizationName()
         ]);
-        const doc = buildWeeklyKgPdf(table, { organizationName, exportedAt: new Date() });
-        downloadBlobFile(doc.output("blob"), `${weeklyKgFileBase(table.year)}.pdf`);
+        const doc = buildWeeklyKgPdf(table, { organizationName, exportedAt: new Date(), cropName: exportCropName });
+        downloadBlobFile(doc.output("blob"), `${fileBase}.pdf`);
       }
     } catch {
       setExportError(`Couldn't create the ${kind.toUpperCase()} file. Try again.`);
@@ -162,6 +178,18 @@ export function WeeklyKgByVarietyCard({ refreshKey }: { refreshKey: number }) {
           <p className="weekly-kg-variety-subtitle">Harvested kg by recorded harvest week. “—” no entry · 0.0 recorded zero.</p>
         </div>
         <div className="weekly-kg-variety-actions">
+          {showCropPicker ? (
+            <label className="weekly-kg-variety-year">
+              <span>Crop</span>
+              <select value={shownCrop ?? ""} onChange={(e) => setCropCode(e.target.value)} disabled={ready?.refreshing}>
+                {cropCodes.map((code) => (
+                  <option key={code} value={code}>
+                    {cropName(code)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {ready && ready.source.years.length > 0 ? (
             <label className="weekly-kg-variety-year">
               <span>Year</span>

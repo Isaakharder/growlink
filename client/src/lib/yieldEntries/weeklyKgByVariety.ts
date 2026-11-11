@@ -10,7 +10,7 @@ export type WeeklyKgByVarietySource = {
   year: number | null;
   years: number[];
   entryCount: number;
-  varieties: Array<{ id: string; name: string; status: string | null }>;
+  varieties: Array<{ id: string; name: string; status: string | null; productCode?: string }>;
   entries: Array<{ variety_id: string; week: number; total_kg: number }>;
 };
 
@@ -36,6 +36,26 @@ export function parseWeeklyKgSource(body: unknown): WeeklyKgByVarietySource {
     b.entryCount === b.entries.length;
   if (!valid) throw new Error("Weekly kg by variety came back incomplete");
   return b as WeeklyKgByVarietySource;
+}
+
+/** A variety's crop; a server from before products sends none, which is Bell Peppers. */
+export const weeklyKgCropOf = (variety: { productCode?: string }) => variety.productCode ?? "bell_pepper";
+
+/** The crop codes the year's varieties belong to, Bell Peppers first. */
+export function weeklyKgCrops(source: WeeklyKgByVarietySource): string[] {
+  const codes = Array.from(new Set(source.varieties.map(weeklyKgCropOf)));
+  return codes.sort((a, b) => (a === "bell_pepper" ? -1 : b === "bell_pepper" ? 1 : a.localeCompare(b)));
+}
+
+/**
+ * The source narrowed to one crop's varieties and entries, so weekly and
+ * season totals never add one crop's kg to another's.
+ */
+export function weeklyKgSourceForCrop(source: WeeklyKgByVarietySource, cropCode: string): WeeklyKgByVarietySource {
+  const varieties = source.varieties.filter((variety) => weeklyKgCropOf(variety) === cropCode);
+  const ids = new Set(varieties.map((variety) => variety.id));
+  const entries = source.entries.filter((entry) => ids.has(entry.variety_id));
+  return { ...source, varieties, entries, entryCount: entries.length };
 }
 
 export type WeeklyKgColumn = { id: string; name: string; inactive: boolean; label: string };
@@ -154,4 +174,6 @@ export function weeklyKgCsv(table: WeeklyKgTable): string {
   return "\uFEFF" + lines.map((line) => line.map(csvField).join(",")).join("\r\n") + "\r\n";
 }
 
-export const weeklyKgFileBase = (year: number) => `weekly-kg-by-variety-${year}`;
+/** cropSlug only when the organization records more than one crop, so single-crop file names are unchanged. */
+export const weeklyKgFileBase = (year: number, cropSlug: string | null = null) =>
+  cropSlug ? `weekly-kg-by-variety-${cropSlug}-${year}` : `weekly-kg-by-variety-${year}`;

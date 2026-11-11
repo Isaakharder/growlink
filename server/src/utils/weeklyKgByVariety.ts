@@ -11,7 +11,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export const WEEKLY_KG_PAGE_SIZE = 1000;
 
 export type WeeklyKgEntryRow = { variety_id: string; week: number; total_kg: number };
-export type WeeklyKgVariety = { id: string; name: string; status: string | null };
+/** productCode is the variety's product (0148); the card shows one crop's totals at a time. */
+export type WeeklyKgVariety = { id: string; name: string; status: string | null; productCode?: string };
 
 export type WeeklyKgByVarietySource = {
   year: number | null;
@@ -28,7 +29,10 @@ type RawEntry = {
   variety_id: string;
   week: number;
   total_kg: number | string;
-  varieties: { name: string | null; status: string | null } | Array<{ name: string | null; status: string | null }> | null;
+  varieties:
+    | { name: string | null; status: string | null; product_code?: string | null }
+    | Array<{ name: string | null; status: string | null; product_code?: string | null }>
+    | null;
 };
 
 /** Every distinct year with at least one entry, newest first. */
@@ -56,7 +60,7 @@ export async function fetchYearEntries(db: SupabaseClient, organizationId: strin
   for (let from = 0; ; from += WEEKLY_KG_PAGE_SIZE) {
     const { data, error, count } = await db
       .from("yield_entries")
-      .select("id, variety_id, week, total_kg, varieties(name, status)", { count: "exact" })
+      .select("id, variety_id, week, total_kg, varieties(name, status, product_code)", { count: "exact" })
       .eq("organization_id", organizationId)
       .eq("year", year)
       .order("id", { ascending: true })
@@ -87,7 +91,12 @@ export async function loadWeeklyKgByVarietySource(
   for (const row of raw) {
     const ref = Array.isArray(row.varieties) ? row.varieties[0] : row.varieties;
     if (!varieties.has(row.variety_id)) {
-      varieties.set(row.variety_id, { id: row.variety_id, name: ref?.name ?? "Unknown variety", status: ref?.status ?? null });
+      varieties.set(row.variety_id, {
+        id: row.variety_id,
+        name: ref?.name ?? "Unknown variety",
+        status: ref?.status ?? null,
+        ...(ref?.product_code ? { productCode: ref.product_code } : {})
+      });
     }
     entries.push({ variety_id: row.variety_id, week: Number(row.week), total_kg: Number(row.total_kg) });
   }

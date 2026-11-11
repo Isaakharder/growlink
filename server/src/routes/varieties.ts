@@ -2,6 +2,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
+import { loadCatalogProducts } from "../utils/organizationProducts";
 
 type VarietyStatus = "active" | "inactive";
 type VarietyColor = "red" | "orange" | "yellow" | "green";
@@ -13,7 +14,6 @@ type VarietyPayload = {
   planting_date: string | null;
   pull_out_date: string | null;
   status: VarietyStatus;
-  color: VarietyColor;
 };
 
 const STATUS_VALUES: VarietyStatus[] = ["active", "inactive"];
@@ -37,6 +37,10 @@ function parseNonNegativeNumber(value: unknown, fieldName: string): number {
   return parsed;
 }
 
+// A request the client can correct: an unknown or inactive product, or a
+// colour that does not fit the product. Answered with 400.
+class ProductSelectionError extends Error {}
+
 function validatePayload(input: unknown): VarietyPayload {
   if (!input || typeof input !== "object") {
     throw new Error("Invalid request body");
@@ -55,15 +59,8 @@ function validatePayload(input: unknown): VarietyPayload {
   const statusValue =
     typeof body.status === "string" ? body.status.toLowerCase() : "";
 
-  const colorValue =
-    typeof body.color === "string" ? body.color.toLowerCase() : "";
-
   if (!STATUS_VALUES.includes(statusValue as VarietyStatus)) {
     throw new Error("status must be active or inactive");
-  }
-
-  if (!COLOR_VALUES.includes(colorValue as VarietyColor)) {
-    throw new Error("color must be red, orange, yellow, or green");
   }
 
   if (body.planting_date !== null && body.planting_date !== undefined) {
@@ -84,12 +81,38 @@ function validatePayload(input: unknown): VarietyPayload {
     case_kg,
     planting_date: (body.planting_date as string | null | undefined) ?? null,
     pull_out_date: (body.pull_out_date as string | null | undefined) ?? null,
-    status: statusValue as VarietyStatus,
-    color: colorValue as VarietyColor
+    status: statusValue as VarietyStatus
   };
 }
 
-class ProductSelectionError extends Error {}
+// A variety has a colour exactly when its product tracks colour (migration
+// 0149): Bell Peppers need one of the four; Cucumbers store none — never a
+// placeholder.
+function resolveColor(input: unknown, product: { name: string; tracksColour: boolean }): VarietyColor | null {
+  const raw = (input as Record<string, unknown>).color;
+  const colorValue = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+
+  if (!product.tracksColour) {
+    if (colorValue) {
+      throw new ProductSelectionError(`${product.name} varieties have no colour`);
+    }
+    return null;
+  }
+
+  if (!COLOR_VALUES.includes(colorValue as VarietyColor)) {
+    throw new ProductSelectionError("color must be red, orange, yellow, or green");
+  }
+  return colorValue as VarietyColor;
+}
+
+async function catalogCapabilities(code: string) {
+  const product = (await loadCatalogProducts()).find((p) => p.code === code);
+  if (!product) {
+    throw new ProductSelectionError("product_code must be an active product enabled for your organization");
+  }
+  return product;
+}
+
 
 // A variety belongs to a product its organization has enabled and is using
 // (migration 0148). A request without product_code — what every client sent
@@ -155,9 +178,11 @@ varietiesRouter.post("/varieties", canEdit, async (req, res) => {
   }
 
   let product_code: string;
+  let color: VarietyColor | null;
 
   try {
     product_code = await resolveProductCode(organizationId, (req.body as Record<string, unknown>).product_code);
+    color = resolveColor(req.body, await catalogCapabilities(product_code));
   } catch (error) {
     if (error instanceof ProductSelectionError) {
       return res.status(400).json({ message: error.message });
@@ -167,7 +192,7 @@ varietiesRouter.post("/varieties", canEdit, async (req, res) => {
 
   const { data, error } = await supabase
     .from("varieties")
-    .insert({ ...payload, product_code, organization_id: organizationId })
+    .insert({ ...payload, color, product_code, organization_id: organizationId })
     .select("*")
     .single();
 
@@ -195,24 +220,40 @@ varietiesRouter.put("/varieties/:id", canEdit, async (req, res) => {
     return res.status(400).json({ message });
   }
 
-  // Without product_code the variety keeps its product.
+  // Without product_code the variety keeps its product. Changing it is
+  // refused by the database once the variety has recorded harvests (0149).
   const requestedProduct = (req.body as Record<string, unknown>).product_code;
   let productUpdate: { product_code?: string } = {};
+  let color: VarietyColor | null;
 
-  if (requestedProduct !== undefined) {
-    try {
-      productUpdate = { product_code: await resolveProductCode(organizationId, requestedProduct) };
-    } catch (error) {
-      if (error instanceof ProductSelectionError) {
-        return res.status(400).json({ message: error.message });
-      }
-      return sendSafeError(res, 500, "Failed to update variety.", "Variety product lookup error:", error);
+  try {
+    const { data: existing, error: existingError } = await supabase
+      .from("varieties")
+      .select("product_code")
+      .eq("id", id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) {
+      return res.status(404).json({ message: "Variety not found." });
     }
+
+    let productCode = (existing as { product_code: string }).product_code;
+    if (requestedProduct !== undefined && requestedProduct !== null && requestedProduct !== productCode) {
+      productCode = await resolveProductCode(organizationId, requestedProduct);
+      productUpdate = { product_code: productCode };
+    }
+    color = resolveColor(req.body, await catalogCapabilities(productCode));
+  } catch (error) {
+    if (error instanceof ProductSelectionError) {
+      return res.status(400).json({ message: error.message });
+    }
+    return sendSafeError(res, 500, "Failed to update variety.", "Variety product lookup error:", error);
   }
 
   const { data, error } = await supabase
     .from("varieties")
-    .update({ ...payload, ...productUpdate, updated_at: new Date().toISOString() })
+    .update({ ...payload, color, ...productUpdate, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("organization_id", organizationId)
     .select("*")
