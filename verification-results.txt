@@ -1,0 +1,40 @@
+PASS  Analytics: no Crop selector while only Bell Peppers is enabled
+PASS  Analytics: Bell Pepper total before = 145980 kg (DB 145980)
+PASS  Products: Cucumbers moved to Enabled Products
+PASS  Products: Bell Peppers setup unchanged (kg, 3 varieties)
+PASS  Products: Cucumbers enabled in kg
+PASS  Varieties: new variety starts on Bell Peppers
+PASS  Varieties: Bell Peppers shows Color
+PASS  Varieties: Cucumbers hides Color
+PASS  Varieties: Bonbon listed as Cucumbers with no colour (Bonbon Cucumbers — 6000 12 2026-08-20 - Active Edit Delete)
+PASS  Varieties: stored with color null, product cucumber
+PASS  Manual Entry: Cadalora keeps Small/Large/XL
+PASS  Manual Entry: no size buckets for Bonbon (week 44)
+PASS  Manual Entry: no size buckets for Bonbon (week 45)
+PASS  Manual Entry: no size buckets for Bonbon (week 46)
+PASS  Manual Entry: no size buckets for Bonbon (week 43)
+PASS  Manual Entry: edit opens with the stored total
+PASS  Manual Entry: week 46 shows 8,000 kg, 1.333 kg/m², 666.667 cases
+PASS  Weekly kg: Bell Peppers view has no cucumber column
+PASS  Weekly kg: Cucumbers view = Bonbon only, season total 22,100.0
+PASS  Analytics: Crop selector defaults to Bell Peppers
+PASS  Analytics: every Bell Pepper KPI identical to before Cucumbers
+PASS  Analytics: Bell Pepper Variety Summary identical to before
+PASS  Analytics: Harvest vs Shipped (by colour) shown for Bell Peppers
+PASS  Analytics: Bell Pepper CSV total 145980 = KPI 145980 (growlink-variety-summary-bell-peppers-2026.csv)
+PASS  Analytics: Cucumbers total = 22100 kg (6,900 + 7,200 + 8,000)
+PASS  Analytics: Cucumbers kg/m² over Bonbon's own 6,000 m²
+PASS  Analytics: no colour reconciliation for Cucumbers
+PASS  Analytics: no size columns for Cucumbers
+PASS  Analytics: CSV named growlink-variety-summary-cucumbers-2026.csv
+PASS  Analytics: Cucumber CSV total 22100 kg, 3.7 kg/m² matches screen
+PASS  Analytics: PDF named growlink-variety-summary-cucumbers-2026.pdf
+PASS  Pepper-only org: Cucumbers not enabled
+PASS  Pepper-only org: product choices = Bell Peppers
+PASS  Pepper-only org: create cucumber variety → 400 product_code must be an active product enabled for your organization
+PASS  Pepper-only org: harvest on another org's cucumber variety → 400 Selected variety was not found
+PASS  Pepper-only org: Manual Entry offers Bell Peppers only
+PASS  DB: Greenhouse Test Farm Bell Pepper entries/kg unchanged {"organization":"Greenhouse Test Farm","product":"bell_pepper","entries":39,"total_kg":145980}
+PASS  DB: Pepper Only Farm Bell Pepper entries/kg unchanged {"organization":"Pepper Only Farm","product":"bell_pepper","entries":1,"total_kg":4100}
+PASS  DB: Cucumbers 3 entries, 22,100 kg, separate
+PASS  DB: Pepper-only org has no cucumber harvests
