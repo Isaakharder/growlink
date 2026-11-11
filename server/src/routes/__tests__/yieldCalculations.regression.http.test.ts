@@ -12,8 +12,17 @@ import assert from "node:assert/strict";
 import express from "express";
 import type { AddressInfo } from "net";
 import type { Server } from "http";
+import { readFileSync } from "fs";
+import path from "path";
 import { PGlite } from "@electric-sql/pglite";
 import { createPgliteSupabase } from "./testHelpers/pgliteSupabase";
+
+// The product catalog (0148) and Cucumbers (0149) applied verbatim, so these
+// pinned Bell Pepper numbers are checked against the schema they run on in
+// production once Cucumbers ships: none of them may move.
+const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../../supabase/migrations", name), "utf8");
+const m0148 = migration("0148_product_catalog.sql");
+const m0149 = migration("0149_cucumber_product.sql");
 
 const ORG = "11111111-1111-4111-8111-111111111111";
 const OTHER_ORG = "22222222-2222-4222-8222-222222222222";
@@ -44,6 +53,7 @@ let baseUrl: string;
 async function resetDatabase() {
   db = new PGlite();
   await db.exec(`
+    create role anon; create role authenticated; create role service_role bypassrls;
     create table organizations (id uuid primary key);
     insert into organizations values ('${ORG}'), ('${OTHER_ORG}');
     create table memberships (user_id uuid, organization_id uuid, role text, permissions jsonb);
@@ -94,6 +104,8 @@ async function resetDatabase() {
     create table greenhouse_variety_assignments (organization_id uuid not null, variety_id uuid not null, group_id uuid not null,
       start_row int not null, end_row int not null);
   `);
+  await db.exec(m0148);
+  await db.exec(m0149);
 }
 
 // The shim cannot run PostgREST resource embedding. The two routes here that
@@ -250,13 +262,13 @@ test("Yield Analytics summary: per-variety kg, kg-weighted fruit weight, kg/m² 
   assert.equal(summary.status, 200, JSON.stringify(summary.body));
   assert.deepEqual(summary.body.sizes.map((s: any) => [s.id, s.name, s.sort_order]), [[LG, "LG", 1], [XL, "XL", 2], [MD, "MD", 3]]);
   assert.deepEqual(summary.body.rows, [
-    { variety_id: RED_A, variety_name: "Alpha Red", entries_count: 2, total_kg: 150, avg_fruit_weight_g: 200, kg_per_m2: 0.15,
+    { variety_id: RED_A, variety_name: "Alpha Red", product_code: "bell_pepper", entries_count: 2, total_kg: 150, avg_fruit_weight_g: 200, kg_per_m2: 0.15,
       size_pct: { [LG]: 73.33333333333333, [XL]: 26.666666666666668, [MD]: 0 } },
-    { variety_id: RED_B, variety_name: "Bravo Red", entries_count: 1, total_kg: 30, avg_fruit_weight_g: 150, kg_per_m2: 0.06,
+    { variety_id: RED_B, variety_name: "Bravo Red", product_code: "bell_pepper", entries_count: 1, total_kg: 30, avg_fruit_weight_g: 150, kg_per_m2: 0.06,
       size_pct: { [LG]: 0, [XL]: 0, [MD]: 100 } },
-    { variety_id: ORA_OLD, variety_name: "Delta Orange", entries_count: 1, total_kg: 20, avg_fruit_weight_g: 100, kg_per_m2: 0.06666666666666667,
+    { variety_id: ORA_OLD, variety_name: "Delta Orange", product_code: "bell_pepper", entries_count: 1, total_kg: 20, avg_fruit_weight_g: 100, kg_per_m2: 0.06666666666666667,
       size_pct: { [LG]: 0, [XL]: 100, [MD]: 0 } },
-    { variety_id: ZERO, variety_name: "Echo Yellow", entries_count: 1, total_kg: 0, avg_fruit_weight_g: null, kg_per_m2: null,
+    { variety_id: ZERO, variety_name: "Echo Yellow", product_code: "bell_pepper", entries_count: 1, total_kg: 0, avg_fruit_weight_g: null, kg_per_m2: null,
       size_pct: { [LG]: 0, [XL]: 0, [MD]: 0 } }
   ]);
 });

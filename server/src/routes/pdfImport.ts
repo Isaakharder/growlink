@@ -1,4 +1,5 @@
 import { Request, Router } from "express";
+import { sizedProductVarietiesOnly, unsizedProductName } from "../utils/organizationProducts";
 import multer from "multer";
 import { supabase } from "../config/supabase";
 import { parseFlowMasterPdfBuffer, type FlowMasterParseResult } from "../utils/flowMasterPdfParser";
@@ -492,7 +493,7 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
     const [varietiesResult, yieldEntriesResult, csvSettings, sizeContextResult] = await Promise.all([
       supabase
         .from("varieties")
-        .select("id, name")
+        .select("id, name, product_code")
         .eq("organization_id", organizationId)
         .eq("status", "active"),
       supabase
@@ -521,7 +522,8 @@ pdfImportRouter.post("/pdf-import/preview", canView, (req, res) => {
 
     const sizeContext = sizeContextResult.ctx;
 
-    const activeVarieties = (varietiesResult.data ?? []) as ActiveVariety[];
+    // Size-bucket imports never match a variety of a product without sizes.
+    const activeVarieties = (await sizedProductVarietiesOnly((varietiesResult.data ?? []) as Array<ActiveVariety & { product_code?: string }>)) as ActiveVariety[];
     const existingYieldEntries = (yieldEntriesResult.data ?? []) as ExistingYieldEntry[];
 
     const activeVarietyByExactName = new Map<string, ActiveVariety>();
@@ -835,7 +837,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
   const [varietyResult, activeSizesResult, existingEntriesResult] = await Promise.all([
     supabase
       .from("varieties")
-      .select("id, area_m2, case_kg")
+      .select("id, area_m2, case_kg, product_code")
       .eq("organization_id", organizationId)
       .eq("id", payload.varietyId)
       .single(),
@@ -856,6 +858,13 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
   if (varietyResult.error || !varietyResult.data) {
     return res.status(400).json({
       message: "Matched variety was not found for this organization."
+    });
+  }
+
+  const unsizedPdfProduct = await unsizedProductName((varietyResult.data as { product_code?: string }).product_code);
+  if (unsizedPdfProduct) {
+    return res.status(400).json({
+      message: `${unsizedPdfProduct} varieties can't receive imported size data yet. Enter ${unsizedPdfProduct.toLowerCase()} harvests in Manual Entry.`
     });
   }
 

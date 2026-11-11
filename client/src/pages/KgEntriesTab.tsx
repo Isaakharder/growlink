@@ -6,16 +6,18 @@ import { roundTo } from "../lib/roundTo";
 import { createWeekOptions, getCurrentWeek, localIsoDate } from "../lib/yieldEntries/weekOptions";
 import {
   buildManualKgEntryPayload,
+  entersSizes,
   findExistingWeekEntry,
+  formTotalKg,
   kgPerM2For,
   manualKgEntrySaveTarget,
   sortYieldSizes,
-  sumSizeKg,
   totalCasesFor,
   weekEntriesUrl,
   zeroSizeKgFields,
   type ManualKgEntryForm,
   type ManualKgEntryPayload,
+  type ManualKgEntryProduct,
   type YieldSizeOption
 } from "../lib/yieldEntries/manualKgEntry";
 
@@ -28,7 +30,9 @@ type VarietyOption = {
   area_m2: number;
   case_kg: number;
   status: VarietyStatus;
-  color: VarietyColor;
+  /** Null for a product without colours (Cucumbers). */
+  color: VarietyColor | null;
+  product_code?: string;
 };
 
 type DailyBreakdown = {
@@ -300,6 +304,8 @@ export function KgEntriesTab() {
   const currentYear = new Date().getFullYear();
   const [varieties, setVarieties] = useState<VarietyOption[]>([]);
   const [yieldSizes, setYieldSizes] = useState<YieldSizeOption[]>([]);
+  // The organization's active products, for how the selected variety's kg is entered.
+  const [products, setProducts] = useState<ManualKgEntryProduct[]>([]);
   // Entries scoped to the currently selected form.year/form.week — used for
   // the weekly color-share summary and the duplicate-week-entry check.
   // Deliberately NOT the full org history: see recentEntries below.
@@ -370,7 +376,8 @@ export function KgEntriesTab() {
     week: String(getCurrentWeek(currentYear)),
     packed_date: localIsoDate(new Date()),
     average_fruit_weight_g: "",
-    size_kg: {}
+    size_kg: {},
+    total_kg: ""
   });
 
   const selectedVariety = useMemo(
@@ -380,7 +387,24 @@ export function KgEntriesTab() {
 
   const weekOptions = useMemo(() => createWeekOptions(Number(form.year)), [form.year]);
 
-  const totalKg = useMemo(() => sumSizeKg(form.size_kg), [form.size_kg]);
+  const selectedProduct = useMemo(
+    () => products.find((product) => product.code === selectedVariety?.product_code),
+    [products, selectedVariety]
+  );
+
+  // Bell Peppers: kg per size, summed. Cucumbers: the total typed in.
+  const enterSizes = entersSizes(selectedProduct);
+
+  const totalKg = useMemo(() => formTotalKg(form, selectedProduct), [form, selectedProduct]);
+
+  // Imports fill yield size buckets, so they only go to varieties of a product with sizes.
+  const sizedVarieties = useMemo(
+    () =>
+      varieties.filter((variety) =>
+        entersSizes(products.find((product) => product.code === variety.product_code))
+      ),
+    [products, varieties]
+  );
 
   const kgPerM2 = useMemo(() => kgPerM2For(totalKg, selectedVariety), [selectedVariety, totalKg]);
 
@@ -400,11 +424,13 @@ export function KgEntriesTab() {
       const optionsData = (await optionsResponse.json()) as {
         varieties: VarietyOption[];
         yieldSizes: YieldSizeOption[];
+        products?: ManualKgEntryProduct[];
       };
 
       const sortedSizes = sortYieldSizes(optionsData.yieldSizes);
 
       setVarieties(optionsData.varieties);
+      setProducts(optionsData.products ?? []);
       setYieldSizes(sortedSizes);
 
       setForm((current) => {
@@ -882,7 +908,8 @@ export function KgEntriesTab() {
       setForm((current) => ({
         ...current,
         average_fruit_weight_g: "",
-        size_kg: zeroSizeKgFields(yieldSizes)
+        size_kg: zeroSizeKgFields(yieldSizes),
+        total_kg: ""
       }));
       setIsEntryModalOpen(false);
 
@@ -906,7 +933,7 @@ export function KgEntriesTab() {
     setError(null);
     setSuccessMessage(null);
 
-    const built = buildManualKgEntryPayload(form, yieldSizes);
+    const built = buildManualKgEntryPayload(form, yieldSizes, selectedProduct);
     if (!built.ok) {
       setError(built.error);
       return;
@@ -950,7 +977,8 @@ export function KgEntriesTab() {
       packed_date: entry.packed_date ?? localIsoDate(new Date()),
       average_fruit_weight_g:
         entry.average_fruit_weight_g === null ? "" : String(entry.average_fruit_weight_g),
-      size_kg: nextSizeKg
+      size_kg: nextSizeKg,
+      total_kg: String(entry.total_kg ?? "")
     });
     setError(null);
   }
@@ -964,7 +992,8 @@ export function KgEntriesTab() {
       week: String(getCurrentWeek(currentYear)),
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
-      size_kg: zeroSizeKgFields(yieldSizes)
+      size_kg: zeroSizeKgFields(yieldSizes),
+      total_kg: ""
     });
     setIsEntryModalOpen(true);
   }
@@ -979,7 +1008,8 @@ export function KgEntriesTab() {
       week: String(getCurrentWeek(currentYear)),
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
-      size_kg: zeroSizeKgFields(yieldSizes)
+      size_kg: zeroSizeKgFields(yieldSizes),
+      total_kg: ""
     });
   }
 
@@ -1248,7 +1278,8 @@ export function KgEntriesTab() {
 
     for (const entry of matchingWeekEntries) {
       const variety = varietyMap.get(entry.variety_id);
-      if (!variety) continue;
+      // A variety without a colour (Cucumbers) has no share of a pepper colour.
+      if (!variety || !variety.color) continue;
 
       if (!grouped.has(variety.color)) {
         grouped.set(variety.color, new Map());
@@ -2009,7 +2040,7 @@ export function KgEntriesTab() {
           )}
         </div>
 
-        <WeeklyKgByVarietyCard refreshKey={weeklyKgRefreshKey} />
+        <WeeklyKgByVarietyCard refreshKey={weeklyKgRefreshKey} crops={products} />
       </div>
 
       {isPdfPreviewOpen && !isSizeSetupOpen ? (
@@ -2375,7 +2406,7 @@ export function KgEntriesTab() {
                                     onChange={(event) => setReassignTargetVarietyId(event.target.value)}
                                   >
                                     <option value="">Select a variety…</option>
-                                    {varieties.map((variety) => (
+                                    {sizedVarieties.map((variety) => (
                                       <option key={variety.id} value={variety.id}>
                                         {variety.name}
                                       </option>
@@ -2874,6 +2905,7 @@ export function KgEntriesTab() {
                   />
                 </label>
 
+                {enterSizes ? (
                 <div className="yield-size-fields">
                   {yieldSizes.map((size) => (
                     <label key={size.id}>
@@ -2896,11 +2928,28 @@ export function KgEntriesTab() {
                     </label>
                   ))}
                 </div>
+                ) : null}
 
-                <label>
-                  Total kg
-                  <input type="number" value={roundTo(totalKg, 3)} readOnly />
-                </label>
+                {enterSizes ? (
+                  <label>
+                    Total kg
+                    <input type="number" value={roundTo(totalKg, 3)} readOnly />
+                  </label>
+                ) : (
+                  <label>
+                    Total harvested kg
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      value={form.total_kg ?? ""}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, total_kg: event.target.value }))
+                      }
+                    />
+                  </label>
+                )}
 
                 <label>
                   Average fruit weight (g)

@@ -12,6 +12,8 @@ export type YieldEntryForHistory = {
   id: string;
   variety_id: string;
   variety_name: string;
+  /** The variety's product; absent from a server that predates products. */
+  product_code?: string | null;
   daily_breakdowns: DailyBreakdownRecord[];
 };
 
@@ -50,7 +52,10 @@ export async function fetchYieldEntriesForHistory(
     throw new Error(`Failed to load yield entries (${response.status})`);
   }
 
-  return (await response.json()) as YieldEntryForHistory[];
+  // Pack history is part of the Bell Pepper cases workflow: its daily and
+  // weekly kg totals never include another crop's harvests (Cucumbers).
+  const entries = (await response.json()) as YieldEntryForHistory[];
+  return entries.filter((entry) => (entry.product_code ?? "bell_pepper") === "bell_pepper");
 }
 
 export function localIsoDate(date: Date): string {

@@ -21,6 +21,7 @@ const YIELD_ONLY = "aaaaaaaa-0000-4000-8000-00000000000c";
 const RED = "b0000000-0000-4000-8000-000000000001";
 
 const m0148 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0148_product_catalog.sql"), "utf8");
+const m0149 = readFileSync(path.resolve(__dirname, "../../../../supabase/migrations/0149_cucumber_product.sql"), "utf8");
 
 let db: PGlite;
 let server: Server;
@@ -51,7 +52,9 @@ async function resetDatabase() {
       (gen_random_uuid(), 'Levente', 0, 5.15, 'inactive', 'yellow', '${ORG}'),
       (gen_random_uuid(), 'Silverstone', 16644, 5.1, 'active', 'orange', '${OTHER_ORG}');
   `);
+  await db.exec(`create table yield_entries (id uuid primary key default gen_random_uuid(), variety_id uuid not null references varieties(id), size_kg jsonb not null default '{}');`);
   await db.exec(m0148);
+  await db.exec(m0149);
 }
 
 before(async () => {
@@ -103,9 +106,11 @@ const KG = { code: "kg", name: "Kilograms", dimension: "weight" };
 test("Setup → Products lists the organization's Bell Peppers in kg, with its own variety counts", async () => {
   assert.deepEqual((await call("/products")).body, {
     products: [{
-      code: "bell_pepper", name: "Bell Peppers", tracksColour: true, status: "active",
+      code: "bell_pepper", name: "Bell Peppers", tracksColour: true, tracksSizes: true, status: "active",
       defaultUnit: KG, supportedUnits: [KG], varietyCount: 2, activeVarietyCount: 1
-    }]
+    }],
+    // Cucumbers is in the catalog but off until an admin enables it.
+    available: [{ code: "cucumber", name: "Cucumbers", tracksColour: false, tracksSizes: false, defaultUnit: KG, supportedUnits: [KG] }]
   });
   assert.deepEqual((await call("/products", { org: OTHER_ORG })).body.products.map((p: any) => [p.code, p.varietyCount, p.activeVarietyCount]), [["bell_pepper", 1, 1]]);
 });
@@ -153,7 +158,8 @@ test("once an organization has two active products, a new variety must name one"
     insert into organization_products (organization_id, product_code, default_unit_code) values ('${ORG}', 'test_crop', 'piece');
   `);
   assert.deepEqual(await call("/varieties", { body: legacyVariety("C") }), { status: 400, body: { message: "product_code is required" } });
-  const created = await call("/varieties", { body: { ...legacyVariety("C"), product_code: "test_crop" } });
+  // Test Crop doesn't track colour (0149), so its variety has none.
+  const created = await call("/varieties", { body: { ...legacyVariety("C"), color: null, product_code: "test_crop" } });
   assert.equal(created.status, 201);
   assert.equal(created.body.product_code, "test_crop");
   assert.deepEqual((await call("/products")).body.products.map((p: any) => [p.name, p.defaultUnit.code, p.varietyCount]), [["Bell Peppers", "kg", 2], ["Test Crop", "piece", 1]]);

@@ -45,9 +45,19 @@ type WasteImport = {
   waste_kg: number;
 };
 
+/** An enabled product (crop) and what its yield records carry. */
+type CropOption = {
+  code: string;
+  name: string;
+  tracksColour: boolean;
+  tracksSizes: boolean;
+  status: "active" | "inactive";
+};
+
 type AnalyticsSummary = {
   sizes: YieldSize[];
   rows: AnalyticsRow[];
+  products?: CropOption[];
 };
 
 type YieldEntry = {
@@ -60,6 +70,8 @@ type YieldEntry = {
   total_kg: number;
   average_fruit_weight_g: number | null;
   size_kg?: Record<string, number>;
+  /** The variety's product; absent from a server that predates products. */
+  product_code?: string | null;
 };
 
 type ChartPoint = {
@@ -331,18 +343,31 @@ function getWeekFilterLabel(mode: WeekFilterMode, singleWeek: number, fromWeek: 
   return "Full Year";
 }
 
-function getExportFileBaseName(year: number, mode: WeekFilterMode, singleWeek: number, fromWeek: number, toWeek: number) {
+// cropSlug is set only when the organization grows more than one crop, so a
+// single-crop organization's file names are unchanged.
+function getExportFileBaseName(year: number, mode: WeekFilterMode, singleWeek: number, fromWeek: number, toWeek: number, cropSlug: string | null = null) {
+  const base = cropSlug ? `growlink-variety-summary-${cropSlug}` : "growlink-variety-summary";
+
   if (mode === "single-week") {
-    return `growlink-variety-summary-${year}-week-${singleWeek}`;
+    return `${base}-${year}-week-${singleWeek}`;
   }
 
   if (mode === "week-range") {
     const start = Math.min(fromWeek, toWeek);
     const end = Math.max(fromWeek, toWeek);
-    return `growlink-variety-summary-${year}-weeks-${start}-${end}`;
+    return `${base}-${year}-weeks-${start}-${end}`;
   }
 
-  return `growlink-variety-summary-${year}`;
+  return `${base}-${year}`;
+}
+
+function cropSlugFor(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/** Bell Peppers when the organization grows them, else its first crop. */
+function defaultCropCode(crops: CropOption[]) {
+  return crops.find((crop) => crop.code === "bell_pepper")?.code ?? crops[0]?.code ?? null;
 }
 
 function toCsvCell(value: string | number) {
@@ -487,6 +512,8 @@ export function YieldAnalyticsPage() {
   const [selectedWeek, setSelectedWeek] = useState<number>(getCurrentWeek(currentYear));
   const [fromWeek, setFromWeek] = useState<number>(1);
   const [toWeek, setToWeek] = useState<number>(getCurrentWeek(currentYear));
+  /** The crop every figure, chart and export on the page is for. */
+  const [selectedCropCode, setSelectedCropCode] = useState<string | null>(null);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportPreviewType, setExportPreviewType] = useState<ExportPreviewType | null>(null);
   /** The graph open full-screen; it renders the same memoised data as its card. */
@@ -586,14 +613,31 @@ export function YieldAnalyticsPage() {
     };
   }, [reloadKey]);
 
+  // Crops: the organization's enabled products. A server or organization
+  // without products information is treated as one crop (no filtering).
+  const crops = useMemo(() => summary?.products ?? [], [summary]);
+  const showCropSelector = crops.length > 1;
+  const cropCode = selectedCropCode && crops.some((crop) => crop.code === selectedCropCode)
+    ? selectedCropCode
+    : defaultCropCode(crops);
+  const selectedCrop = crops.find((crop) => crop.code === cropCode) ?? null;
+
+  // Every figure below — totals, kg/m², waste, size mix, charts, exports —
+  // is computed from this one list, so they always agree and one crop's kg
+  // never lands in another's.
+  const cropEntries = useMemo(() => {
+    if (!cropCode) return entries;
+    return entries.filter((entry) => (entry.product_code ?? "bell_pepper") === cropCode);
+  }, [entries, cropCode]);
+
   const { points: chartPoints, varietyIds } = useMemo(
-    () => buildChartData(entries),
-    [entries]
+    () => buildChartData(cropEntries),
+    [cropEntries]
   );
 
   const { points: fruitWeightChartPoints, varietyIds: fruitWeightVarietyIds } = useMemo(
-    () => buildAverageFruitWeightChartData(entries),
-    [entries]
+    () => buildAverageFruitWeightChartData(cropEntries),
+    [cropEntries]
   );
 
   const varietyNameById = useMemo(() => {
@@ -620,7 +664,7 @@ export function YieldAnalyticsPage() {
     const years = new Set<number>();
     years.add(currentYear);
 
-    for (const entry of entries) {
+    for (const entry of cropEntries) {
       const year = Number(entry.year);
       if (Number.isInteger(year)) {
         years.add(year);
@@ -628,10 +672,10 @@ export function YieldAnalyticsPage() {
     }
 
     return Array.from(years).sort((a, b) => b - a);
-  }, [entries, currentYear]);
+  }, [cropEntries, currentYear]);
 
   const filteredEntries = useMemo(() => {
-    return entries.filter((entry) => {
+    return cropEntries.filter((entry) => {
       const year = Number(entry.year);
       const week = Number(entry.week);
 
@@ -655,7 +699,7 @@ export function YieldAnalyticsPage() {
 
       return true;
     });
-  }, [entries, selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]);
+  }, [cropEntries, selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]);
 
   const filteredWasteKgByVarietyId = useMemo(() => {
     const map = new Map<string, number>();
@@ -693,7 +737,8 @@ export function YieldAnalyticsPage() {
       return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[], averageRow: null as AnalyticsRow | null };
     }
 
-    const sizes = summary.sizes ?? [];
+    // A crop without size buckets (Cucumbers) has no size mix columns.
+    const sizes = selectedCrop && !selectedCrop.tracksSizes ? [] : summary.sizes ?? [];
     const varietiesById = new Map<string, VarietyMeta>();
     for (const variety of varietyMeta) {
       varietiesById.set(variety.id, variety);
@@ -850,17 +895,25 @@ export function YieldAnalyticsPage() {
     }
 
     return { sizes, rows, averageRow };
-  }, [summary, varietyMeta, filteredEntries, filteredWasteKgByVarietyId, farmKgPerM2]);
+  }, [summary, selectedCrop, varietyMeta, filteredEntries, filteredWasteKgByVarietyId, farmKgPerM2]);
 
   const varietySummaryWeekLabel = useMemo(
     () => getWeekFilterLabel(weekFilterMode, selectedWeek, fromWeek, toWeek),
     [weekFilterMode, selectedWeek, fromWeek, toWeek]
   );
 
+  // Named for the crop only when there is more than one to choose from.
+  const exportCropName = showCropSelector && selectedCrop ? selectedCrop.name : null;
+
   const varietySummaryExportBaseName = useMemo(
-    () => getExportFileBaseName(selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek),
-    [selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]
+    () =>
+      getExportFileBaseName(selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek, exportCropName ? cropSlugFor(exportCropName) : null),
+    [selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek, exportCropName]
   );
+
+  const exportTitle = exportCropName
+    ? `Yield Analytics - Variety Summary - ${exportCropName}`
+    : "Yield Analytics - Variety Summary";
 
   const previewFileName = useMemo(() => {
     if (exportPreviewType === "pdf") {
@@ -877,11 +930,12 @@ export function YieldAnalyticsPage() {
   const exportPreviewSummaryParts = useMemo(
     () => [
       exportPreviewType ? exportPreviewType.toUpperCase() : "",
+      exportCropName ?? "",
       String(selectedYear),
       varietySummaryWeekLabel,
       previewFileName
     ].filter((part) => part.length > 0),
-    [exportPreviewType, selectedYear, varietySummaryWeekLabel, previewFileName]
+    [exportPreviewType, exportCropName, selectedYear, varietySummaryWeekLabel, previewFileName]
   );
 
   function openExportPreview(type: ExportPreviewType) {
@@ -971,7 +1025,7 @@ export function YieldAnalyticsPage() {
     });
 
     doc.setFontSize(16);
-    doc.text("Yield Analytics - Variety Summary", 40, 36);
+    doc.text(exportTitle, 40, 36);
 
     doc.setFontSize(11);
     doc.setTextColor(75, 90, 85);
@@ -1084,7 +1138,16 @@ export function YieldAnalyticsPage() {
 
   const averageRow = filteredVarietySummary.averageRow;
   const hasSummaryRows = filteredVarietySummary.rows.length > 0;
-  const activeFilterLabel = `${selectedYear} · ${varietySummaryWeekLabel}`;
+  const activeFilterLabel = exportCropName
+    ? `${exportCropName} · ${selectedYear} · ${varietySummaryWeekLabel}`
+    : `${selectedYear} · ${varietySummaryWeekLabel}`;
+  // With more than one crop the charts show the selected crop's varieties.
+  const chartDescription = (chart: ChartDefinition) =>
+    showCropSelector && selectedCrop
+      ? chart.description.replace("Not affected by the filters.", `${selectedCrop.name} only; not affected by the year or week filters.`)
+      : chart.description;
+  // Harvest vs Shipped reconciles pepper colours; it isn't shown for a crop without colours.
+  const showColourReconciliation = !selectedCrop || selectedCrop.tracksColour;
   const shippedIncomplete = shipped ? incompleteShippedText(shipped.totals) : null;
 
   return (
@@ -1115,11 +1178,35 @@ export function YieldAnalyticsPage() {
             <span className="ya-visually-hidden">Showing </span>
             {activeFilterLabel}
           </span>
-          <p className="ya-filters-note">Applies to the summary metrics and Variety Summary.</p>
+          <p className="ya-filters-note">
+            {showCropSelector
+              ? "Applies to the summary metrics, Variety Summary, charts and exports."
+              : "Applies to the summary metrics and Variety Summary."}
+          </p>
         </div>
 
         <div className="ya-filters-row">
           <div className="ya-filter-fields">
+            {showCropSelector ? (
+              <label className="ya-field">
+                <span className="ya-field-label">Crop</span>
+                <select
+                  className="ya-select"
+                  value={cropCode ?? ""}
+                  onChange={(event) => {
+                    setSelectedCropCode(event.target.value);
+                    setIsExportMenuOpen(false);
+                  }}
+                >
+                  {crops.map((crop) => (
+                    <option key={crop.code} value={crop.code}>
+                      {crop.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
             <label className="ya-field">
               <span className="ya-field-label">Year</span>
               <select
@@ -1410,6 +1497,7 @@ export function YieldAnalyticsPage() {
         ) : null}
       </section>
 
+      {showColourReconciliation ? (
       <section className="ya-card" aria-labelledby="ya-harvest-heading">
         <div className="ya-card-head">
           <div>
@@ -1463,6 +1551,7 @@ export function YieldAnalyticsPage() {
           </>
         ) : null}
       </section>
+      ) : null}
 
       <div className="ya-chart-grid">
         {CHARTS.map((chart) => {
@@ -1475,7 +1564,7 @@ export function YieldAnalyticsPage() {
                   <h2 id={`ya-${chart.id}-heading`} className="ya-card-title">
                     {chart.title}
                   </h2>
-                  <p className="ya-card-description">{chart.description}</p>
+                  <p className="ya-card-description">{chartDescription(chart)}</p>
                 </div>
                 {!loading && !error && hasData ? (
                   <ExpandChartButton title={chart.title} onClick={() => fullscreen.open(chart.id)} buttonRef={fullscreen.buttonRef(chart.id)} />
@@ -1507,7 +1596,7 @@ export function YieldAnalyticsPage() {
         const chart = CHARTS.find((c) => c.id === fullscreen.expanded)!;
         const data = chart.id === "kgm2" ? { points: chartPoints, ids: varietyIds } : { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds };
         return (
-          <FullscreenChartOverlay title={chart.title} description={chart.description} onClose={fullscreen.close}>
+          <FullscreenChartOverlay title={chart.title} description={chartDescription(chart)} onClose={fullscreen.close}>
             <TrendChart chart={chart} points={data.points} varietyIds={data.ids} varietyNameById={varietyNameById} />
           </FullscreenChartOverlay>
         );
@@ -1536,7 +1625,7 @@ export function YieldAnalyticsPage() {
 
               <div className="yield-analytics-export-paper">
                 <div className="yield-analytics-export-paper-header">
-                  <h3>Yield Analytics - Variety Summary</h3>
+                  <h3>{exportTitle}</h3>
                   <p>Year: {selectedYear} | Week selection: {varietySummaryWeekLabel}</p>
                 </div>
 

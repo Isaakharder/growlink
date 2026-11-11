@@ -17,7 +17,7 @@ const requireCroplinkKey = requireIntegrationKey("croplink");
 type VarietyRow = {
   id: string;
   name: string;
-  color: string;
+  color: string | null;
 };
 
 croplinkIntegrationRouter.get(

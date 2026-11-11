@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { usePermissions } from "../hooks/usePermissions";
 
 type ProductUnit = {
   code: string;
@@ -11,6 +12,7 @@ type OrganizationProduct = {
   code: string;
   name: string;
   tracksColour: boolean;
+  tracksSizes?: boolean;
   status: "active" | "inactive";
   defaultUnit: ProductUnit;
   supportedUnits: ProductUnit[];
@@ -18,12 +20,32 @@ type OrganizationProduct = {
   activeVarietyCount: number;
 };
 
+/** A catalog product the organization hasn't enabled yet. */
+type AvailableProduct = {
+  code: string;
+  name: string;
+  defaultUnit: ProductUnit;
+  supportedUnits: ProductUnit[];
+};
+
+type ProductsResponse = { products: OrganizationProduct[]; available?: AvailableProduct[] };
+
 const API_BASE = "/api/products";
 
 export function ProductsSetupPage() {
+  const { can } = usePermissions();
+  const canEdit = can("greenhouse_setup:edit");
   const [products, setProducts] = useState<OrganizationProduct[]>([]);
+  const [available, setAvailable] = useState<AvailableProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [savingCode, setSavingCode] = useState<string | null>(null);
+
+  function applyResponse(data: ProductsResponse) {
+    setProducts(data.products ?? []);
+    setAvailable(data.available ?? []);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -38,8 +60,8 @@ export function ProductsSetupPage() {
           throw new Error("Failed to load products");
         }
 
-        const data = (await res.json()) as { products: OrganizationProduct[] };
-        if (!cancelled) setProducts(data.products ?? []);
+        const data = (await res.json()) as ProductsResponse;
+        if (!cancelled) applyResponse(data);
       } catch (fetchError) {
         if (!cancelled) setError(fetchError instanceof Error ? fetchError.message : "Failed to load products");
       } finally {
@@ -53,6 +75,24 @@ export function ProductsSetupPage() {
     };
   }, []);
 
+  async function changeProduct(code: string, action: "enable" | "disable") {
+    setActionError(null);
+    setSavingCode(code);
+
+    try {
+      const res = await apiFetch(`${API_BASE}/${code}/${action}`, { method: "POST", body: "{}" });
+      const body = (await res.json().catch(() => ({}))) as Partial<ProductsResponse> & { message?: string };
+      if (!res.ok) {
+        throw new Error(body.message ?? (action === "enable" ? "Failed to enable product" : "Failed to turn off product"));
+      }
+      applyResponse(body as ProductsResponse);
+    } catch (changeError) {
+      setActionError(changeError instanceof Error ? changeError.message : "Failed to update product");
+    } finally {
+      setSavingCode(null);
+    }
+  }
+
   return (
     <section className="page-shell">
       <header>
@@ -64,6 +104,7 @@ export function ProductsSetupPage() {
         <h2>Enabled Products</h2>
 
         {error ? <p className="form-error">{error}</p> : null}
+        {actionError ? <p className="form-error" role="alert">{actionError}</p> : null}
 
         {loading ? <p>Loading...</p> : null}
 
@@ -79,6 +120,7 @@ export function ProductsSetupPage() {
                   <th>Supported units</th>
                   <th>Varieties</th>
                   <th>Status</th>
+                  {canEdit ? <th>Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -97,18 +139,87 @@ export function ProductsSetupPage() {
                         {product.status === "active" ? "Active" : "Inactive"}
                       </span>
                     </td>
+                    {canEdit ? (
+                      <td>
+                        <div className="row-actions">
+                          {product.status === "active" ? (
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={savingCode !== null}
+                              onClick={() => void changeProduct(product.code, "disable")}
+                            >
+                              {savingCode === product.code ? "Saving..." : "Turn off"}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={savingCode !== null}
+                              onClick={() => void changeProduct(product.code, "enable")}
+                            >
+                              {savingCode === product.code ? "Saving..." : "Turn on"}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : null}
-
-        <p className="form-hint">
-          GrowLink adds products and the units they support. Bell Peppers in kilograms is available today; varieties
-          are managed in Varieties Setup.
-        </p>
       </div>
+
+      {!loading && !error && available.length > 0 ? (
+        <div className="coming-soon-card">
+          <h2>Available to Enable</h2>
+          <p className="form-hint">
+            Enabling a product lets you create its varieties and record its harvests. It doesn&rsquo;t change your
+            existing products or their history.
+          </p>
+          <div className="varieties-table-wrapper">
+            <table className="varieties-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Default unit</th>
+                  <th>Supported units</th>
+                  {canEdit ? <th>Actions</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {available.map((product) => (
+                  <tr key={product.code}>
+                    <td>{product.name}</td>
+                    <td>
+                      {product.defaultUnit.name} ({product.defaultUnit.code})
+                    </td>
+                    <td>{product.supportedUnits.map((unit) => unit.code).join(", ")}</td>
+                    {canEdit ? (
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            disabled={savingCode !== null}
+                            onClick={() => void changeProduct(product.code, "enable")}
+                          >
+                            {savingCode === product.code ? "Enabling..." : `Enable ${product.name}`}
+                          </button>
+                        </div>
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      <p className="form-hint">
+        GrowLink adds products and the units they support. Varieties are managed in Varieties Setup.
+      </p>
     </section>
   );
 }

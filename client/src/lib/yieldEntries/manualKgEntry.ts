@@ -23,6 +23,15 @@ export type ManualKgEntryForm = {
   packed_date: string;
   average_fruit_weight_g: string;
   size_kg: Record<string, string>;
+  /** The harvest's kg for a product without size buckets (Cucumbers). */
+  total_kg?: string;
+};
+
+/** What the form needs to know about the selected variety's product. */
+export type ManualKgEntryProduct = {
+  code: string;
+  name: string;
+  tracksSizes: boolean;
 };
 
 export type ManualKgEntryPayload = {
@@ -31,6 +40,8 @@ export type ManualKgEntryPayload = {
   week: number;
   packed_date: string | null;
   size_kg: Record<string, number>;
+  /** Sent only for a product without size buckets; Bell Pepper totals are summed from sizes. */
+  total_kg?: number;
   average_fruit_weight_g: number | null;
 };
 
@@ -57,6 +68,16 @@ export function sumSizeKg(sizeKg: Record<string, string>) {
   return Object.values(sizeKg).reduce((sum, value) => sum + numberOrZero(value), 0);
 }
 
+/** True when the product's harvests are kg per size (Bell Peppers, and any variety whose product is unknown). */
+export function entersSizes(product: ManualKgEntryProduct | undefined) {
+  return product?.tracksSizes !== false;
+}
+
+/** The form's live total: summed sizes, or the total typed for a product without sizes. */
+export function formTotalKg(form: ManualKgEntryForm, product: ManualKgEntryProduct | undefined) {
+  return entersSizes(product) ? sumSizeKg(form.size_kg) : numberOrZero(form.total_kg ?? "");
+}
+
 /** kg/m² for the variety, or null when it has no area. */
 export function kgPerM2For(totalKg: number, variety: ManualKgEntryVariety | undefined) {
   if (!variety || variety.area_m2 <= 0) {
@@ -77,22 +98,39 @@ export function totalCasesFor(totalKg: number, variety: ManualKgEntryVariety | u
  * The payload for the form, or the first validation message, checked in
  * this order: variety, size kg, year, week, average fruit weight. Sizes are
  * sent for every yield size, in the given order, blanks as 0.
+ *
+ * For a product without size buckets (Cucumbers) the harvest is the typed
+ * total kg instead: no sizes are sent and the total is required.
  */
 export function buildManualKgEntryPayload(
   form: ManualKgEntryForm,
-  yieldSizes: YieldSizeOption[]
+  yieldSizes: YieldSizeOption[],
+  product?: ManualKgEntryProduct
 ): { ok: true; payload: ManualKgEntryPayload } | { ok: false; error: string } {
   if (!form.variety_id) {
     return { ok: false, error: "Variety is required." };
   }
 
   const payloadSizeKg: Record<string, number> = {};
-  for (const size of yieldSizes) {
-    const kg = numberOrZero(form.size_kg[size.id] ?? "0");
-    if (kg < 0) {
+  let totalKg: number | undefined;
+
+  if (entersSizes(product)) {
+    for (const size of yieldSizes) {
+      const kg = numberOrZero(form.size_kg[size.id] ?? "0");
+      if (kg < 0) {
+        return { ok: false, error: "Kg values must be 0 or greater." };
+      }
+      payloadSizeKg[size.id] = kg;
+    }
+  } else {
+    const raw = (form.total_kg ?? "").trim();
+    totalKg = Number(raw);
+    if (raw === "" || !Number.isFinite(totalKg)) {
+      return { ok: false, error: "Total kg is required." };
+    }
+    if (totalKg < 0) {
       return { ok: false, error: "Kg values must be 0 or greater." };
     }
-    payloadSizeKg[size.id] = kg;
   }
 
   const payload: ManualKgEntryPayload = {
@@ -101,6 +139,7 @@ export function buildManualKgEntryPayload(
     week: Number(form.week),
     packed_date: form.packed_date || null,
     size_kg: payloadSizeKg,
+    ...(totalKg === undefined ? {} : { total_kg: totalKg }),
     average_fruit_weight_g:
       form.average_fruit_weight_g.trim() === ""
         ? null

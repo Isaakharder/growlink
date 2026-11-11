@@ -8,7 +8,9 @@ import {
   roundKg1,
   tableHeader,
   weeklyKgCsv,
+  weeklyKgCrops,
   weeklyKgFileBase,
+  weeklyKgSourceForCrop,
   type WeeklyKgByVarietySource
 } from "../weeklyKgByVariety";
 
@@ -202,5 +204,42 @@ describe("parseWeeklyKgSource", () => {
     ["an entry with unreadable kg", { ...good, entries: [{ variety_id: "v-a", week: 3, total_kg: "abc" }] }]
   ])("rejects %s rather than showing a partial season", (_label, body) => {
     expect(() => parseWeeklyKgSource(body)).toThrow("Weekly kg by variety came back incomplete");
+  });
+});
+
+describe("Weekly kg by Variety — one crop at a time", () => {
+  const mixed: WeeklyKgByVarietySource = {
+    year: 2026,
+    years: [2026],
+    entryCount: 3,
+    varieties: [
+      { id: "v-cad", name: "Cadalora", status: "active", productCode: "bell_pepper" },
+      { id: "v-bon", name: "Bonbon", status: "active", productCode: "cucumber" },
+      { id: "v-old", name: "Legacy", status: "inactive" }
+    ],
+    entries: [
+      { variety_id: "v-cad", week: 10, total_kg: 100 },
+      { variety_id: "v-bon", week: 10, total_kg: 700 },
+      { variety_id: "v-old", week: 11, total_kg: 50 }
+    ]
+  };
+
+  it("lists the year's crops, Bell Peppers first; a variety without a product is Bell Peppers", () => {
+    expect(weeklyKgCrops(mixed)).toEqual(["bell_pepper", "cucumber"]);
+  });
+
+  it("keeps each crop's weekly and season totals to its own kg", () => {
+    const peppers = buildWeeklyKgTable(weeklyKgSourceForCrop(mixed, "bell_pepper"))!;
+    expect(peppers.columns.map((c) => c.id)).toEqual(["v-cad", "v-old"]);
+    expect(peppers.seasonTotal).toBe(150);
+    expect(peppers.entryCount).toBe(2);
+    const cucumbers = buildWeeklyKgTable(weeklyKgSourceForCrop(mixed, "cucumber"))!;
+    expect(cucumbers.seasonTotal).toBe(700);
+    expect(cucumbers.rows.map((r) => r.week)).toEqual([10]);
+  });
+
+  it("names files for the crop only when asked", () => {
+    expect(weeklyKgFileBase(2026)).toBe("weekly-kg-by-variety-2026");
+    expect(weeklyKgFileBase(2026, "cucumbers")).toBe("weekly-kg-by-variety-cucumbers-2026");
   });
 });

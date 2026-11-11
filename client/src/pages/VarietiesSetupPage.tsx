@@ -14,9 +14,19 @@ type Variety = {
   planting_date: string | null;
   pull_out_date: string | null;
   status: VarietyStatus;
-  color: VarietyColor;
+  /** Null for a product that doesn't track colour (Cucumbers). */
+  color: VarietyColor | null;
+  product_code: string;
   created_at: string;
   updated_at: string;
+};
+
+/** An enabled product from Setup → Products. */
+type ProductOption = {
+  code: string;
+  name: string;
+  tracksColour: boolean;
+  status: "active" | "inactive";
 };
 
 type VarietyFormState = {
@@ -27,6 +37,7 @@ type VarietyFormState = {
   pull_out_date: string;
   status: VarietyStatus;
   color: VarietyColor;
+  product_code: string;
 };
 
 type YieldSize = {
@@ -46,6 +57,7 @@ type YieldSizeFormState = {
 
 const API_BASE = apiUrl("/api/varieties");
 const YIELD_SIZES_API_BASE = apiUrl("/api/yield-sizes");
+const PRODUCTS_API_BASE = apiUrl("/api/products");
 
 const INITIAL_FORM: VarietyFormState = {
   name: "",
@@ -54,7 +66,8 @@ const INITIAL_FORM: VarietyFormState = {
   planting_date: "",
   pull_out_date: "",
   status: "active",
-  color: "red"
+  color: "red",
+  product_code: ""
 };
 
 const INITIAL_SIZE_FORM: YieldSizeFormState = {
@@ -71,11 +84,14 @@ function toFormState(variety: Variety): VarietyFormState {
     planting_date: variety.planting_date ?? "",
     pull_out_date: variety.pull_out_date ?? "",
     status: variety.status,
-    color: variety.color
+    // A colourless variety moved to Bell Peppers starts from the usual default.
+    color: variety.color ?? "red",
+    product_code: variety.product_code
   };
 }
 
-function toPayload(form: VarietyFormState) {
+// A variety of a product without colours (Cucumbers) is saved with none.
+function toPayload(form: VarietyFormState, product: ProductOption | undefined) {
   return {
     name: form.name.trim(),
     area_m2: Number(form.area_m2),
@@ -83,8 +99,13 @@ function toPayload(form: VarietyFormState) {
     planting_date: form.planting_date || null,
     pull_out_date: form.pull_out_date || null,
     status: form.status,
-    color: form.color
+    product_code: form.product_code,
+    color: product?.tracksColour === false ? null : form.color
   };
+}
+
+function colorLabel(color: VarietyColor) {
+  return color.charAt(0).toUpperCase() + color.slice(1);
 }
 
 function toSizeFormState(size: YieldSize): YieldSizeFormState {
@@ -105,6 +126,7 @@ function toSizePayload(form: YieldSizeFormState) {
 
 export function VarietiesSetupPage() {
   const [varieties, setVarieties] = useState<Variety[]>([]);
+  const [products, setProducts] = useState<ProductOption[]>([]);
   const [sizes, setSizes] = useState<YieldSize[]>([]);
   const [loading, setLoading] = useState(true);
   const [sizesLoading, setSizesLoading] = useState(true);
@@ -164,6 +186,36 @@ export function VarietiesSetupPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    async function fetchProducts() {
+      try {
+        const response = await apiFetch(PRODUCTS_API_BASE);
+        if (!response.ok) throw new Error("Failed to load products");
+        const data = (await response.json()) as { products?: ProductOption[] };
+        if (!cancelled) setProducts(data.products ?? []);
+      } catch (fetchError) {
+        if (!cancelled) setError(fetchError instanceof Error ? fetchError.message : "Failed to load products");
+      }
+    }
+    void fetchProducts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const productByCode = new Map(products.map((product) => [product.code, product]));
+  const selectedProduct = productByCode.get(form.product_code);
+  // New varieties go to a product the organization is using; an existing
+  // variety also lists its own product, even if that is turned off.
+  const productChoices = products.filter(
+    (product) => product.status === "active" || product.code === form.product_code
+  );
+  const defaultProductCode =
+    products.find((product) => product.code === "bell_pepper" && product.status === "active")?.code ??
+    products.find((product) => product.status === "active")?.code ??
+    "";
+
+  useEffect(() => {
     void fetchSizes();
   }, []);
 
@@ -171,7 +223,12 @@ export function VarietiesSetupPage() {
     event.preventDefault();
     setError(null);
 
-    const payload = toPayload(form);
+    const payload = toPayload(form, selectedProduct);
+
+    if (!payload.product_code) {
+      setError("Choose a product for this variety.");
+      return;
+    }
 
     if (!payload.name) {
       setError("Variety name is required.");
@@ -226,7 +283,7 @@ export function VarietiesSetupPage() {
 
   function openAddModal() {
     setEditingId(null);
-    setForm(INITIAL_FORM);
+    setForm({ ...INITIAL_FORM, product_code: defaultProductCode });
     setError(null);
     setIsModalOpen(true);
   }
@@ -403,6 +460,7 @@ export function VarietiesSetupPage() {
               <thead>
                 <tr>
                   <th>Name</th>
+                  <th>Product</th>
                   <th>Color</th>
                   <th>Area m²</th>
                   <th>Case kg</th>
@@ -416,15 +474,18 @@ export function VarietiesSetupPage() {
                 {varieties.map((variety) => (
                   <tr key={variety.id}>
                     {(() => {
-                      const color = variety.color ?? "red";
+                      const color = variety.color;
 
                       return (
                         <>
                           <td>{variety.name}</td>
+                          <td>{productByCode.get(variety.product_code)?.name ?? variety.product_code}</td>
                           <td>
-                            <span className={`color-badge ${color}`}>
-                              {color.charAt(0).toUpperCase() + color.slice(1)}
-                            </span>
+                            {color ? (
+                              <span className={`color-badge ${color}`}>{colorLabel(color)}</span>
+                            ) : (
+                              <span className="form-hint" aria-label="No colour">—</span>
+                            )}
                           </td>
                           <td>{variety.area_m2}</td>
                           <td>{variety.case_kg}</td>
@@ -548,6 +609,24 @@ export function VarietiesSetupPage() {
               </label>
 
               <label>
+                Product
+                <select
+                  value={form.product_code}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, product_code: event.target.value }))
+                  }
+                  required
+                >
+                  {productChoices.length === 0 ? <option value="">No products enabled</option> : null}
+                  {productChoices.map((product) => (
+                    <option key={product.code} value={product.code}>
+                      {product.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
                 Area in m²
                 <input
                   type="number"
@@ -619,6 +698,7 @@ export function VarietiesSetupPage() {
                 </select>
               </label>
 
+              {selectedProduct?.tracksColour === false ? null : (
               <label>
                 Color
                 <select
@@ -636,6 +716,7 @@ export function VarietiesSetupPage() {
                   <option value="green">Green</option>
                 </select>
               </label>
+              )}
 
               <div className="form-actions">
                 <button type="submit" disabled={saving}>
