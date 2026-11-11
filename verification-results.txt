@@ -1,0 +1,71 @@
+PASS  0152: the farm's sizes are Bell Peppers sizes, ids/order/status kept (Small, Large, XL, Jumbo retired)
+PASS  Varieties: Crop dropdown lists Bell Peppers, Cucumbers
+PASS  Varieties: opens on Bell Peppers
+PASS  Varieties: Bell Peppers lists Cadalora, Sunny, Lucinda
+PASS  Varieties: Bell Pepper sizes Small 1 Active, Large 2 Active, XL 3 Active, Jumbo 4 Inactive
+PASS  Varieties: Cucumbers starts with no varieties
+PASS  Varieties: Cucumbers starts with no sizes (single total)
+PASS  Add Variety: inherits Crop: Cucumbers
+PASS  Add Variety: a cucumber variety has no colour field
+PASS  Varieties: Cucumbers lists Bonbon only
+PASS  Manual Entry (kg, no cucumber sizes): single Total harvested kg field
+PASS  Saved: Bonbon W30 kg total-only 500 kg {}
+PASS  Manual Entry: Cucumbers in pieces → Enter Pieces
+PASS  Manual Entry (pieces, no cucumber sizes): single Total harvested pieces field
+PASS  Saved: Bonbon W31 piece count without sizes 4000 {}
+PASS  Add Size: inherits Crop: Cucumbers
+PASS  Add Size: duplicate in one crop → "Cucumbers already has a size named Large."
+PASS  Varieties: Cucumbers sizes Large 1 Active, Straight 2 Active, Crooked 3 Active (own list, own order)
+PASS  Varieties: Bell Pepper sizes unchanged after adding cucumber sizes
+PASS  Sizes: the cucumber Large is its own size, not the pepper Large
+PASS  Manual Entry (pieces): cucumber sizes Large (pcs), Straight (pcs), Crooked (pcs)
+PASS  Manual Entry (pieces): size fields take whole counts (step 1)
+PASS  Manual Entry (pieces): 12.5 refused
+PASS  Manual Entry (pieces): Total pieces = 3,000 + 1,500 + 500 = 5,000
+PASS  Manual Entry (pieces): Pieces/m² 0.833
+PASS  Saved: Bonbon W32 piece count with sizes 5000 {"208bc59c-cf92-4d1e-a215-ef92dd0b45bc":1500,"31e7a412-9552-49ea-bb10-7af8a9b067b1":3000,"4d6a790b-17e3-423c-a247-291f0b7c206e":500}
+PASS  Manual Entry: second W31 count asks to add to the weekly count
+PASS  Combined W31: total 5000 (4,000 not sized + 1,000 sized) {"208bc59c-cf92-4d1e-a215-ef92dd0b45bc":400,"31e7a412-9552-49ea-bb10-7af8a9b067b1":600,"4d6a790b-17e3-423c-a247-291f0b7c206e":0}
+PASS  Edit W31 pieces: Large (pcs), Straight (pcs), Crooked (pcs), Not sized (pcs)
+PASS  Edit W31 pieces: Not sized 4,000, total 5,000
+PASS  Edit W31 pieces: saved total 5050 (4,000 still not sized)
+PASS  Manual Entry (kg): cucumber sizes Large (kg), Straight (kg), Crooked (kg)
+PASS  Manual Entry (kg): size fields take decimals (step 0.01)
+PASS  Manual Entry (kg): Total kg = 120.5 + 79.5
+PASS  Combined W30 kg: total 700 (500 not sized + 200 sized) {"208bc59c-cf92-4d1e-a215-ef92dd0b45bc":79.5,"31e7a412-9552-49ea-bb10-7af8a9b067b1":120.5,"4d6a790b-17e3-423c-a247-291f0b7c206e":0}
+PASS  Edit W30 kg: Not sized 500, total 700
+PASS  API: a total-only Bonbon W29 kg harvest (as an older client sends)
+PASS  Edit W29: a total-only harvest opens as its total; no sizes invented
+PASS  Edit W29: saved 660 kg, still no sizes
+PASS  Manual Entry: Cadalora shows the active Bell Pepper sizes Small (kg), Large (kg), XL (kg) (Jumbo retired)
+PASS  Manual Entry: switching to Bonbon shows cucumber sizes, the pepper Large 55 not carried over
+PASS  Manual Entry: back to Cadalora, sizes start from 0
+PASS  History: Cadalora W20 carries 100 kg of the retired Jumbo
+PASS  History: re-saving W20 with Jumbo keeps it (total 6000 = 6000)
+PASS  Edit Cadalora W20: Small (kg), Large (kg), XL (kg), Jumbo (kg) · retired
+PASS  Edit Cadalora W20: Jumbo 100 kg readable, total 6000
+PASS  Edit Cadalora W20 saved from the form: Jumbo and the total kept
+PASS  Server refuses a pepper size on a cucumber harvest: 400 "One or more sizes are not Cucumbers sizes."
+PASS  Server refuses a cucumber size on a pepper harvest: 400 "One or more sizes are not Bell Peppers sizes."
+PASS  Server refuses another organization's size: 400 "One or more sizes are not Bell Peppers sizes."
+PASS  Server refuses a retired size on a new harvest: 400 "A retired Bell Peppers size can't be used for a new harvest."
+PASS  Server: deleting a size on recorded harvests → 409 "This size is on recorded harvests. Set it to Inactive to retire it; its history stays readable."
+PASS  Manual Entry: a retired cucumber size leaves new entries
+PASS  History: W32 keeps its 500 Crooked pieces after Crooked is retired
+PASS  Analytics Bell Peppers: Variety Summary identical before and after
+PASS  Analytics Bell Peppers: CSV identical (Variety,Entries,Total kg,Waste %,Avg fw (g),kg / m2,Small %,Large %,XL %,Jumbo %)
+PASS  Analytics Cucumbers: size columns Large %, Straight %, Crooked %, Not sized %
+PASS  Analytics Cucumbers: no pepper sizes
+PASS  Analytics CSV kg row: Bonbon kg 9% 6% 0% 85%
+PASS  Analytics CSV pieces row: Bonbon pieces 36% 19% 5% 40%
+INFO  Cucumbers CSV growlink-variety-summary-cucumbers-2026.csv:
+        Variety,Unit,Entries,Total kg,Total pieces,Waste %,Avg fw (g),kg / m2,Pieces / m2,Large %,Straight %,Crooked %,Not sized %
+        Bonbon,kg,2,1360,,0.0%,0,0.2,,9%,6%,0%,85%
+        Bonbon,pieces,2,,10050,,,,1.7,36%,19%,5%,40%
+        Average,kg,2,1360,,0.0%,-,0.2,,9%,6%,0%,85%
+        Average,pieces,2,,10050,,,,1.7,36%,19%,5%,40%
+PASS  Database: Bell Pepper harvests unchanged (Greenhouse Test Farm 39 entries 145980 kg; Pepper Only Farm 1 entries 4100 kg)
+PASS  Pepper-only farm: Crop dropdown Bell Peppers
+PASS  Pepper-only farm: its own size list Medium
+
+63/63 checks passed
