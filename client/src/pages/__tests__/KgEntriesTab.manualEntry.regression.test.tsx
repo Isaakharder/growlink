@@ -146,9 +146,9 @@ describe("desktop manual kg entry — pinned behaviour", () => {
       "/api/yield-entries?year=2026&week=33",
       "/api/yield-entries",
       "/api/yield-entries?year=2026&week=33",
-      "/api/yield-entries/recent?limit=7"
+      "/api/yield-entries/recent?limit=7&units=all"
     ]));
-    await waitFor(() => expect(calls.filter(weekly).map((c) => [c.method, c.path])).toEqual([["GET", "/api/yield-entries/weekly-by-variety"]]));
+    await waitFor(() => expect(calls.filter(weekly).map((c) => [c.method, c.path])).toEqual([["GET", "/api/yield-entries/weekly-by-variety?units=all"]]));
   });
 
   it("sends null for a blank average fruit weight and a cleared packed date", async () => {

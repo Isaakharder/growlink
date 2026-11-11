@@ -75,8 +75,24 @@ export function productView(product: OrganizationProduct) {
     name: product.name,
     tracksColour: product.tracksColour,
     tracksSizes: product.tracksSizes,
-    status: product.status
+    status: product.status,
+    defaultUnitCode: product.defaultUnitCode
   };
+}
+
+/** The units a catalog product can be recorded in (catalog_product_units). */
+export async function loadSupportedUnitCodes(productCode: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("catalog_product_units")
+    .select("unit_code")
+    .eq("product_code", productCode);
+  if (error) throw error;
+  return ((data ?? []) as Array<{ unit_code: string }>).map((row) => row.unit_code);
+}
+
+/** "Kilograms (kg)", "Pieces (pcs)": how a unit is named to users. */
+export function unitLabel(code: string): string {
+  return code === "kg" ? "Kilograms (kg)" : code === "pcs" ? "Pieces (pcs)" : code;
 }
 
 // Yield imports (FlowMaster PDF/CSV, CSV templates, the Agent review queue)

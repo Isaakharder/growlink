@@ -96,7 +96,7 @@ describe("Weekly kg by Variety card", () => {
     render(<WeeklyKgByVarietyCard refreshKey={0} />);
     expect(within(card()).getByRole("status")).toHaveTextContent("Loading weekly kg by variety…");
     await within(card()).findByRole("table");
-    expect(weeklyCalls()[0].path).toBe("/api/yield-entries/weekly-by-variety");
+    expect(weeklyCalls()[0].path).toBe("/api/yield-entries/weekly-by-variety?units=all");
     expect(within(card()).getByLabelText("Year")).toHaveValue("2026");
     expect(within(within(card()).getByLabelText("Year")).getAllByRole("option").map((o) => o.textContent)).toEqual(["2026", "2025"]);
 
@@ -117,7 +117,7 @@ describe("Weekly kg by Variety card", () => {
     await within(card()).findByRole("table");
     await user.selectOptions(within(card()).getByLabelText("Year"), "2025");
     await waitFor(() => expect(tableText()[0]).toEqual(["Week", "Levente (inactive)", "Weekly total"]));
-    expect(weeklyCalls().map((c) => c.path)).toEqual(["/api/yield-entries/weekly-by-variety", "/api/yield-entries/weekly-by-variety?year=2025"]);
+    expect(weeklyCalls().map((c) => c.path)).toEqual(["/api/yield-entries/weekly-by-variety?units=all", "/api/yield-entries/weekly-by-variety?year=2025&units=all"]);
     expect(tableText().slice(1)).toEqual([
       ["Week 50", "7.0", "7.0"],
       ["Season total", "7.0", "7.0"]
@@ -225,7 +225,7 @@ describe("Weekly kg by Variety in the Manual Entry tab", () => {
     await waitFor(() => expect(weeklyCalls().length).toBeGreaterThan(before));
     await waitFor(() => expect(tableText().map((r) => r[0])).toContain("Week 34"));
     // Still the selected year (2026): the refresh keeps it.
-    expect(weeklyCalls()[weeklyCalls().length - 1].path).toMatch(/weekly-by-variety(\?year=2026)?$/);
+    expect(weeklyCalls()[weeklyCalls().length - 1].path).toMatch(/weekly-by-variety\?(year=2026&)?units=all$/);
   });
 });
 

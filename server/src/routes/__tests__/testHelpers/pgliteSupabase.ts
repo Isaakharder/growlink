@@ -2,12 +2,14 @@
 // tests run real SQL — table constraints, unique keys, RLS-free service-role
 // access and plpgsql functions — with no server, Docker or network.
 // Implements only what the routes under test use: select / eq / neq / gte /
-// lte / gt / not(col,"is",null) / order / limit / range / maybeSingle /
-// single / upsert (onConflict, ignoreDuplicates) / insert / update / delete /
-// rpc. Identifiers come from the code under test, never from request input.
+// lte / gt / not(col,"is",null) / or (flat PostgREST or/and groups of
+// eq/lt/gt/lte/gte/is.null) / order (nullsFirst) / limit / range /
+// select(cols, { count: "exact" }) / maybeSingle / single / upsert
+// (onConflict, ignoreDuplicates) / insert / update / delete / rpc.
+// Identifiers come from the code under test, never from request input.
 import type { PGlite } from "@electric-sql/pglite";
 
-type Result = { data: unknown; error: { message: string; code?: string } | null };
+type Result = { data: unknown; error: { message: string; code?: string } | null; count?: number | null };
 
 const toParam = (v: unknown) => (v !== null && typeof v === "object" ? JSON.stringify(v) : v);
 
@@ -25,6 +27,7 @@ export function createPgliteSupabase(db: PGlite) {
       | { kind: "delete" }
       | null = null;
     let returning: string | null = null;
+    let countExact = false;
 
     const p = (v: unknown) => {
       params.push(toParam(v));
@@ -57,10 +60,45 @@ export function createPgliteSupabase(db: PGlite) {
       return `insert into public.${table} (${cols.join(", ")}) values ${values.join(", ")}${conflict}${ret}`;
     }
 
+    // PostgREST's or=(...) grammar, flat or nested: "a.lt.1,and(b.eq.2,c.is.null)".
+    function orFilter(filter: string): string {
+      const split = (text: string) => {
+        const parts: string[] = [];
+        let depth = 0;
+        let current = "";
+        for (const ch of text) {
+          if (ch === "(") depth += 1;
+          if (ch === ")") depth -= 1;
+          if (ch === "," && depth === 0) {
+            parts.push(current);
+            current = "";
+          } else current += ch;
+        }
+        if (current) parts.push(current);
+        return parts;
+      };
+      const ops: Record<string, string> = { eq: "=", lt: "<", gt: ">", lte: "<=", gte: ">=" };
+      const term = (text: string): string => {
+        if (text.startsWith("and(") && text.endsWith(")")) return `(${split(text.slice(4, -1)).map(term).join(" and ")})`;
+        if (text.startsWith("or(") && text.endsWith(")")) return `(${split(text.slice(3, -1)).map(term).join(" or ")})`;
+        const [col, op, ...rest] = text.split(".");
+        const value = rest.join(".");
+        if (op === "is" && value === "null") return `${col} is null`;
+        if (!ops[op]) throw new Error(`pglite adapter: unsupported or() operator ${op}`);
+        return `${col} ${ops[op]} ${p(value)}`;
+      };
+      return `(${split(filter).map(term).join(" or ")})`;
+    }
+
     async function run(): Promise<Result> {
       try {
         const text = sql();
         const res = await db.query<Record<string, unknown>>(text, params);
+        if (countExact && !mutation) {
+          const w = where.length ? ` where ${where.join(" and ")}` : "";
+          const counted = await db.query<{ n: number }>(`select count(*)::int n from public.${table}${w}`, params);
+          return { data: res.rows, error: null, count: counted.rows[0]?.n ?? 0 };
+        }
         return { data: mutation && !returning ? null : res.rows, error: null };
       } catch (e) {
         const err = e as { message: string; code?: string };
@@ -69,11 +107,13 @@ export function createPgliteSupabase(db: PGlite) {
     }
 
     const builder = {
-      select(cols = "*") {
+      select(cols = "*", o?: { count?: string }) {
         if (mutation) returning = cols;
         else columns = cols;
+        if (o?.count === "exact") countExact = true;
         return builder;
       },
+      or: (filter: string) => (where.push(orFilter(filter)), builder),
       eq: (c: string, v: unknown) => (where.push(`${c} = ${p(v)}`), builder),
       neq: (c: string, v: unknown) => (where.push(`${c} is distinct from ${p(v)}`), builder),
       gt: (c: string, v: unknown) => (where.push(`${c} > ${p(v)}`), builder),
@@ -85,7 +125,12 @@ export function createPgliteSupabase(db: PGlite) {
         where.push(`${c} is not null`);
         return builder;
       },
-      order: (c: string, o?: { ascending?: boolean }) => (orderBy.push(`${c} ${o?.ascending === false ? "desc" : "asc"}`), builder),
+      order: (c: string, o?: { ascending?: boolean; nullsFirst?: boolean }) => (
+        orderBy.push(
+          `${c} ${o?.ascending === false ? "desc" : "asc"}${o?.nullsFirst === undefined ? "" : o.nullsFirst ? " nulls first" : " nulls last"}`
+        ),
+        builder
+      ),
       limit: (n: number) => ((limit = n), builder),
       range: (a: number, b: number) => ((offset = a), (limit = b - a + 1), builder),
       upsert: (rows: Record<string, unknown> | Record<string, unknown>[], o?: { onConflict?: string; ignoreDuplicates?: boolean }) => (

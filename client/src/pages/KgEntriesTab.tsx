@@ -18,7 +18,14 @@ import {
   type ManualKgEntryForm,
   type ManualKgEntryPayload,
   type ManualKgEntryProduct,
-  type YieldSizeOption
+  type YieldSizeOption,
+  buildPieceEntryPayload,
+  entryUnitOf,
+  newEntryUnit,
+  piecesPerM2For,
+  formTotalPieces,
+  type EntryUnit,
+  type PieceEntryPayload
 } from "../lib/yieldEntries/manualKgEntry";
 
 type VarietyStatus = "active" | "inactive";
@@ -59,15 +66,35 @@ type YieldEntry = {
   daily_breakdowns: DailyBreakdown[];
 };
 
+/** A piece count (migration 0151): whole pieces, no kg, cases or fruit weight. */
+type PieceEntry = {
+  id: string;
+  variety_id: string;
+  variety_name: string;
+  year: number;
+  week: number;
+  packed_date: string | null;
+  unit_code: "pcs";
+  total_pieces: number;
+  pieces_per_m2: number | null;
+};
+
+/** A row of Recent Entries: a kg harvest or a piece count. */
+type RecentEntry = (YieldEntry & { unit_code?: "kg" }) | PieceEntry;
+
+const isPieceEntry = (entry: RecentEntry): entry is PieceEntry => entryUnitOf(entry) === "pcs";
+
 type RecentEntriesResponse = {
-  entries: YieldEntry[];
+  entries: RecentEntry[];
   nextCursor: string | null;
   hasMore: boolean;
 };
 
 const OPTIONS_URL = "/api/yield-entry-options";
 const ENTRIES_URL = "/api/yield-entries";
+// units=all: Recent Entries lists piece counts beside kg harvests.
 const RECENT_ENTRIES_URL = "/api/yield-entries/recent";
+const RECENT_UNITS = "&units=all";
 const RECENT_ENTRIES_INITIAL_LIMIT = 7;
 const RECENT_ENTRIES_PAGE_LIMIT = 25;
 const PDF_PREVIEW_URL = "/api/pdf-import/preview";
@@ -314,7 +341,7 @@ export function KgEntriesTab() {
   // as "Show more entries" is clicked; recentEntriesCollapsed toggles
   // between showing just the newest 7 and the full loaded list so
   // "Show less" doesn't need to discard already-fetched data.
-  const [loadedRecentEntries, setLoadedRecentEntries] = useState<YieldEntry[]>([]);
+  const [loadedRecentEntries, setLoadedRecentEntries] = useState<RecentEntry[]>([]);
   const [recentEntriesCursor, setRecentEntriesCursor] = useState<string | null>(null);
   const [recentEntriesHasMore, setRecentEntriesHasMore] = useState(false);
   const [recentEntriesCollapsed, setRecentEntriesCollapsed] = useState(true);
@@ -329,7 +356,8 @@ export function KgEntriesTab() {
     varietyName: string;
     week: number;
     year: number;
-    payload: ManualKgEntryPayload;
+    payload: ManualKgEntryPayload | PieceEntryPayload;
+    unit: EntryUnit;
   } | null>(null);
   const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
   const [pdfPreviewUploading, setPdfPreviewUploading] = useState(false);
@@ -370,6 +398,8 @@ export function KgEntriesTab() {
   const [sizeSetupExiting, setSizeSetupExiting] = useState(false);
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The unit of the entry being edited: an old harvest opens in the unit it was recorded in.
+  const [editingUnit, setEditingUnit] = useState<EntryUnit | null>(null);
   const [form, setForm] = useState<ManualKgEntryForm>({
     variety_id: "",
     year: String(currentYear),
@@ -377,7 +407,8 @@ export function KgEntriesTab() {
     packed_date: localIsoDate(new Date()),
     average_fruit_weight_g: "",
     size_kg: {},
-    total_kg: ""
+    total_kg: "",
+    total_pieces: ""
   });
 
   const selectedVariety = useMemo(
@@ -392,10 +423,16 @@ export function KgEntriesTab() {
     [products, selectedVariety]
   );
 
-  // Bell Peppers: kg per size, summed. Cucumbers: the total typed in.
-  const enterSizes = entersSizes(selectedProduct);
+  // A new harvest is entered in its crop's default unit; an edit keeps the entry's own unit.
+  const formUnit: EntryUnit = editingId && editingUnit ? editingUnit : newEntryUnit(selectedProduct);
+  const enterPieces = formUnit === "pcs";
+
+  // Bell Peppers: kg per size, summed. Cucumbers in kg: the total typed in.
+  const enterSizes = !enterPieces && entersSizes(selectedProduct);
 
   const totalKg = useMemo(() => formTotalKg(form, selectedProduct), [form, selectedProduct]);
+  const totalPieces = formTotalPieces(form);
+  const piecesPerM2 = totalPieces === null ? null : piecesPerM2For(totalPieces, selectedVariety);
 
   // Imports fill yield size buckets, so they only go to varieties of a product with sizes.
   const sizedVarieties = useMemo(
@@ -479,13 +516,15 @@ export function KgEntriesTab() {
   async function checkExistingWeekEntry(
     varietyId: string,
     year: number,
-    week: number
-  ): Promise<YieldEntry | null> {
+    week: number,
+    unit: EntryUnit
+  ): Promise<RecentEntry | null> {
     try {
-      const res = await apiFetch(weekEntriesUrl(year, week));
+      const res = await apiFetch(weekEntriesUrl(year, week, { withPieces: unit === "pcs" }));
       if (!res.ok) return null;
-      const data = (await res.json()) as YieldEntry[];
-      return findExistingWeekEntry(data, varietyId);
+      const data = (await res.json()) as RecentEntry[];
+      // Only an entry in the same unit is added to; a kg harvest and a piece count stay apart.
+      return findExistingWeekEntry(data, varietyId, unit);
     } catch {
       return null;
     }
@@ -503,7 +542,7 @@ export function KgEntriesTab() {
     const limit = Math.max(loadedRecentEntries.length, RECENT_ENTRIES_INITIAL_LIMIT);
 
     try {
-      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${limit}`);
+      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${limit}${RECENT_UNITS}`);
       if (!res.ok) return;
       const body = (await res.json()) as RecentEntriesResponse;
       setLoadedRecentEntries(body.entries);
@@ -518,7 +557,7 @@ export function KgEntriesTab() {
     setRecentEntriesError(null);
 
     try {
-      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${RECENT_ENTRIES_INITIAL_LIMIT}`);
+      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${RECENT_ENTRIES_INITIAL_LIMIT}${RECENT_UNITS}`);
       if (!res.ok) {
         throw new Error(`Failed to load recent entries (${res.status})`);
       }
@@ -550,7 +589,7 @@ export function KgEntriesTab() {
 
     try {
       const cursorParam = recentEntriesCursor ? `&cursor=${encodeURIComponent(recentEntriesCursor)}` : "";
-      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${RECENT_ENTRIES_PAGE_LIMIT}${cursorParam}`);
+      const res = await apiFetch(`${RECENT_ENTRIES_URL}?limit=${RECENT_ENTRIES_PAGE_LIMIT}${cursorParam}${RECENT_UNITS}`);
       if (!res.ok) {
         throw new Error(`Failed to load more entries (${res.status})`);
       }
@@ -869,7 +908,7 @@ export function KgEntriesTab() {
     void fetchWeekEntries(year, week);
   }, [form.year, form.week]);
 
-  async function executeSubmit(submitPayload: ManualKgEntryPayload) {
+  async function executeSubmit(submitPayload: ManualKgEntryPayload | PieceEntryPayload) {
     setSaving(true);
 
     try {
@@ -905,11 +944,13 @@ export function KgEntriesTab() {
 
       setSuccessMessage(appendMessage);
       setEditingId(null);
+      setEditingUnit(null);
       setForm((current) => ({
         ...current,
         average_fruit_weight_g: "",
         size_kg: zeroSizeKgFields(yieldSizes),
-        total_kg: ""
+        total_kg: "",
+        total_pieces: ""
       }));
       setIsEntryModalOpen(false);
 
@@ -933,7 +974,7 @@ export function KgEntriesTab() {
     setError(null);
     setSuccessMessage(null);
 
-    const built = buildManualKgEntryPayload(form, yieldSizes, selectedProduct);
+    const built = enterPieces ? buildPieceEntryPayload(form) : buildManualKgEntryPayload(form, yieldSizes, selectedProduct);
     if (!built.ok) {
       setError(built.error);
       return;
@@ -948,13 +989,14 @@ export function KgEntriesTab() {
       const existingEntry = await checkExistingWeekEntry(
         submitPayload.variety_id,
         submitPayload.year,
-        submitPayload.week
+        submitPayload.week,
+        formUnit
       );
 
       if (existingEntry) {
         const varietyName =
           varieties.find((v) => v.id === submitPayload.variety_id)?.name ?? "this variety";
-        setPendingAppend({ varietyName, week: submitPayload.week, year: submitPayload.year, payload: submitPayload });
+        setPendingAppend({ varietyName, week: submitPayload.week, year: submitPayload.year, payload: submitPayload, unit: formUnit });
         return;
       }
     }
@@ -962,13 +1004,33 @@ export function KgEntriesTab() {
     await executeSubmit(submitPayload);
   }
 
-  function beginEdit(entry: YieldEntry) {
+  function beginEdit(entry: RecentEntry) {
     const nextSizeKg = zeroSizeKgFields(yieldSizes);
+
+    if (isPieceEntry(entry)) {
+      setEditingId(entry.id);
+      setEditingUnit("pcs");
+      setIsEntryModalOpen(true);
+      setForm({
+        variety_id: entry.variety_id,
+        year: String(entry.year),
+        week: String(entry.week),
+        packed_date: entry.packed_date ?? localIsoDate(new Date()),
+        average_fruit_weight_g: "",
+        size_kg: nextSizeKg,
+        total_kg: "",
+        total_pieces: String(entry.total_pieces)
+      });
+      setError(null);
+      return;
+    }
+
     for (const [sizeId, kg] of Object.entries(entry.size_kg ?? {})) {
       nextSizeKg[sizeId] = String(kg);
     }
 
     setEditingId(entry.id);
+    setEditingUnit("kg");
     setIsEntryModalOpen(true);
     setForm({
       variety_id: entry.variety_id,
@@ -978,7 +1040,8 @@ export function KgEntriesTab() {
       average_fruit_weight_g:
         entry.average_fruit_weight_g === null ? "" : String(entry.average_fruit_weight_g),
       size_kg: nextSizeKg,
-      total_kg: String(entry.total_kg ?? "")
+      total_kg: String(entry.total_kg ?? ""),
+      total_pieces: ""
     });
     setError(null);
   }
@@ -986,6 +1049,7 @@ export function KgEntriesTab() {
   function openEntryModal() {
     setError(null);
     setEditingId(null);
+    setEditingUnit(null);
     setForm({
       variety_id: varieties[0]?.id ?? "",
       year: String(currentYear),
@@ -993,7 +1057,8 @@ export function KgEntriesTab() {
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
       size_kg: zeroSizeKgFields(yieldSizes),
-      total_kg: ""
+      total_kg: "",
+      total_pieces: ""
     });
     setIsEntryModalOpen(true);
   }
@@ -1001,6 +1066,7 @@ export function KgEntriesTab() {
   function closeEntryModal() {
     setIsEntryModalOpen(false);
     setEditingId(null);
+    setEditingUnit(null);
     setError(null);
     setForm({
       variety_id: varieties[0]?.id ?? "",
@@ -1009,7 +1075,8 @@ export function KgEntriesTab() {
       packed_date: localIsoDate(new Date()),
       average_fruit_weight_g: "",
       size_kg: zeroSizeKgFields(yieldSizes),
-      total_kg: ""
+      total_kg: "",
+      total_pieces: ""
     });
   }
 
@@ -1244,6 +1311,8 @@ export function KgEntriesTab() {
       sharePercent: number;
     }>;
   }
+
+  const showPieceColumns = loadedRecentEntries.some(isPieceEntry);
 
   const visibleRecentEntries = useMemo(
     () =>
@@ -1966,7 +2035,7 @@ export function KgEntriesTab() {
           {loadedRecentEntries.length > 0 && (
             <>
             <div className="varieties-table-wrapper yield-entry-table-wrapper">
-              <table className="varieties-table yield-entry-table yield-entry-table-kg">
+              <table className={`varieties-table yield-entry-table yield-entry-table-kg${showPieceColumns ? " yield-entry-table--with-pieces" : ""}`}>
                 <thead>
                   <tr>
                     <th>Variety</th>
@@ -1974,21 +2043,54 @@ export function KgEntriesTab() {
                     <th>Week</th>
                     <th>Packed Date</th>
                     <th>Total kg</th>
+                    {showPieceColumns ? <th>Total pieces</th> : null}
                     <th>kg/m²</th>
+                    {showPieceColumns ? <th>Pieces/m²</th> : null}
                     <th>Total cases</th>
                     <th>Average fruit weight</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRecentEntries.map((entry) => (
+                  {visibleRecentEntries.map((entry) =>
+                    isPieceEntry(entry) ? (
+                    <tr key={entry.id} className="yield-entry-row--pieces">
+                      <td>{entry.variety_name}</td>
+                      <td>{entry.year}</td>
+                      <td>{entry.week}</td>
+                      <td>{entry.packed_date ?? "Not recorded"}</td>
+                      {/* A count has no weight: the kg-only columns stay blank. */}
+                      <td aria-label="No kg (piece count)"></td>
+                      <td>{entry.total_pieces.toLocaleString("en-US")} pcs</td>
+                      <td></td>
+                      <td>{entry.pieces_per_m2 === null ? "-" : roundTo(entry.pieces_per_m2, 3)}</td>
+                      <td></td>
+                      <td></td>
+                      <td>
+                        <div className="row-actions">
+                          <button type="button" onClick={() => beginEdit(entry)}>
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => deleteEntry(entry.id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    ) : (
                     <tr key={entry.id}>
                       <td>{entry.variety_name}</td>
                       <td>{entry.year}</td>
                       <td>{entry.week}</td>
                       <td>{entry.packed_date ?? "Not recorded"}</td>
                       <td>{roundTo(entry.total_kg, 3)}</td>
+                      {showPieceColumns ? <td></td> : null}
                       <td>{roundTo(entry.kg_per_m2, 3)}</td>
+                      {showPieceColumns ? <td></td> : null}
                       <td>{roundTo(entry.total_cases, 3)}</td>
                       <td>
                         {entry.average_fruit_weight_g === null
@@ -2010,7 +2112,8 @@ export function KgEntriesTab() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  )}
                 </tbody>
               </table>
             </div>
@@ -2767,9 +2870,11 @@ export function KgEntriesTab() {
         >
             <h2 id="confirm-append-title">Add to Existing Entry?</h2>
             <p>
-              An entry already exists for <strong>{pendingAppend.varietyName}</strong> Week{" "}
-              {pendingAppend.week}, {pendingAppend.year}. Add these kg to the existing weekly
-              total?
+              {pendingAppend.unit === "pcs" ? "A piece count" : "An entry"} already exists for{" "}
+              <strong>{pendingAppend.varietyName}</strong> Week {pendingAppend.week}, {pendingAppend.year}.{" "}
+              {pendingAppend.unit === "pcs"
+                ? "Add these pieces to the existing weekly count?"
+                : "Add these kg to the existing weekly total?"}
             </p>
             <div className="form-actions">
               <button
@@ -2835,9 +2940,10 @@ export function KgEntriesTab() {
         </ModalOverlay>
       ) : null}
 
-      {isEntryModalOpen ? (
+      {/* Hidden (not closed) while "Add to Existing Entry?" is open, so that dialog is on top and the form comes back on Cancel. */}
+      {isEntryModalOpen && !pendingAppend ? (
         <ModalOverlay onClose={closeEntryModal} contentClassName="variety-modal" titleId="enter-kg-title">
-            <h2 id="enter-kg-title">{editingId ? "Edit Yield Entry" : "Enter Kg"}</h2>
+            <h2 id="enter-kg-title">{editingId ? "Edit Yield Entry" : enterPieces ? "Enter Pieces" : "Enter Kg"}</h2>
 
             {error ? <p className="form-error">{error}</p> : null}
             {loading ? <p>Loading...</p> : null}
@@ -2930,7 +3036,33 @@ export function KgEntriesTab() {
                 </div>
                 ) : null}
 
-                {enterSizes ? (
+                {enterPieces ? (
+                  <>
+                    <label>
+                      Total harvested pieces
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        step="1"
+                        required
+                        value={form.total_pieces ?? ""}
+                        onChange={(event) =>
+                          setForm((current) => ({ ...current, total_pieces: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <p className="form-hint">
+                      {editingId
+                        ? "This harvest was recorded in pieces, so it is edited in pieces."
+                        : `${selectedProduct?.name ?? "This crop"} is recorded in pieces (Setup → Products). Whole counts only.`}
+                    </p>
+                    <label>
+                      Pieces/m²
+                      <input type="number" value={piecesPerM2 === null ? "" : roundTo(piecesPerM2, 3)} readOnly />
+                    </label>
+                  </>
+                ) : enterSizes ? (
                   <label>
                     Total kg
                     <input type="number" value={roundTo(totalKg, 3)} readOnly />
@@ -2951,6 +3083,9 @@ export function KgEntriesTab() {
                   </label>
                 )}
 
+                {/* Weight-only fields: a piece count has no fruit weight, kg/m² or cases. */}
+                {!enterPieces ? (
+                <>
                 <label>
                   Average fruit weight (g)
                   <input
@@ -2976,6 +3111,8 @@ export function KgEntriesTab() {
                   Total cases
                   <input type="number" value={roundTo(totalCases, 3)} readOnly />
                 </label>
+                </>
+                ) : null}
 
                 <div className="form-actions">
                   <button type="submit" disabled={saving || varieties.length === 0}>

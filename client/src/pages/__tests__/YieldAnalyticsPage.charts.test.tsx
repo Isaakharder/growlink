@@ -37,7 +37,7 @@ const ENTRIES = [30, 31, 32].flatMap((week, i) => [
   { id: `b${week}`, variety_id: "v-b", variety_name: "Mathieu", year: YEAR, week, total_kg: 400 + i * 50, kg_per_m2: 0.8 + i / 10, average_fruit_weight_g: 170 + i, size_kg: {} }
 ]);
 function route(path: string) {
-  if (path === "/api/yield-entries") return ENTRIES;
+  if (path === "/api/yield-entries?units=all") return ENTRIES;
   if (path === "/api/varieties") return VARIETIES;
   if (path === "/api/yield-analytics/summary") return { sizes: [], rows: [] };
   if (path === "/api/yield-analytics/area-footprints") return { rows: [], footprints: {}, linksAvailable: true };

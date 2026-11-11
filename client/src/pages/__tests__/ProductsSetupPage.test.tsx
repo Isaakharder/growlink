@@ -59,7 +59,8 @@ describe("Setup → Products", () => {
 
     await user.click(await screen.findByRole("button", { name: "Enable Cucumbers" }));
 
-    expect(apiFetchMock).toHaveBeenLastCalledWith("/api/products/cucumber/enable", { method: "POST", body: "{}" });
+    // The unit chosen on the row (here the default, kg) goes with the request.
+    expect(apiFetchMock).toHaveBeenLastCalledWith("/api/products/cucumber/enable", { method: "POST", body: JSON.stringify({ unit_code: "kg" }) });
     expect(await screen.findByRole("cell", { name: "Cucumbers" })).toBeInTheDocument();
     const tables = screen.getAllByRole("table");
     expect(tables).toHaveLength(1);
