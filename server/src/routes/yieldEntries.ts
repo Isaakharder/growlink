@@ -7,7 +7,7 @@ import { resolveVarietyFootprints } from "../utils/varietyAreaFootprints";
 import { writeSourceColumn } from "../utils/writeSource";
 import { mergeAverageFruitWeightG } from "../utils/averageFruitWeight";
 import { calculateYieldTotals, calculateYieldTotalsFromKg } from "../utils/yieldTotals";
-import { loadOrganizationProducts, productView, type OrganizationProduct } from "../utils/organizationProducts";
+import { loadOrganizationProducts, productView, unitLabel, type OrganizationProduct } from "../utils/organizationProducts";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -24,6 +24,10 @@ type YieldEntryPayload = {
 type YieldEntryRequest = Omit<YieldEntryPayload, "size_kg"> & {
   size_kg: Record<string, number> | null;
   total_kg: number | null;
+  /** The unit the harvest is recorded in; absent means kg (every client before pieces). */
+  unit_code: "kg" | "pcs" | null;
+  /** A whole-number piece count, for unit_code "pcs". */
+  total_pieces: number | null;
 };
 
 type VarietyForCalc = {
@@ -111,6 +115,21 @@ function validatePayload(input: unknown): YieldEntryRequest {
     body.average_fruit_weight_g
   );
 
+  let unit_code: "kg" | "pcs" | null = null;
+  if (body.unit_code !== undefined && body.unit_code !== null && body.unit_code !== "") {
+    if (body.unit_code !== "kg" && body.unit_code !== "pcs") {
+      throw new Error("unit_code must be kg or pcs");
+    }
+    unit_code = body.unit_code;
+  }
+  let total_pieces: number | null = null;
+  if (body.total_pieces !== undefined && body.total_pieces !== null && body.total_pieces !== "") {
+    total_pieces = typeof body.total_pieces === "number" ? body.total_pieces : Number(body.total_pieces);
+    if (!Number.isSafeInteger(total_pieces) || total_pieces < 0) {
+      throw new Error("total_pieces must be a whole number of 0 or more");
+    }
+  }
+
   const packedDateRaw =
     typeof body.packed_date === "string" ? body.packed_date.trim() : null;
   const packed_date =
@@ -125,7 +144,9 @@ function validatePayload(input: unknown): YieldEntryRequest {
     size_kg,
     total_kg,
     average_fruit_weight_g,
-    packed_date
+    packed_date,
+    unit_code,
+    total_pieces
   };
 }
 
@@ -135,7 +156,9 @@ class EntryInputError extends Error {}
 // with the total summed from them, exactly as before; a product without sizes
 // (Cucumbers) is one total kg and stores no size buckets.
 function resolveEntryKg(request: YieldEntryRequest, product: OrganizationProduct): { payload: YieldEntryPayload; totalKg: number } {
-  const { total_kg, size_kg, ...rest } = request;
+  const { total_kg, size_kg, unit_code, total_pieces, ...rest } = request;
+  void unit_code;
+  void total_pieces;
 
   if (product.tracksSizes) {
     if (size_kg === null) {
@@ -184,6 +207,110 @@ async function fetchVarietyForCalc(
 
   return { variety, product };
 }
+
+// -- Piece counts (migration 0151) -------------------------------------------
+// A crop counted in pieces (Cucumbers, when its default unit is Pieces) is
+// stored in yield_piece_entries: a whole-number count per variety and week,
+// apart from weight. A week can hold a kg entry and a piece count for the
+// same variety; neither is ever added to the other.
+
+type PieceEntryPayload = {
+  variety_id: string;
+  year: number;
+  week: number;
+  total_pieces: number;
+  packed_date: string | null;
+};
+
+const PIECE_ENTRY_SELECT =
+  "id, variety_id, year, week, packed_date, total_pieces, pieces_per_m2, created_at, updated_at, varieties(name, product_code)";
+
+type RawPieceEntryRow = {
+  id: string;
+  variety_id: string;
+  year: number;
+  week: number;
+  packed_date: string | null;
+  total_pieces: number | string;
+  pieces_per_m2: number | string | null;
+  created_at: string;
+  updated_at: string;
+  varieties: { name?: string; product_code?: string } | Array<{ name?: string; product_code?: string }> | null;
+};
+
+/** A date column as YYYY-MM-DD (PostgREST sends that; other drivers may send a Date). */
+function isoDate(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+/** Pieces over the variety's area; null without an area. */
+function piecesPerM2(totalPieces: number, areaM2: number): number | null {
+  const area = Number(areaM2);
+  return Number.isFinite(area) && area > 0 ? totalPieces / area : null;
+}
+
+/**
+ * A piece count in the yield-entry list shape, marked unit_code "pcs". Its
+ * weight fields are null: a count has no kg, kg/m2, cases or fruit weight.
+ */
+function mapPieceEntryRow(entry: RawPieceEntryRow) {
+  const ref = Array.isArray(entry.varieties) ? entry.varieties[0] : entry.varieties;
+  return {
+    id: entry.id,
+    variety_id: entry.variety_id,
+    year: entry.year,
+    week: entry.week,
+    packed_date: isoDate(entry.packed_date),
+    unit_code: "pcs" as const,
+    total_pieces: Number(entry.total_pieces),
+    pieces_per_m2: entry.pieces_per_m2 === null ? null : Number(entry.pieces_per_m2),
+    size_kg: {},
+    total_kg: null,
+    average_fruit_weight_g: null,
+    kg_per_m2: null,
+    total_cases: null,
+    created_at: entry.created_at,
+    updated_at: entry.updated_at,
+    variety_name: ref?.name ?? "-",
+    product_code: ref?.product_code ?? null,
+    daily_breakdowns: []
+  };
+}
+
+/** The piece count a request describes; refuses anything that would carry weight. */
+function resolvePieceEntry(request: YieldEntryRequest, product: OrganizationProduct): PieceEntryPayload {
+  if (request.size_kg && Object.values(request.size_kg).some((kg) => kg !== 0)) {
+    throw new EntryInputError(`A ${product.name} piece count has no size buckets`);
+  }
+  if (request.total_kg !== null && request.total_kg !== 0) {
+    throw new EntryInputError("A piece count has no kg; send total_pieces");
+  }
+  if (request.average_fruit_weight_g !== null) {
+    throw new EntryInputError("A piece count has no average fruit weight");
+  }
+  if (request.total_pieces === null) {
+    throw new EntryInputError("total_pieces is required");
+  }
+  return {
+    variety_id: request.variety_id,
+    year: request.year,
+    week: request.week,
+    total_pieces: request.total_pieces,
+    packed_date: request.packed_date
+  };
+}
+
+/**
+ * yield_piece_entries doesn't exist yet (migration 0151 not applied): there
+ * are no piece counts, and every kg path keeps working.
+ */
+export const isMissingPieceTable = (error: { code?: string } | null | undefined) =>
+  error?.code === "42P01" || error?.code === "PGRST205";
+
+/** Whether the request asked for piece counts too (?units=all); without it, lists stay kg only. */
+const includesPieces = (query: Record<string, unknown>) => query.units === "all";
 
 const yieldEntriesRouter = Router();
 
@@ -283,6 +410,7 @@ function mapYieldEntryRow(entry: RawYieldEntryRow) {
 
   return {
     ...rest,
+    unit_code: "kg" as const,
     variety_name: varietyName,
     product_code: productCode,
     daily_breakdowns
@@ -320,7 +448,26 @@ yieldEntriesRouter.get("/yield-entries", canYieldView, async (req, res) => {
     return sendSafeError(res, 500, "Failed to load yield entries.", "Yield entries fetch error:", error);
   }
 
-  return res.json((data ?? []).map((entry) => mapYieldEntryRow(entry as RawYieldEntryRow)));
+  const kgRows = (data ?? []).map((entry) => mapYieldEntryRow(entry as RawYieldEntryRow));
+  if (!includesPieces(req.query)) {
+    return res.json(kgRows);
+  }
+
+  let pieceQuery = supabase.from("yield_piece_entries").select(PIECE_ENTRY_SELECT).eq("organization_id", organizationId);
+  if (req.query.year !== undefined && Number.isInteger(Number(req.query.year))) pieceQuery = pieceQuery.eq("year", Number(req.query.year));
+  if (req.query.week !== undefined && Number.isInteger(Number(req.query.week))) pieceQuery = pieceQuery.eq("week", Number(req.query.week));
+  const pieces = await pieceQuery.order("created_at", { ascending: false });
+  if (isMissingPieceTable(pieces.error)) {
+    return res.json(kgRows);
+  }
+  if (pieces.error) {
+    return sendSafeError(res, 500, "Failed to load yield entries.", "Piece entries fetch error:", pieces.error);
+  }
+
+  const pieceRows = (pieces.data ?? []).map((entry) => mapPieceEntryRow(entry as unknown as RawPieceEntryRow));
+  const newestFirst = (a: { created_at: string }, b: { created_at: string }) =>
+    a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0;
+  return res.json([...kgRows, ...pieceRows].sort(newestFirst));
 });
 
 const MAX_RECENT_LIMIT = 100;
@@ -403,8 +550,13 @@ export function buildRecentCursorFilter(cursor: RecentEntriesCursor): string {
 export async function fetchRecentYieldEntriesPage(
   organizationId: string,
   limit: number,
-  cursor: RecentEntriesCursor | null
+  cursor: RecentEntriesCursor | null,
+  { withPieces = false }: { withPieces?: boolean } = {}
 ) {
+  if (withPieces) {
+    return fetchRecentMixedPage(organizationId, limit, cursor);
+  }
+
   let query = supabase
     .from("yield_entries")
     .select(YIELD_ENTRY_SELECT)
@@ -441,13 +593,69 @@ export async function fetchRecentYieldEntriesPage(
   };
 }
 
+// The recent-entries order, as a comparator: year, week, packed_date (nulls
+// last), id, all descending. Matches the database order the keyset filter
+// assumes; uuids compare as their lowercase hex text.
+function compareRecent(
+  a: { year: number; week: number; packed_date: string | null; id: string },
+  b: { year: number; week: number; packed_date: string | null; id: string }
+): number {
+  if (a.year !== b.year) return b.year - a.year;
+  if (a.week !== b.week) return b.week - a.week;
+  if (a.packed_date !== b.packed_date) {
+    if (a.packed_date === null) return 1;
+    if (b.packed_date === null) return -1;
+    return a.packed_date < b.packed_date ? 1 : -1;
+  }
+  const ai = a.id.toLowerCase();
+  const bi = b.id.toLowerCase();
+  return ai < bi ? 1 : ai > bi ? -1 : 0;
+}
+
+// Recent Entries with piece counts: both tables read with the same keyset
+// order and cursor, merged, and cut to one page. Each read is limit + 1 rows,
+// so the page and hasMore are exact.
+async function fetchRecentMixedPage(organizationId: string, limit: number, cursor: RecentEntriesCursor | null) {
+  const ordered = <T extends { order: (c: string, o: Record<string, unknown>) => T }>(q: T) =>
+    q
+      .order("year", { ascending: false })
+      .order("week", { ascending: false })
+      .order("packed_date", { ascending: false, nullsFirst: false })
+      .order("id", { ascending: false });
+
+  let kgQuery = ordered(supabase.from("yield_entries").select(YIELD_ENTRY_SELECT).eq("organization_id", organizationId)).limit(limit + 1);
+  let pieceQuery = ordered(supabase.from("yield_piece_entries").select(PIECE_ENTRY_SELECT).eq("organization_id", organizationId)).limit(limit + 1);
+  if (cursor) {
+    kgQuery = kgQuery.or(buildRecentCursorFilter(cursor));
+    pieceQuery = pieceQuery.or(buildRecentCursorFilter(cursor));
+  }
+
+  const [kg, pieces] = await Promise.all([kgQuery, pieceQuery]);
+  if (kg.error) throw kg.error;
+  if (pieces.error && !isMissingPieceTable(pieces.error)) throw pieces.error;
+
+  const merged = [
+    ...(kg.data ?? []).map((entry) => mapYieldEntryRow(entry as RawYieldEntryRow)),
+    ...(pieces.error ? [] : pieces.data ?? []).map((entry) => mapPieceEntryRow(entry as unknown as RawPieceEntryRow))
+  ].sort(compareRecent);
+
+  const hasMore = merged.length > limit;
+  const page = hasMore ? merged.slice(0, limit) : merged;
+  const lastRow = page[page.length - 1];
+  return {
+    entries: page,
+    nextCursor: hasMore && lastRow ? encodeRecentCursor(lastRow.year, lastRow.week, lastRow.packed_date, lastRow.id) : null,
+    hasMore
+  };
+}
+
 yieldEntriesRouter.get("/yield-entries/recent", canYieldView, async (req, res) => {
   const organizationId = req.organizationId;
   const limit = resolveRecentLimit(req.query.limit);
   const cursor = parseRecentCursor(req.query.cursor);
 
   try {
-    const result = await fetchRecentYieldEntriesPage(organizationId, limit, cursor);
+    const result = await fetchRecentYieldEntriesPage(organizationId, limit, cursor, { withPieces: includesPieces(req.query) });
     return res.json(result);
   } catch (error) {
     return sendSafeError(res, 500, "Failed to load recent yield entries.", "Recent yield entries fetch error:", error);
@@ -470,7 +678,9 @@ yieldEntriesRouter.get("/yield-entries/weekly-by-variety", canYieldView, async (
   }
 
   try {
-    return res.json(await loadWeeklyKgByVarietySource(supabase, organizationId as string, requestedYear));
+    return res.json(
+      await loadWeeklyKgByVarietySource(supabase, organizationId as string, requestedYear, { withPieces: includesPieces(req.query) })
+    );
   } catch (error) {
     return sendSafeError(res, 500, "Failed to load weekly kg by variety.", "Weekly kg by variety fetch error:", error);
   }
@@ -489,6 +699,19 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
 
   try {
     const { variety, product } = await fetchVarietyForCalc(request.variety_id, organizationId);
+
+    // A new harvest is recorded in the crop's default unit (Setup -> Products).
+    // A request without a unit is kg, as every client before pieces sent.
+    const unit = request.unit_code ?? "kg";
+    if (unit !== product.defaultUnitCode) {
+      return res.status(400).json({
+        message: `New ${product.name} harvests are recorded in ${unitLabel(product.defaultUnitCode)}. Reload the page and enter it again.`
+      });
+    }
+    if (unit === "pcs") {
+      return await createPieceEntry(res, organizationId as string, variety, resolvePieceEntry(request, product));
+    }
+
     const { payload, totalKg: incomingTotal } = resolveEntryKg(request, product);
 
     const { data: existing, error: lookupError } = await supabase
@@ -621,7 +844,33 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
   }
 
   try {
+    // An entry is edited in the unit it was recorded in, whatever the crop's
+    // default unit is now: a kg harvest stays kg, a piece count stays pieces.
+    const [kgLookup, pieceLookup] = await Promise.all([
+      supabase.from("yield_entries").select("id").eq("id", id).eq("organization_id", organizationId).maybeSingle(),
+      supabase.from("yield_piece_entries").select("id").eq("id", id).eq("organization_id", organizationId).maybeSingle()
+    ]);
+    if (kgLookup.error) {
+      return sendSafeError(res, 500, "Failed to update yield entry.", "Yield entry lookup (edit) error:", kgLookup.error);
+    }
+    if (pieceLookup.error && !isMissingPieceTable(pieceLookup.error)) {
+      return sendSafeError(res, 500, "Failed to update yield entry.", "Piece entry lookup (edit) error:", pieceLookup.error);
+    }
+    if (!kgLookup.data && !pieceLookup.data) {
+      return res.status(404).json({ message: "Yield entry not found." });
+    }
+
+    const recordedUnit = kgLookup.data ? "kg" : "pcs";
+    if (request.unit_code !== null && request.unit_code !== recordedUnit) {
+      return res.status(400).json({ message: `This harvest was recorded in ${unitLabel(recordedUnit)} and is edited in ${unitLabel(recordedUnit)}.` });
+    }
+
     const { variety, product } = await fetchVarietyForCalc(request.variety_id, organizationId);
+
+    if (recordedUnit === "pcs") {
+      return await updatePieceEntry(res, organizationId as string, String(id), variety, product, resolvePieceEntry(request, product));
+    }
+
     const { payload, totalKg } = resolveEntryKg(request, product);
     const totals = entryTotals(payload, totalKg, product, variety);
 
@@ -670,18 +919,119 @@ yieldEntriesRouter.delete("/yield-entries/:id", canYieldEdit, async (req, res) =
   const organizationId = req.organizationId;
   const { id } = req.params;
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("yield_entries")
     .delete()
     .eq("id", id)
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .select("id");
 
   if (error) {
     return sendSafeError(res, 500, "Failed to delete yield entry.", "Yield entry delete error:", error);
   }
 
+  // Not a kg harvest: it may be a piece count.
+  if (!data || (data as unknown[]).length === 0) {
+    const pieces = await supabase
+      .from("yield_piece_entries")
+      .delete()
+      .eq("id", id)
+      .eq("organization_id", organizationId);
+    if (pieces.error && !isMissingPieceTable(pieces.error)) {
+      return sendSafeError(res, 500, "Failed to delete yield entry.", "Piece entry delete error:", pieces.error);
+    }
+  }
+
   return res.status(204).send();
 });
+
+// A piece count for a variety and week. A second count for the same week is
+// added to the first, as a kg harvest is; a kg harvest in that week is a
+// separate row and is left as it is.
+async function createPieceEntry(
+  res: import("express").Response,
+  organizationId: string,
+  variety: VarietyForCalc,
+  payload: PieceEntryPayload
+) {
+  const { data: existing, error: lookupError } = await supabase
+    .from("yield_piece_entries")
+    .select("id, total_pieces, packed_date")
+    .eq("organization_id", organizationId)
+    .eq("variety_id", payload.variety_id)
+    .eq("year", payload.year)
+    .eq("week", payload.week)
+    .maybeSingle();
+
+  if (lookupError) {
+    return sendSafeError(res, 500, "Failed to check existing yield entry.", "Piece entry lookup error:", lookupError);
+  }
+
+  if (existing) {
+    const row = existing as { id: string; total_pieces: number | string; packed_date: string | null };
+    const total = Number(row.total_pieces) + payload.total_pieces;
+    const { data: updated, error: updateError } = await supabase
+      .from("yield_piece_entries")
+      .update({
+        total_pieces: total,
+        pieces_per_m2: piecesPerM2(total, variety.area_m2),
+        packed_date: row.packed_date !== null ? row.packed_date : payload.packed_date,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", row.id)
+      .eq("organization_id", organizationId)
+      .select("*")
+      .single();
+    if (updateError) {
+      return sendSafeError(res, 500, "Failed to update existing yield entry.", "Piece entry update (append) error:", updateError);
+    }
+    return res.status(200).json({
+      ...updated,
+      unit_code: "pcs",
+      message: `Added to existing ${variety.name} Week ${payload.week} piece count.`
+    });
+  }
+
+  const { data, error } = await supabase
+    .from("yield_piece_entries")
+    .insert({ ...payload, pieces_per_m2: piecesPerM2(payload.total_pieces, variety.area_m2), organization_id: organizationId })
+    .select("*")
+    .single();
+  if (error?.code === "23514") {
+    return res.status(400).json({ message: error.message });
+  }
+  if (error) {
+    return sendSafeError(res, 500, "Failed to create yield entry.", "Piece entry insert error:", error);
+  }
+  return res.status(201).json({ ...data, unit_code: "pcs" });
+}
+
+async function updatePieceEntry(
+  res: import("express").Response,
+  organizationId: string,
+  id: string,
+  variety: VarietyForCalc,
+  product: OrganizationProduct,
+  payload: PieceEntryPayload
+) {
+  const { data, error } = await supabase
+    .from("yield_piece_entries")
+    .update({ ...payload, pieces_per_m2: piecesPerM2(payload.total_pieces, variety.area_m2), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("*")
+    .single();
+  if (error?.code === "23505") {
+    return res.status(409).json({ message: `${variety.name} already has a piece count for Week ${payload.week}.` });
+  }
+  if (error?.code === "23514") {
+    return res.status(400).json({ message: error.message || `${product.name} can't be counted in pieces` });
+  }
+  if (error) {
+    return sendSafeError(res, 500, "Failed to update yield entry.", "Piece entry update error:", error);
+  }
+  return res.json({ ...data, unit_code: "pcs" });
+}
 
 const GREENHOUSE_ROWS_PAGE = 1000;
 

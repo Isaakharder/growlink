@@ -25,6 +25,21 @@ export type ManualKgEntryForm = {
   size_kg: Record<string, string>;
   /** The harvest's kg for a product without size buckets (Cucumbers). */
   total_kg?: string;
+  /** A whole-number piece count, for a crop recorded in pieces. */
+  total_pieces?: string;
+};
+
+/** The unit a harvest is recorded in: kg, or a whole-number count of pieces. */
+export type EntryUnit = "kg" | "pcs";
+
+/** A piece count, POSTed or PUT to /api/yield-entries with unit_code "pcs". */
+export type PieceEntryPayload = {
+  variety_id: string;
+  year: number;
+  week: number;
+  packed_date: string | null;
+  unit_code: "pcs";
+  total_pieces: number;
 };
 
 /** What the form needs to know about the selected variety's product. */
@@ -32,7 +47,14 @@ export type ManualKgEntryProduct = {
   code: string;
   name: string;
   tracksSizes: boolean;
+  /** The unit new harvests are recorded in (Setup -> Products); absent means kg. */
+  defaultUnitCode?: string;
 };
+
+/** The unit a new harvest of the product is entered in. */
+export function newEntryUnit(product: ManualKgEntryProduct | undefined): EntryUnit {
+  return product?.defaultUnitCode === "pcs" ? "pcs" : "kg";
+}
 
 export type ManualKgEntryPayload = {
   variety_id: string;
@@ -84,6 +106,54 @@ export function kgPerM2For(totalKg: number, variety: ManualKgEntryVariety | unde
     return null;
   }
   return totalKg / variety.area_m2;
+}
+
+/** Pieces per m2 for the variety, or null when it has no area. */
+export function piecesPerM2For(totalPieces: number, variety: ManualKgEntryVariety | undefined) {
+  if (!variety || variety.area_m2 <= 0) {
+    return null;
+  }
+  return totalPieces / variety.area_m2;
+}
+
+/** The typed piece count when it is a whole number of 0 or more, else null. */
+export function formTotalPieces(form: ManualKgEntryForm): number | null {
+  const raw = (form.total_pieces ?? "").trim();
+  return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+
+/**
+ * The piece-count payload for the form, or the first validation message:
+ * variety, pieces, year, week. Pieces are whole counts only; a count has no
+ * size buckets, kg or fruit weight.
+ */
+export function buildPieceEntryPayload(form: ManualKgEntryForm): { ok: true; payload: PieceEntryPayload } | { ok: false; error: string } {
+  if (!form.variety_id) {
+    return { ok: false, error: "Variety is required." };
+  }
+  const raw = (form.total_pieces ?? "").trim();
+  if (raw === "") {
+    return { ok: false, error: "Total pieces is required." };
+  }
+  const totalPieces = formTotalPieces(form);
+  if (totalPieces === null || !Number.isSafeInteger(totalPieces)) {
+    return { ok: false, error: "Pieces must be a whole number of 0 or more." };
+  }
+  const payload: PieceEntryPayload = {
+    variety_id: form.variety_id,
+    year: Number(form.year),
+    week: Number(form.week),
+    packed_date: form.packed_date || null,
+    unit_code: "pcs",
+    total_pieces: totalPieces
+  };
+  if (!Number.isInteger(payload.year)) {
+    return { ok: false, error: "Year is required." };
+  }
+  if (!Number.isInteger(payload.week)) {
+    return { ok: false, error: "Week is required." };
+  }
+  return { ok: true, payload };
 }
 
 /** Cases at the variety's case weight, or 0 without one. */
@@ -172,12 +242,22 @@ export function manualKgEntrySaveTarget(editingId: string | null) {
   };
 }
 
-/** The entries of one year/week, for the duplicate check and week summary. */
-export function weekEntriesUrl(year: number, week: number) {
-  return `${YIELD_ENTRIES_URL}?year=${year}&week=${week}`;
+/** The entries of one year/week, for the duplicate check and week summary; withPieces adds piece counts. */
+export function weekEntriesUrl(year: number, week: number, { withPieces = false }: { withPieces?: boolean } = {}) {
+  return `${YIELD_ENTRIES_URL}?year=${year}&week=${week}${withPieces ? "&units=all" : ""}`;
 }
 
-/** The variety's existing entry in that week's entries, if any. */
-export function findExistingWeekEntry<T extends { variety_id: string }>(weekEntries: T[], varietyId: string): T | null {
-  return weekEntries.find((e) => e.variety_id === varietyId) ?? null;
+/** An entry's unit: piece counts say "pcs"; anything else is kg. */
+export const entryUnitOf = (entry: { unit_code?: string | null }): EntryUnit => (entry.unit_code === "pcs" ? "pcs" : "kg");
+
+/**
+ * The variety's existing entry in that week's entries, in the same unit, if
+ * any: a piece count never merges into a kg harvest, or the other way round.
+ */
+export function findExistingWeekEntry<T extends { variety_id: string; unit_code?: string | null }>(
+  weekEntries: T[],
+  varietyId: string,
+  unit: EntryUnit = "kg"
+): T | null {
+  return weekEntries.find((e) => e.variety_id === varietyId && entryUnitOf(e) === unit) ?? null;
 }

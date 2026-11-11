@@ -58,7 +58,7 @@ const ENTRIES = [...WEEKS].reverse().flatMap(({ year, week }, i) => [
 ]);
 const byWeek = (year: number, week: number) => ENTRIES.find((e) => e.variety_id === "v-red" && e.year === year && e.week === week)!;
 function route(path: string) {
-  if (path === "/api/yield-entries") return ENTRIES;
+  if (path === "/api/yield-entries" || path === "/api/yield-entries?units=all") return ENTRIES;
   if (path === "/api/varieties") return VARIETIES;
   if (path === "/api/yield-analytics/summary") return { sizes: [], rows: [] };
   if (path === "/api/yield-analytics/area-footprints") return { rows: [], footprints: {}, linksAvailable: true };

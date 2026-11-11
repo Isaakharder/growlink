@@ -3335,6 +3335,12 @@ body.native-shell #root {
   table-layout: fixed;
 }
 
+/* Recent Entries with piece counts has two more columns: size to content and scroll sideways rather than squeeze. */
+.yield-entry-table.varieties-table.yield-entry-table--with-pieces {
+  min-width: 1040px;
+  table-layout: auto;
+}
+
 .varieties-table th,
 .varieties-table td {
   text-align: left;
@@ -3680,6 +3686,33 @@ body.native-shell #root {
 .color-badge.green {
   color: #0a5e4c;
   background: var(--brand-soft);
+}
+
+/* Products Setup: a crop's default unit, with Save once it is changed. */
+.product-unit-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.product-unit-choice .form-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.product-unit-choice select,
+.product-unit-choice button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+}
+
+.product-unit-choice button {
+  cursor: pointer;
 }
 
 .row-actions {

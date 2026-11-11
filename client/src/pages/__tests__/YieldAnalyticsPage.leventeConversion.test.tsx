@@ -11,7 +11,7 @@ import AFTER from "./fixtures/firstLight2026AfterLeventeConversion.json";
 vi.mock("../../lib/api", () => ({
   apiFetch: (path: string) => {
     const body =
-      path === "/api/yield-entries"
+      path === "/api/yield-entries?units=all"
         ? AFTER.entries
         : path === "/api/varieties"
           ? AFTER.varieties

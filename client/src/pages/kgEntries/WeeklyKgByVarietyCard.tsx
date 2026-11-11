@@ -2,16 +2,19 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { apiFetch, getOrganizationName } from "../../lib/api";
 import { downloadBlobFile } from "../../lib/downloadFile";
 import {
-  WEEKLY_KG_BY_VARIETY_URL,
   buildWeeklyKgTable,
   displayMatrix,
   parseWeeklyKgSource,
   weekLabel,
+  weeklyByVarietyUrl,
   weeklyKgCrops,
   weeklyKgCsv,
   weeklyKgFileBase,
   weeklyKgSourceForCrop,
-  type WeeklyKgByVarietySource
+  weeklyTableTitle,
+  weeklyUnitsForCrop,
+  type WeeklyKgByVarietySource,
+  type WeeklyUnit
 } from "../../lib/yieldEntries/weeklyKgByVariety";
 
 // Kg Entries → "Weekly kg by Variety": a read-only week × variety summary of
@@ -25,7 +28,7 @@ type LoadState =
   | { status: "error"; message: string };
 
 async function fetchSource(year: number | null): Promise<WeeklyKgByVarietySource> {
-  const response = await apiFetch(year === null ? WEEKLY_KG_BY_VARIETY_URL : `${WEEKLY_KG_BY_VARIETY_URL}?year=${year}`);
+  const response = await apiFetch(weeklyByVarietyUrl(year));
   if (!response.ok) {
     let message = `Failed to load weekly kg by variety (${response.status})`;
     try {
@@ -100,14 +103,18 @@ function ExportMenu({ disabled, onExport }: { disabled: boolean; onExport: (kind
   );
 }
 
-/** A crop the organization grows, for naming the picker's options. */
-export type WeeklyKgCrop = { code: string; name: string };
+/** A crop the organization grows, for naming the picker's options and choosing its unit. */
+export type WeeklyKgCrop = { code: string; name: string; defaultUnitCode?: string };
+
+const UNIT_LABELS: Record<WeeklyUnit, string> = { kg: "Kilograms (kg)", pcs: "Pieces (pcs)" };
 
 export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: number; crops?: WeeklyKgCrop[] }) {
   const titleId = useId();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   // The crop the table, totals and exports are for; null until there is a choice.
   const [cropCode, setCropCode] = useState<string | null>(null);
+  // The unit shown for that crop; null: its default unit when it has entries in it.
+  const [unitChoice, setUnitChoice] = useState<WeeklyUnit | null>(null);
   // null: the latest year with entries (the server's default).
   const [year, setYear] = useState<number | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -119,7 +126,8 @@ export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: 
     try {
       let source = await fetchSource(requestedYear);
       // The chosen year lost its last entry: fall back to the latest year.
-      if (requestedYear !== null && source.entryCount === 0 && source.years.length > 0 && !source.years.includes(requestedYear)) {
+      const noEntries = source.entryCount === 0 && (source.pieceEntryCount ?? 0) === 0;
+      if (requestedYear !== null && noEntries && source.years.length > 0 && !source.years.includes(requestedYear)) {
         source = await fetchSource(null);
       }
       if (id !== request.current) return;
@@ -144,9 +152,23 @@ export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: 
   const shownCrop = cropCode && cropCodes.includes(cropCode) ? cropCode : (cropCodes[0] ?? null);
   const cropName = (code: string) => crops.find((crop) => crop.code === code)?.name ?? (code === "bell_pepper" ? "Bell Peppers" : code);
   const exportCropName = showCropPicker && shownCrop ? cropName(shownCrop) : null;
-  const table = ready ? buildWeeklyKgTable(showCropPicker && shownCrop ? weeklyKgSourceForCrop(ready.source, shownCrop) : ready.source) : null;
+  // One unit at a time too: a crop counted in pieces part of the year has a
+  // kg table and a pieces table, never one that adds them up.
+  const units = ready && shownCrop ? weeklyUnitsForCrop(ready.source, shownCrop) : [];
+  const showUnitPicker = units.length > 1;
+  const preferredUnit = crops.find((crop) => crop.code === shownCrop)?.defaultUnitCode === "pcs" ? "pcs" : "kg";
+  const shownUnit: WeeklyUnit =
+    unitChoice && units.includes(unitChoice) ? unitChoice : units.includes(preferredUnit) ? preferredUnit : (units[0] ?? "kg");
+  const narrowed =
+    ready && shownCrop && (showCropPicker || units.includes("pcs")) ? weeklyKgSourceForCrop(ready.source, shownCrop, shownUnit) : ready?.source ?? null;
+  const table = narrowed ? buildWeeklyKgTable(narrowed) : null;
+  const title = weeklyTableTitle(table?.unit ?? shownUnit);
   const fileBase = table
-    ? weeklyKgFileBase(table.year, exportCropName ? exportCropName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : null)
+    ? weeklyKgFileBase(
+        table.year,
+        exportCropName ? exportCropName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : null,
+        table.unit
+      )
     : "";
 
   async function handleExport(kind: "csv" | "pdf") {
@@ -174,8 +196,12 @@ export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: 
     <section className="coming-soon-card weekly-kg-variety-card" aria-labelledby={titleId} aria-busy={state.status === "loading" || Boolean(ready?.refreshing)}>
       <div className="weekly-kg-variety-header">
         <div>
-          <h2 id={titleId}>Weekly kg by Variety</h2>
-          <p className="weekly-kg-variety-subtitle">Harvested kg by recorded harvest week. “—” no entry · 0.0 recorded zero.</p>
+          <h2 id={titleId}>{title}</h2>
+          <p className="weekly-kg-variety-subtitle">
+            {shownUnit === "pcs"
+              ? "Harvested pieces (a count, not weight) by recorded harvest week. “—” no entry · 0 recorded zero."
+              : "Harvested kg by recorded harvest week. “—” no entry · 0.0 recorded zero."}
+          </p>
         </div>
         <div className="weekly-kg-variety-actions">
           {showCropPicker ? (
@@ -185,6 +211,18 @@ export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: 
                 {cropCodes.map((code) => (
                   <option key={code} value={code}>
                     {cropName(code)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {showUnitPicker ? (
+            <label className="weekly-kg-variety-year">
+              <span>Unit</span>
+              <select value={shownUnit} onChange={(e) => setUnitChoice(e.target.value as WeeklyUnit)} disabled={ready?.refreshing}>
+                {units.map((unit) => (
+                  <option key={unit} value={unit}>
+                    {UNIT_LABELS[unit]}
                   </option>
                 ))}
               </select>
@@ -234,7 +272,7 @@ export function WeeklyKgByVarietyCard({ refreshKey, crops = [] }: { refreshKey: 
         <div
           className={`weekly-kg-variety-scroll${ready?.refreshing ? " is-refreshing" : ""}`}
           role="region"
-          aria-label={`Weekly kg by variety, ${table.year}`}
+          aria-label={`${table.unit === "pcs" ? "Weekly pieces by variety" : "Weekly kg by variety"}, ${table.year}`}
           tabIndex={0}
         >
           <table className="weekly-kg-variety-table">

@@ -81,7 +81,7 @@ function route(path: string) {
   const custom = override?.(path);
   if (custom !== undefined) return custom;
   if (path === "/api/yield-analytics/summary") return jsonOk(SUMMARY);
-  if (path === "/api/yield-entries") return jsonOk(ENTRIES);
+  if (path === "/api/yield-entries?units=all") return jsonOk(ENTRIES);
   if (path.startsWith("/api/shipped-yield")) return jsonOk(SHIPPED);
   if (path === "/api/varieties") return jsonOk(VARIETIES);
   if (path === "/api/waste-imports") return jsonOk(WASTE);
@@ -253,7 +253,7 @@ describe("Yield Analytics — loading and error states", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     // Retry re-ran the same six requests, once.
     expect(calls.filter((c) => c === "/api/yield-analytics/summary")).toHaveLength(2);
-    expect(calls.filter((c) => c === "/api/yield-entries")).toHaveLength(2);
+    expect(calls.filter((c) => c === "/api/yield-entries?units=all")).toHaveLength(2);
   });
 });
 

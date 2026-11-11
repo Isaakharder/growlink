@@ -52,6 +52,7 @@ type CropOption = {
   tracksColour: boolean;
   tracksSizes: boolean;
   status: "active" | "inactive";
+  defaultUnitCode?: string;
 };
 
 type AnalyticsSummary = {
@@ -72,7 +73,25 @@ type YieldEntry = {
   size_kg?: Record<string, number>;
   /** The variety's product; absent from a server that predates products. */
   product_code?: string | null;
+  /** "pcs" for a piece count (migration 0151): its kg fields are null and never counted as kg. */
+  unit_code?: "kg" | "pcs";
+  total_pieces?: number;
+  pieces_per_m2?: number | null;
 };
+
+/** One variety's piece counts for the selected period. */
+type PieceRow = {
+  variety_id: string;
+  variety_name: string;
+  entries_count: number;
+  total_pieces: number;
+  pieces_per_m2: number | null;
+};
+
+/** The Variety Summary as the screen, the preview, the CSV and the PDF all show it. */
+type SummaryCell = string | number;
+type SummaryTableRow = { key: string; cells: SummaryCell[] };
+type SummaryTarget = "screen" | "pdf" | "csv";
 
 type ChartPoint = {
   label: string;
@@ -139,7 +158,7 @@ function TableSkeleton({ rows = 5 }: { rows?: number }) {
   );
 }
 
-type ChartId = "kgm2" | "afw";
+type ChartId = "kgm2" | "afw" | "pcsm2";
 
 type ChartDefinition = {
   id: ChartId;
@@ -177,6 +196,20 @@ const CHARTS: ChartDefinition[] = [
     unit: " g"
   }
 ];
+
+// Shown only for a crop with piece counts: pieces are a count, so they get
+// their own chart rather than a line on the kg/m² one.
+const PIECES_CHART: ChartDefinition = {
+  id: "pcsm2",
+  title: "Pieces / m² Over Time",
+  description: "Weekly pieces/m² per variety across all recorded weeks, from piece counts. Not affected by the filters.",
+  emptyTitle: "No pieces/m² data yet",
+  emptyBody: "It appears once a piece count has a variety with an area.",
+  axisLabel: "pieces / m²",
+  tickDecimals: 1,
+  valueDecimals: 2,
+  unit: " pcs/m²"
+};
 
 /**
  * One trend chart, used by both the card and its full-screen view so they
@@ -381,7 +414,8 @@ function toCsvCell(value: string | number) {
 
 
 function buildChartData(
-  entries: YieldEntry[]
+  entries: YieldEntry[],
+  valueOf: (entry: YieldEntry) => number | null | undefined = (entry) => entry.kg_per_m2
 ): { points: ChartPoint[]; varietyIds: string[] } {
   const labelMap = new Map<string, ChartPoint>();
   const varietyIdSet = new Set<string>();
@@ -395,7 +429,9 @@ function buildChartData(
     }
 
     const point = labelMap.get(label)!;
-    point[entry.variety_id] = roundTo(entry.kg_per_m2, 3);
+    const value = valueOf(entry);
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) continue;
+    point[entry.variety_id] = roundTo(Number(value), 3);
     varietyIdSet.add(entry.variety_id);
   }
 
@@ -531,7 +567,8 @@ export function YieldAnalyticsPage() {
       try {
         const [summaryRes, entriesRes, varietiesRes, wasteRes, areasRes] = await Promise.all([
           apiFetch("/api/yield-analytics/summary"),
-          apiFetch("/api/yield-entries"),
+          // units=all: piece counts too, kept apart from kg below.
+          apiFetch("/api/yield-entries?units=all"),
           apiFetch("/api/varieties"),
           apiFetch("/api/waste-imports"),
           apiFetch("/api/yield-analytics/area-footprints")
@@ -625,10 +662,26 @@ export function YieldAnalyticsPage() {
   // Every figure below — totals, kg/m², waste, size mix, charts, exports —
   // is computed from this one list, so they always agree and one crop's kg
   // never lands in another's.
+  //
+  // Piece counts are never in this list: they have no kg. They get their
+  // own list, summary rows, KPIs and chart (cropPieceEntries below).
+  const kgEntries = useMemo(() => entries.filter((entry) => entry.unit_code !== "pcs"), [entries]);
+  const pieceEntries = useMemo(() => entries.filter((entry) => entry.unit_code === "pcs"), [entries]);
+
   const cropEntries = useMemo(() => {
-    if (!cropCode) return entries;
-    return entries.filter((entry) => (entry.product_code ?? "bell_pepper") === cropCode);
-  }, [entries, cropCode]);
+    if (!cropCode) return kgEntries;
+    return kgEntries.filter((entry) => (entry.product_code ?? "bell_pepper") === cropCode);
+  }, [kgEntries, cropCode]);
+
+  const cropPieceEntries = useMemo(() => {
+    if (!cropCode) return pieceEntries;
+    return pieceEntries.filter((entry) => (entry.product_code ?? "bell_pepper") === cropCode);
+  }, [pieceEntries, cropCode]);
+
+  const { points: pieceChartPoints, varietyIds: pieceVarietyIds } = useMemo(
+    () => buildChartData(cropPieceEntries, (entry) => entry.pieces_per_m2),
+    [cropPieceEntries]
+  );
 
   const { points: chartPoints, varietyIds } = useMemo(
     () => buildChartData(cropEntries),
@@ -664,7 +717,7 @@ export function YieldAnalyticsPage() {
     const years = new Set<number>();
     years.add(currentYear);
 
-    for (const entry of cropEntries) {
+    for (const entry of [...cropEntries, ...cropPieceEntries]) {
       const year = Number(entry.year);
       if (Number.isInteger(year)) {
         years.add(year);
@@ -672,7 +725,24 @@ export function YieldAnalyticsPage() {
     }
 
     return Array.from(years).sort((a, b) => b - a);
-  }, [cropEntries, currentYear]);
+  }, [cropEntries, cropPieceEntries, currentYear]);
+
+  // The selected year and week filter, as one test for kg entries and piece counts alike.
+  const inSelectedPeriod = useMemo(
+    () => (entry: YieldEntry) => {
+      const year = Number(entry.year);
+      const week = Number(entry.week);
+      if (!Number.isInteger(year) || !Number.isInteger(week) || year !== selectedYear) return false;
+      if (weekFilterMode === "single-week") return week === selectedWeek;
+      if (weekFilterMode === "week-range") {
+        return week >= Math.min(fromWeek, toWeek) && week <= Math.max(fromWeek, toWeek);
+      }
+      return true;
+    },
+    [selectedYear, weekFilterMode, selectedWeek, fromWeek, toWeek]
+  );
+
+  const filteredPieceEntries = useMemo(() => cropPieceEntries.filter(inSelectedPeriod), [cropPieceEntries, inSelectedPeriod]);
 
   const filteredEntries = useMemo(() => {
     return cropEntries.filter((entry) => {
@@ -897,6 +967,138 @@ export function YieldAnalyticsPage() {
     return { sizes, rows, averageRow };
   }, [summary, selectedCrop, varietyMeta, filteredEntries, filteredWasteKgByVarietyId, farmKgPerM2]);
 
+  // Piece counts per variety for the period: total pieces, and pieces/m² over
+  // the variety's area (none without one). The total row's pieces/m² is
+  // farm-wide over unique growing area, as kg/m² is.
+  const farmPiecesPerM2 = useMemo(
+    () =>
+      computeFarmKgPerM2(
+        filteredPieceEntries.map((entry) => ({ variety_id: entry.variety_id, total_kg: Number(entry.total_pieces ?? 0) })),
+        areaFootprints
+      ),
+    [filteredPieceEntries, areaFootprints]
+  );
+
+  const pieceSummary = useMemo(() => {
+    const areaById = new Map(varietyMeta.map((variety) => [variety.id, variety]));
+    const byVariety = new Map<string, PieceRow>();
+    for (const entry of filteredPieceEntries) {
+      const pieces = Number(entry.total_pieces ?? 0);
+      if (!Number.isFinite(pieces)) continue;
+      const row = byVariety.get(entry.variety_id) ?? {
+        variety_id: entry.variety_id,
+        variety_name: areaById.get(entry.variety_id)?.name ?? entry.variety_name ?? "-",
+        entries_count: 0,
+        total_pieces: 0,
+        pieces_per_m2: null
+      };
+      row.entries_count += 1;
+      row.total_pieces += pieces;
+      byVariety.set(entry.variety_id, row);
+    }
+    const rows = Array.from(byVariety.values())
+      .map((row) => {
+        const area = areaById.get(row.variety_id)?.area_m2 ?? 0;
+        return { ...row, pieces_per_m2: area > 0 ? row.total_pieces / area : null };
+      })
+      .sort((a, b) => a.variety_name.localeCompare(b.variety_name));
+    const total: PieceRow | null = rows.length
+      ? {
+          variety_id: "__average__",
+          variety_name: "Average",
+          entries_count: rows.reduce((sum, row) => sum + row.entries_count, 0),
+          total_pieces: rows.reduce((sum, row) => sum + row.total_pieces, 0),
+          pieces_per_m2: farmPiecesPerM2.kgPerM2
+        }
+      : null;
+    return { rows, total };
+  }, [filteredPieceEntries, varietyMeta, farmPiecesPerM2]);
+
+  // With piece counts in the period, every Variety Summary view gets a Unit
+  // column and pieces columns; a piece row leaves the weight-only columns
+  // blank. Without them the table is exactly as before.
+  const showPieces = pieceSummary.rows.length > 0;
+
+  const summaryTable = useMemo(() => {
+    const sizes = filteredVarietySummary.sizes;
+    const kgCells = (row: AnalyticsRow, name: string): SummaryCell[] =>
+      showPieces
+        ? [
+            name,
+            "kg",
+            row.entries_count,
+            roundTo(row.total_kg, 2),
+            "",
+            formatWastePct(row.waste_pct),
+            formatAvgFruitWeight(row.avg_fruit_weight_g),
+            formatKgPerM2(row.kg_per_m2),
+            "",
+            ...sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
+          ]
+        : [
+            name,
+            row.entries_count,
+            roundTo(row.total_kg, 2),
+            formatWastePct(row.waste_pct),
+            formatAvgFruitWeight(row.avg_fruit_weight_g),
+            formatKgPerM2(row.kg_per_m2),
+            ...sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
+          ];
+    const pieceCells = (row: PieceRow, name: string): SummaryCell[] => [
+      name,
+      "pieces",
+      row.entries_count,
+      "",
+      Math.round(row.total_pieces),
+      "",
+      "",
+      "",
+      formatKgPerM2(row.pieces_per_m2),
+      ...sizes.map(() => "")
+    ];
+
+    const body: Array<SummaryTableRow & { sortName: string; unitOrder: number }> = [
+      ...filteredVarietySummary.rows.map((row) => ({
+        key: `kg-${row.variety_id}`,
+        cells: kgCells(row, row.variety_name),
+        sortName: row.variety_name,
+        unitOrder: 0
+      })),
+      ...pieceSummary.rows.map((row) => ({
+        key: `pcs-${row.variety_id}`,
+        cells: pieceCells(row, row.variety_name),
+        sortName: row.variety_name,
+        unitOrder: 1
+      }))
+    ].sort((a, b) => a.sortName.localeCompare(b.sortName) || a.unitOrder - b.unitOrder);
+
+    const foot: SummaryTableRow[] = [];
+    if (filteredVarietySummary.averageRow) {
+      foot.push({ key: "average-kg", cells: kgCells(filteredVarietySummary.averageRow, "Average") });
+    }
+    if (showPieces && pieceSummary.total) {
+      foot.push({ key: "average-pcs", cells: pieceCells(pieceSummary.total, "Average") });
+    }
+
+    const headers = (target: SummaryTarget) => {
+      const perM2 = target === "csv" ? " / m2" : target === "pdf" ? "/m²" : " / m²";
+      return [
+        "Variety",
+        ...(showPieces ? ["Unit"] : []),
+        "Entries",
+        "Total kg",
+        ...(showPieces ? ["Total pieces"] : []),
+        "Waste %",
+        "Avg fw (g)",
+        `kg${perM2}`,
+        ...(showPieces ? [`Pieces${perM2}`] : []),
+        ...sizes.map((size) => `${size.name} %`)
+      ];
+    };
+
+    return { headers, body: body.map(({ key, cells }) => ({ key, cells })), foot };
+  }, [filteredVarietySummary, pieceSummary, showPieces]);
+
   const varietySummaryWeekLabel = useMemo(
     () => getWeekFilterLabel(weekFilterMode, selectedWeek, fromWeek, toWeek),
     [weekFilterMode, selectedWeek, fromWeek, toWeek]
@@ -960,46 +1162,10 @@ export function YieldAnalyticsPage() {
   }
 
   function downloadCsv() {
-    const headers = [
-      "Variety",
-      "Entries",
-      "Total kg",
-      "Waste %",
-      "Avg fw (g)",
-      "kg / m2",
-      ...filteredVarietySummary.sizes.map((size) => `${size.name} %`)
-    ];
+    const lines = [summaryTable.headers("csv").map(toCsvCell).join(",")];
 
-    const lines = [headers.map(toCsvCell).join(",")];
-
-    for (const row of filteredVarietySummary.rows) {
-      const values: Array<string | number> = [
-        row.variety_name,
-        row.entries_count,
-        roundTo(row.total_kg, 2),
-        formatWastePct(row.waste_pct),
-        formatAvgFruitWeight(row.avg_fruit_weight_g),
-        formatKgPerM2(row.kg_per_m2),
-        ...filteredVarietySummary.sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
-      ];
-
-      lines.push(values.map(toCsvCell).join(","));
-    }
-
-    if (filteredVarietySummary.averageRow) {
-      const averageValues: Array<string | number> = [
-        filteredVarietySummary.averageRow.variety_name,
-        filteredVarietySummary.averageRow.entries_count,
-        roundTo(filteredVarietySummary.averageRow.total_kg, 2),
-        formatWastePct(filteredVarietySummary.averageRow.waste_pct),
-        formatAvgFruitWeight(filteredVarietySummary.averageRow.avg_fruit_weight_g),
-        formatKgPerM2(filteredVarietySummary.averageRow.kg_per_m2),
-        ...filteredVarietySummary.sizes.map((size) =>
-          formatWholePercent(filteredVarietySummary.averageRow!.size_pct[size.id] ?? 0)
-        )
-      ];
-
-      lines.push(averageValues.map(toCsvCell).join(","));
+    for (const row of [...summaryTable.body, ...summaryTable.foot]) {
+      lines.push(row.cells.map(toCsvCell).join(","));
     }
 
     const csvContent = `${lines.join("\n")}\n`;
@@ -1008,15 +1174,7 @@ export function YieldAnalyticsPage() {
   }
 
   function exportPdf() {
-    const headers = [
-      "Variety",
-      "Entries",
-      "Total kg",
-      "Waste %",
-      "Avg fw (g)",
-      "kg/m²",
-      ...filteredVarietySummary.sizes.map((size) => `${size.name} %`)
-    ];
+    const headers = summaryTable.headers("pdf");
 
     const doc = new jsPDF({
       orientation: "landscape",
@@ -1031,28 +1189,8 @@ export function YieldAnalyticsPage() {
     doc.setTextColor(75, 90, 85);
     doc.text(`Year: ${selectedYear} | Week selection: ${varietySummaryWeekLabel}`, 40, 56);
 
-    const bodyRows = filteredVarietySummary.rows.map((row) => [
-      row.variety_name,
-      String(row.entries_count),
-      String(roundTo(row.total_kg, 2)),
-      formatWastePct(row.waste_pct),
-      formatAvgFruitWeight(row.avg_fruit_weight_g),
-      formatKgPerM2(row.kg_per_m2),
-      ...filteredVarietySummary.sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
-    ]);
-
-    const averageRow = filteredVarietySummary.averageRow;
-    const footRows = averageRow
-      ? [[
-          averageRow.variety_name,
-          String(averageRow.entries_count),
-          String(roundTo(averageRow.total_kg, 2)),
-          formatWastePct(averageRow.waste_pct),
-          formatAvgFruitWeight(averageRow.avg_fruit_weight_g),
-          formatKgPerM2(averageRow.kg_per_m2),
-          ...filteredVarietySummary.sizes.map((size) => formatWholePercent(averageRow.size_pct[size.id] ?? 0))
-        ]]
-      : [];
+    const bodyRows = summaryTable.body.map((row) => row.cells.map(String));
+    const footRows = summaryTable.foot.map((row) => row.cells.map(String));
 
     autoTable(doc, {
       head: [headers],
@@ -1137,7 +1275,8 @@ export function YieldAnalyticsPage() {
   }, [filteredEntries, shipped, varietyMeta]);
 
   const averageRow = filteredVarietySummary.averageRow;
-  const hasSummaryRows = filteredVarietySummary.rows.length > 0;
+  const hasSummaryRows = summaryTable.body.length > 0;
+  const summaryVarietyCount = new Set([...filteredVarietySummary.rows, ...pieceSummary.rows].map((row) => row.variety_id)).size;
   const activeFilterLabel = exportCropName
     ? `${exportCropName} · ${selectedYear} · ${varietySummaryWeekLabel}`
     : `${selectedYear} · ${varietySummaryWeekLabel}`;
@@ -1149,6 +1288,13 @@ export function YieldAnalyticsPage() {
   // Harvest vs Shipped reconciles pepper colours; it isn't shown for a crop without colours.
   const showColourReconciliation = !selectedCrop || selectedCrop.tracksColour;
   const shippedIncomplete = shipped ? incompleteShippedText(shipped.totals) : null;
+  const visibleCharts = cropPieceEntries.length > 0 ? [...CHARTS, PIECES_CHART] : CHARTS;
+  const chartData = (id: ChartId) =>
+    id === "kgm2"
+      ? { points: chartPoints, ids: varietyIds }
+      : id === "afw"
+        ? { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds }
+        : { points: pieceChartPoints, ids: pieceVarietyIds };
 
   return (
     <section className="page-shell yield-analytics-page ya-page">
@@ -1351,8 +1497,10 @@ export function YieldAnalyticsPage() {
         </div>
       ) : null}
 
-      {!loading && !error && averageRow ? (
+      {!loading && !error && (averageRow || pieceSummary.total) ? (
         <section className="ya-kpi-grid" aria-label="Summary metrics">
+          {averageRow ? (
+          <>
           <div className="ya-kpi ya-kpi--primary">
             <p className="ya-kpi-label">Total kg</p>
             <p className="ya-kpi-value">
@@ -1409,6 +1557,33 @@ export function YieldAnalyticsPage() {
             <p className="ya-kpi-value">{formatWastePct(averageRow.waste_pct)}</p>
             <p className="ya-kpi-context">Weighted by kg</p>
           </div>
+          </>
+          ) : null}
+          {pieceSummary.total ? (
+          <>
+          <div className={averageRow ? "ya-kpi" : "ya-kpi ya-kpi--primary"}>
+            <p className="ya-kpi-label">Total pieces</p>
+            <p className="ya-kpi-value">
+              {Math.round(pieceSummary.total.total_pieces).toLocaleString()}
+              <span className="ya-kpi-unit"> pcs</span>
+            </p>
+            <p className="ya-kpi-context">
+              {pieceSummary.total.entries_count} piece count{pieceSummary.total.entries_count === 1 ? "" : "s"} · counted, not weighed
+            </p>
+          </div>
+          <div className="ya-kpi">
+            <p className="ya-kpi-label">Pieces / m²</p>
+            <p className="ya-kpi-value">{formatKgPerM2(pieceSummary.total.pieces_per_m2)}</p>
+            <p className="ya-kpi-context">
+              {farmPiecesPerM2.kgPerM2 !== null
+                ? `${formatKgFigure(farmPiecesPerM2.coveredKg)} pieces ÷ ${formatAreaFigure(farmPiecesPerM2.areaM2)} m² of unique growing area`
+                : areaFootprints
+                  ? "No measured growing area for this period"
+                  : "Growing areas couldn\u2019t be loaded"}
+            </p>
+          </div>
+          </>
+          ) : null}
         </section>
       ) : null}
 
@@ -1418,11 +1593,15 @@ export function YieldAnalyticsPage() {
             <h2 id="ya-summary-heading" className="ya-card-title">
               Variety Summary
             </h2>
-            <p className="ya-card-description">Totals, waste, fruit weight and size mix per variety for the selected period.</p>
+            <p className="ya-card-description">
+              {showPieces
+                ? "Totals per variety for the selected period. Piece counts are listed in their own rows; weight-only columns are blank for them."
+                : "Totals, waste, fruit weight and size mix per variety for the selected period."}
+            </p>
           </div>
           {!loading && !error && hasSummaryRows ? (
             <span className="ya-card-meta">
-              {filteredVarietySummary.rows.length} variet{filteredVarietySummary.rows.length === 1 ? "y" : "ies"}
+              {summaryVarietyCount} variet{summaryVarietyCount === 1 ? "y" : "ies"}
             </span>
           ) : null}
         </div>
@@ -1443,53 +1622,31 @@ export function YieldAnalyticsPage() {
             <table className="varieties-table yield-analytics-table yield-analytics-summary-table ya-table">
               <thead>
                 <tr>
-                  <th scope="col">Variety</th>
-                  <th scope="col">Entries</th>
-                  <th scope="col">Total kg</th>
-                  <th scope="col">Waste %</th>
-                  <th scope="col">Avg fw (g)</th>
-                  <th scope="col">kg / m²</th>
-                  {filteredVarietySummary.sizes.map((size) => (
-                    <th key={size.id} scope="col">{size.name} %</th>
+                  {summaryTable.headers("screen").map((header) => (
+                    <th key={header} scope="col">{header}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredVarietySummary.rows.map((row) => (
-                  <tr key={row.variety_id}>
-                    <th scope="row">{row.variety_name}</th>
-                    <td>{row.entries_count}</td>
-                    <td>{roundTo(row.total_kg, 2)}</td>
-                    <td>{formatWastePct(row.waste_pct)}</td>
-                    <td>
-                      {formatAvgFruitWeight(row.avg_fruit_weight_g)}
-                    </td>
-                    <td>
-                      {formatKgPerM2(row.kg_per_m2)}
-                    </td>
-                    {filteredVarietySummary.sizes.map((size) => (
-                      <td key={size.id}>
-                        {formatWholePercent(row.size_pct[size.id] ?? 0)}
-                      </td>
+                {summaryTable.body.map((row) => (
+                  <tr key={row.key}>
+                    <th scope="row">{row.cells[0]}</th>
+                    {row.cells.slice(1).map((cell, index) => (
+                      <td key={index}>{cell}</td>
                     ))}
                   </tr>
                 ))}
               </tbody>
-              {averageRow ? (
+              {summaryTable.foot.length > 0 ? (
                 <tfoot>
-                  <tr>
-                    <th scope="row">Average</th>
-                    <td>{averageRow.entries_count}</td>
-                    <td>{roundTo(averageRow.total_kg, 2)}</td>
-                    <td>{formatWastePct(averageRow.waste_pct)}</td>
-                    <td>{formatAvgFruitWeight(averageRow.avg_fruit_weight_g)}</td>
-                    <td>{formatKgPerM2(averageRow.kg_per_m2)}</td>
-                    {filteredVarietySummary.sizes.map((size) => (
-                      <td key={`average-${size.id}`}>
-                        {formatWholePercent(averageRow.size_pct[size.id] ?? 0)}
-                      </td>
-                    ))}
-                  </tr>
+                  {summaryTable.foot.map((row) => (
+                    <tr key={row.key}>
+                      <th scope="row">{row.cells[0]}</th>
+                      {row.cells.slice(1).map((cell, index) => (
+                        <td key={index}>{cell}</td>
+                      ))}
+                    </tr>
+                  ))}
                 </tfoot>
               ) : null}
             </table>
@@ -1554,8 +1711,8 @@ export function YieldAnalyticsPage() {
       ) : null}
 
       <div className="ya-chart-grid">
-        {CHARTS.map((chart) => {
-          const data = chart.id === "kgm2" ? { points: chartPoints, ids: varietyIds } : { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds };
+        {visibleCharts.map((chart) => {
+          const data = chartData(chart.id);
           const hasData = data.points.length > 0;
           return (
             <section key={chart.id} className="ya-card ya-chart-card" aria-labelledby={`ya-${chart.id}-heading`}>
@@ -1593,8 +1750,8 @@ export function YieldAnalyticsPage() {
       </div>
 
       {fullscreen.expanded ? (() => {
-        const chart = CHARTS.find((c) => c.id === fullscreen.expanded)!;
-        const data = chart.id === "kgm2" ? { points: chartPoints, ids: varietyIds } : { points: fruitWeightChartPoints, ids: fruitWeightVarietyIds };
+        const chart = visibleCharts.find((c) => c.id === fullscreen.expanded) ?? CHARTS[0];
+        const data = chartData(chart.id);
         return (
           <FullscreenChartOverlay title={chart.title} description={chartDescription(chart)} onClose={fullscreen.close}>
             <TrendChart chart={chart} points={data.points} varietyIds={data.ids} varietyNameById={varietyNameById} />
@@ -1633,59 +1790,35 @@ export function YieldAnalyticsPage() {
                   <table className="varieties-table yield-analytics-table yield-analytics-summary-table">
                     <thead>
                       <tr>
-                        <th>Variety</th>
-                        <th>Entries</th>
-                        <th>Total kg</th>
-                        <th>Waste %</th>
-                        <th>Avg fw (g)</th>
-                        <th>kg / m²</th>
-                        {filteredVarietySummary.sizes.map((size) => (
-                          <th key={`preview-${size.id}`}>{size.name} %</th>
+                        {summaryTable.headers("screen").map((header) => (
+                          <th key={`preview-${header}`}>{header}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredVarietySummary.rows.length > 0 ? (
-                        filteredVarietySummary.rows.map((row) => (
-                          <tr key={`preview-row-${row.variety_id}`}>
-                            <td>{row.variety_name}</td>
-                            <td>{row.entries_count}</td>
-                            <td>{roundTo(row.total_kg, 2)}</td>
-                            <td>{formatWastePct(row.waste_pct)}</td>
-                            <td>
-                              {formatAvgFruitWeight(row.avg_fruit_weight_g)}
-                            </td>
-                            <td>
-                              {formatKgPerM2(row.kg_per_m2)}
-                            </td>
-                            {filteredVarietySummary.sizes.map((size) => (
-                              <td key={`preview-size-${row.variety_id}-${size.id}`}>
-                                {formatWholePercent(row.size_pct[size.id] ?? 0)}
-                              </td>
+                      {summaryTable.body.length > 0 ? (
+                        summaryTable.body.map((row) => (
+                          <tr key={`preview-row-${row.key}`}>
+                            {row.cells.map((cell, index) => (
+                              <td key={index}>{cell}</td>
                             ))}
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={6 + filteredVarietySummary.sizes.length}>No filtered rows to export.</td>
+                          <td colSpan={summaryTable.headers("screen").length}>No filtered rows to export.</td>
                         </tr>
                       )}
                     </tbody>
-                    {filteredVarietySummary.averageRow ? (
+                    {summaryTable.foot.length > 0 ? (
                       <tfoot>
-                        <tr>
-                          <td>Average</td>
-                          <td>{filteredVarietySummary.averageRow.entries_count}</td>
-                          <td>{roundTo(filteredVarietySummary.averageRow.total_kg, 2)}</td>
-                          <td>{formatWastePct(filteredVarietySummary.averageRow.waste_pct)}</td>
-                          <td>{formatAvgFruitWeight(filteredVarietySummary.averageRow.avg_fruit_weight_g)}</td>
-                          <td>{formatKgPerM2(filteredVarietySummary.averageRow.kg_per_m2)}</td>
-                          {filteredVarietySummary.sizes.map((size) => (
-                            <td key={`preview-average-${size.id}`}>
-                              {formatWholePercent(filteredVarietySummary.averageRow!.size_pct[size.id] ?? 0)}
-                            </td>
-                          ))}
-                        </tr>
+                        {summaryTable.foot.map((row) => (
+                          <tr key={`preview-${row.key}`}>
+                            {row.cells.map((cell, index) => (
+                              <td key={index}>{cell}</td>
+                            ))}
+                          </tr>
+                        ))}
                       </tfoot>
                     ) : null}
                   </table>

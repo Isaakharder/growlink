@@ -6,13 +6,26 @@
 
 export const WEEKLY_KG_BY_VARIETY_URL = "/api/yield-entries/weekly-by-variety";
 
+/** The unit a table is in: kg, or whole pieces (a crop counted in pieces). Never both in one table. */
+export type WeeklyUnit = "kg" | "pcs";
+
 export type WeeklyKgByVarietySource = {
   year: number | null;
   years: number[];
   entryCount: number;
   varieties: Array<{ id: string; name: string; status: string | null; productCode?: string }>;
+  /** kg entries; for a source narrowed to pieces (weeklyKgSourceForCrop), the piece counts. */
   entries: Array<{ variety_id: string; week: number; total_kg: number }>;
+  /** Piece counts, from a server asked for ?units=all (migration 0151). */
+  pieceEntryCount?: number;
+  pieceEntries?: Array<{ variety_id: string; week: number; total_pieces: number }>;
+  /** What entries are in; absent is kg. */
+  unit?: WeeklyUnit;
 };
+
+/** The request for one year (or the latest), with piece counts alongside kg. */
+export const weeklyByVarietyUrl = (year: number | null) =>
+  year === null ? `${WEEKLY_KG_BY_VARIETY_URL}?units=all` : `${WEEKLY_KG_BY_VARIETY_URL}?year=${year}&units=all`;
 
 /**
  * The response, checked before use: an unexpected body (an error page, an
@@ -33,7 +46,11 @@ export function parseWeeklyKgSource(body: unknown): WeeklyKgByVarietySource {
     b.varieties.every((v) => v && typeof v.id === "string" && typeof v.name === "string") &&
     Array.isArray(b.entries) &&
     b.entries.every((e) => e && typeof e.variety_id === "string" && isInt(e.week) && Number.isFinite(Number(e.total_kg))) &&
-    b.entryCount === b.entries.length;
+    b.entryCount === b.entries.length &&
+    (b.pieceEntries === undefined ||
+      (Array.isArray(b.pieceEntries) &&
+        b.pieceEntries.every((e) => e && typeof e.variety_id === "string" && isInt(e.week) && Number.isSafeInteger(Number(e.total_pieces))) &&
+        b.pieceEntryCount === b.pieceEntries.length));
   if (!valid) throw new Error("Weekly kg by variety came back incomplete");
   return b as WeeklyKgByVarietySource;
 }
@@ -42,26 +59,51 @@ export function parseWeeklyKgSource(body: unknown): WeeklyKgByVarietySource {
 export const weeklyKgCropOf = (variety: { productCode?: string }) => variety.productCode ?? "bell_pepper";
 
 /** The crop codes the year's varieties belong to, Bell Peppers first. */
+// (Varieties with only piece counts are listed by the server too.)
 export function weeklyKgCrops(source: WeeklyKgByVarietySource): string[] {
   const codes = Array.from(new Set(source.varieties.map(weeklyKgCropOf)));
   return codes.sort((a, b) => (a === "bell_pepper" ? -1 : b === "bell_pepper" ? 1 : a.localeCompare(b)));
 }
 
+/** The units the crop has entries in this year, kg first. */
+export function weeklyUnitsForCrop(source: WeeklyKgByVarietySource, cropCode: string): WeeklyUnit[] {
+  const ids = new Set(source.varieties.filter((v) => weeklyKgCropOf(v) === cropCode).map((v) => v.id));
+  const units: WeeklyUnit[] = [];
+  if (source.entries.some((e) => ids.has(e.variety_id))) units.push("kg");
+  if ((source.pieceEntries ?? []).some((e) => ids.has(e.variety_id))) units.push("pcs");
+  return units;
+}
+
 /**
- * The source narrowed to one crop's varieties and entries, so weekly and
- * season totals never add one crop's kg to another's.
+ * The source narrowed to one crop's varieties and one unit's entries, so
+ * weekly and season totals never add one crop's kg to another's, or pieces
+ * to kg. For pieces, entries carry the counts (in total_kg's place) and
+ * unit is "pcs"; only varieties with entries in that unit are kept.
  */
-export function weeklyKgSourceForCrop(source: WeeklyKgByVarietySource, cropCode: string): WeeklyKgByVarietySource {
-  const varieties = source.varieties.filter((variety) => weeklyKgCropOf(variety) === cropCode);
-  const ids = new Set(varieties.map((variety) => variety.id));
-  const entries = source.entries.filter((entry) => ids.has(entry.variety_id));
-  return { ...source, varieties, entries, entryCount: entries.length };
+export function weeklyKgSourceForCrop(
+  source: WeeklyKgByVarietySource,
+  cropCode: string,
+  unit: WeeklyUnit = "kg"
+): WeeklyKgByVarietySource {
+  const cropVarieties = source.varieties.filter((variety) => weeklyKgCropOf(variety) === cropCode);
+  const ids = new Set(cropVarieties.map((variety) => variety.id));
+  const entries =
+    unit === "pcs"
+      ? (source.pieceEntries ?? [])
+          .filter((entry) => ids.has(entry.variety_id))
+          .map((entry) => ({ variety_id: entry.variety_id, week: entry.week, total_kg: entry.total_pieces }))
+      : source.entries.filter((entry) => ids.has(entry.variety_id));
+  const withEntries = new Set(entries.map((entry) => entry.variety_id));
+  const varieties = cropVarieties.filter((variety) => withEntries.has(variety.id));
+  return { ...source, varieties, entries, entryCount: entries.length, unit };
 }
 
 export type WeeklyKgColumn = { id: string; name: string; inactive: boolean; label: string };
 
 export type WeeklyKgTable = {
   year: number;
+  /** kg (one decimal) or pieces (whole numbers); every cell and total is in this unit. */
+  unit: WeeklyUnit;
   columns: WeeklyKgColumn[];
   /** Every week from the first to the last recorded week, including weeks with no entries. */
   rows: Array<{ week: number; cells: Array<number | null>; total: number | null }>;
@@ -118,6 +160,7 @@ export function buildWeeklyKgTable(source: WeeklyKgByVarietySource): WeeklyKgTab
 
   return {
     year: source.year,
+    unit: source.unit ?? "kg",
     columns,
     rows,
     seasonTotals,
@@ -143,6 +186,21 @@ export function csvKgValue(kg: number | null): string {
   return kg === null ? "" : roundKg1(kg).toFixed(1);
 }
 
+/** A table cell in the table's unit: kg to one decimal, pieces as a whole count. */
+export function formatCell(value: number | null, unit: WeeklyUnit): string {
+  if (unit === "kg") return formatKgCell(value);
+  return value === null ? "—" : Math.round(value).toLocaleString("en-US");
+}
+
+/** A CSV value in the table's unit; "" for no entry. */
+export function csvValue(value: number | null, unit: WeeklyUnit): string {
+  if (unit === "kg") return csvKgValue(value);
+  return value === null ? "" : String(Math.round(value));
+}
+
+/** The table's name: "Weekly kg by Variety" or "Weekly pieces by Variety". */
+export const weeklyTableTitle = (unit: WeeklyUnit) => (unit === "pcs" ? "Weekly pieces by Variety" : "Weekly kg by Variety");
+
 export const weekLabel = (week: number) => `Week ${week}`;
 
 /** Header row shared by the card, CSV and PDF. */
@@ -152,9 +210,10 @@ export function tableHeader(table: WeeklyKgTable): string[] {
 
 /** The full table as display strings, header excluded: one row per week, then Season total. */
 export function displayMatrix(table: WeeklyKgTable): { body: string[][]; foot: string[] } {
+  const cell = (value: number | null) => formatCell(value, table.unit);
   return {
-    body: table.rows.map((r) => [weekLabel(r.week), ...r.cells.map(formatKgCell), formatKgCell(r.total)]),
-    foot: ["Season total", ...table.seasonTotals.map(formatKgCell), formatKgCell(table.seasonTotal)]
+    body: table.rows.map((r) => [weekLabel(r.week), ...r.cells.map(cell), cell(r.total)]),
+    foot: ["Season total", ...table.seasonTotals.map(cell), cell(table.seasonTotal)]
   };
 }
 
@@ -164,16 +223,22 @@ function csvField(value: string): string {
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
-/** RFC 4180 CSV (CRLF, UTF-8 BOM for Excel): week numbers, kg as plain one-decimal numbers. */
+/** RFC 4180 CSV (CRLF, UTF-8 BOM for Excel): week numbers, kg as plain one-decimal numbers, pieces as whole numbers. */
 export function weeklyKgCsv(table: WeeklyKgTable): string {
+  const value = (v: number | null) => csvValue(v, table.unit);
   const lines = [
     tableHeader(table),
-    ...table.rows.map((r) => [String(r.week), ...r.cells.map(csvKgValue), csvKgValue(r.total)]),
-    ["Season total", ...table.seasonTotals.map(csvKgValue), csvKgValue(table.seasonTotal)]
+    ...table.rows.map((r) => [String(r.week), ...r.cells.map(value), value(r.total)]),
+    ["Season total", ...table.seasonTotals.map(value), value(table.seasonTotal)]
   ];
   return "\uFEFF" + lines.map((line) => line.map(csvField).join(",")).join("\r\n") + "\r\n";
 }
 
-/** cropSlug only when the organization records more than one crop, so single-crop file names are unchanged. */
-export const weeklyKgFileBase = (year: number, cropSlug: string | null = null) =>
-  cropSlug ? `weekly-kg-by-variety-${cropSlug}-${year}` : `weekly-kg-by-variety-${year}`;
+/**
+ * cropSlug only when the organization records more than one crop, so
+ * single-crop file names are unchanged; a pieces table is always named so.
+ */
+export const weeklyKgFileBase = (year: number, cropSlug: string | null = null, unit: WeeklyUnit = "kg") => {
+  const name = unit === "pcs" ? "weekly-pieces-by-variety" : "weekly-kg-by-variety";
+  return cropSlug ? `${name}-${cropSlug}-${year}` : `${name}-${year}`;
+};

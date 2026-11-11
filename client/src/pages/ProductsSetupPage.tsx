@@ -32,6 +32,9 @@ type ProductsResponse = { products: OrganizationProduct[]; available?: Available
 
 const API_BASE = "/api/products";
 
+/** "Kilograms (kg)", "Pieces (pcs)". */
+const unitText = (unit: ProductUnit) => `${unit.name} (${unit.code})`;
+
 export function ProductsSetupPage() {
   const { can } = usePermissions();
   const canEdit = can("greenhouse_setup:edit");
@@ -41,6 +44,11 @@ export function ProductsSetupPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [savingCode, setSavingCode] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  // The unit picked on a row before it is saved, by product code: on an
+  // Available row it is the unit to enable with; on an Enabled row, the new default.
+  const [enableUnits, setEnableUnits] = useState<Record<string, string>>({});
+  const [pendingUnits, setPendingUnits] = useState<Record<string, string>>({});
 
   function applyResponse(data: ProductsResponse) {
     setProducts(data.products ?? []);
@@ -75,12 +83,16 @@ export function ProductsSetupPage() {
     };
   }, []);
 
-  async function changeProduct(code: string, action: "enable" | "disable") {
+  async function changeProduct(code: string, action: "enable" | "disable", unitCode?: string) {
     setActionError(null);
+    setActionNotice(null);
     setSavingCode(code);
 
     try {
-      const res = await apiFetch(`${API_BASE}/${code}/${action}`, { method: "POST", body: "{}" });
+      const res = await apiFetch(`${API_BASE}/${code}/${action}`, {
+        method: "POST",
+        body: JSON.stringify(unitCode ? { unit_code: unitCode } : {})
+      });
       const body = (await res.json().catch(() => ({}))) as Partial<ProductsResponse> & { message?: string };
       if (!res.ok) {
         throw new Error(body.message ?? (action === "enable" ? "Failed to enable product" : "Failed to turn off product"));
@@ -88,6 +100,37 @@ export function ProductsSetupPage() {
       applyResponse(body as ProductsResponse);
     } catch (changeError) {
       setActionError(changeError instanceof Error ? changeError.message : "Failed to update product");
+    } finally {
+      setSavingCode(null);
+    }
+  }
+
+  // A new default unit applies to harvests entered from now on; saved
+  // harvests keep the unit they were recorded in.
+  async function saveDefaultUnit(product: OrganizationProduct, unitCode: string) {
+    setActionError(null);
+    setActionNotice(null);
+    setSavingCode(product.code);
+
+    try {
+      const res = await apiFetch(`${API_BASE}/${product.code}`, {
+        method: "PATCH",
+        body: JSON.stringify({ default_unit_code: unitCode })
+      });
+      const body = (await res.json().catch(() => ({}))) as Partial<ProductsResponse> & { message?: string };
+      if (!res.ok) {
+        throw new Error(body.message ?? "Failed to change the default unit");
+      }
+      applyResponse(body as ProductsResponse);
+      setPendingUnits((current) => {
+        const next = { ...current };
+        delete next[product.code];
+        return next;
+      });
+      const saved = (body.products ?? []).find((p) => p.code === product.code)?.defaultUnit;
+      setActionNotice(`New ${product.name} harvests will be recorded in ${saved ? unitText(saved) : unitCode}. Existing harvests keep their units.`);
+    } catch (changeError) {
+      setActionError(changeError instanceof Error ? changeError.message : "Failed to change the default unit");
     } finally {
       setSavingCode(null);
     }
@@ -105,6 +148,7 @@ export function ProductsSetupPage() {
 
         {error ? <p className="form-error">{error}</p> : null}
         {actionError ? <p className="form-error" role="alert">{actionError}</p> : null}
+        {actionNotice ? <p className="form-success" role="status">{actionNotice}</p> : null}
 
         {loading ? <p>Loading...</p> : null}
 
@@ -124,11 +168,47 @@ export function ProductsSetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {products.map((product) => (
+                {products.map((product) => {
+                  const canChooseUnit = canEdit && product.status === "active" && product.supportedUnits.length > 1;
+                  const chosenUnit = pendingUnits[product.code] ?? product.defaultUnit.code;
+                  return (
                   <tr key={product.code}>
                     <td>{product.name}</td>
                     <td>
-                      {product.defaultUnit.name} ({product.defaultUnit.code})
+                      {canChooseUnit ? (
+                        <div className="product-unit-choice">
+                          <select
+                            aria-label={`Default unit for ${product.name}`}
+                            value={chosenUnit}
+                            disabled={savingCode !== null}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setActionNotice(null);
+                              setPendingUnits((current) => ({ ...current, [product.code]: value }));
+                            }}
+                          >
+                            {product.supportedUnits.map((unit) => (
+                              <option key={unit.code} value={unit.code}>
+                                {unitText(unit)}
+                              </option>
+                            ))}
+                          </select>
+                          {chosenUnit !== product.defaultUnit.code ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={savingCode !== null}
+                                onClick={() => void saveDefaultUnit(product, chosenUnit)}
+                              >
+                                {savingCode === product.code ? "Saving..." : "Save unit"}
+                              </button>
+                              <span className="form-hint">Applies to new entries. Existing harvests keep the unit they were recorded in.</span>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : (
+                        unitText(product.defaultUnit)
+                      )}
                     </td>
                     <td>{product.supportedUnits.map((unit) => unit.code).join(", ")}</td>
                     <td>
@@ -164,7 +244,8 @@ export function ProductsSetupPage() {
                       </td>
                     ) : null}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -189,11 +270,33 @@ export function ProductsSetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {available.map((product) => (
+                {available.map((product) => {
+                  const enableUnit = enableUnits[product.code] ?? product.defaultUnit.code;
+                  return (
                   <tr key={product.code}>
                     <td>{product.name}</td>
                     <td>
-                      {product.defaultUnit.name} ({product.defaultUnit.code})
+                      {canEdit && product.supportedUnits.length > 1 ? (
+                        <div className="product-unit-choice">
+                        <select
+                          aria-label={`Default unit for ${product.name}`}
+                          value={enableUnit}
+                          disabled={savingCode !== null}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setEnableUnits((current) => ({ ...current, [product.code]: value }));
+                          }}
+                        >
+                          {product.supportedUnits.map((unit) => (
+                            <option key={unit.code} value={unit.code}>
+                              {unitText(unit)}
+                            </option>
+                          ))}
+                        </select>
+                        </div>
+                      ) : (
+                        unitText(product.defaultUnit)
+                      )}
                     </td>
                     <td>{product.supportedUnits.map((unit) => unit.code).join(", ")}</td>
                     {canEdit ? (
@@ -202,7 +305,7 @@ export function ProductsSetupPage() {
                           <button
                             type="button"
                             disabled={savingCode !== null}
-                            onClick={() => void changeProduct(product.code, "enable")}
+                            onClick={() => void changeProduct(product.code, "enable", enableUnit)}
                           >
                             {savingCode === product.code ? "Enabling..." : `Enable ${product.name}`}
                           </button>
@@ -210,7 +313,8 @@ export function ProductsSetupPage() {
                       </td>
                     ) : null}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

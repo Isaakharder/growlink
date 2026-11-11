@@ -64,7 +64,7 @@ let summary: unknown = SUMMARY;
 
 function route(path: string) {
   if (path === "/api/yield-analytics/summary") return jsonOk(summary);
-  if (path === "/api/yield-entries") return jsonOk(ENTRIES);
+  if (path === "/api/yield-entries?units=all") return jsonOk(ENTRIES);
   if (path.startsWith("/api/shipped-yield")) return jsonOk(SHIPPED);
   if (path === "/api/varieties") return jsonOk(VARIETIES);
   if (path === "/api/waste-imports") return jsonOk([]);

@@ -1,6 +1,6 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
-import { displayMatrix, tableHeader, type WeeklyKgTable } from "./weeklyKgByVariety";
+import { displayMatrix, tableHeader, weeklyTableTitle, type WeeklyKgTable } from "./weeklyKgByVariety";
 
 // PDF of the full Weekly kg by Variety table: landscape A4, with the same
 // header, cells and rounding as the card (displayMatrix). Headers repeat on
@@ -26,14 +26,12 @@ export function buildWeeklyKgPdf(
 
   doc.setFontSize(15);
   doc.setTextColor(24, 35, 32);
-  doc.text(cropName ? `Weekly kg by Variety - ${cropName}` : "Weekly kg by Variety", MARGIN, MARGIN + 6);
+  const title = weeklyTableTitle(table.unit);
+  const measured = table.unit === "pcs" ? "Harvested pieces by recorded harvest week  ·  Units: pieces (count)" : "Harvested kg by recorded harvest week  ·  Units: kg";
+  doc.text(cropName ? `${title} - ${cropName}` : title, MARGIN, MARGIN + 6);
   doc.setFontSize(9.5);
   doc.setTextColor(75, 90, 85);
-  doc.text(
-    `${organizationName ?? "Organization"}  ·  ${table.year}  ·  Harvested kg by recorded harvest week  ·  Units: kg`,
-    MARGIN,
-    MARGIN + 24
-  );
+  doc.text(`${organizationName ?? "Organization"}  ·  ${table.year}  ·  ${measured}`, MARGIN, MARGIN + 24);
   doc.text(`Exported ${exportDate}  ·  ${table.entryCount} entries  ·  "—" = no entry recorded`, MARGIN, MARGIN + 38);
 
   // Each kg column is at least as wide as its widest value set in bold, so a
@@ -84,7 +82,7 @@ export function buildWeeklyKgPdf(
     doc.setFontSize(8);
     doc.setTextColor(110, 122, 118);
     const { width, height } = doc.internal.pageSize;
-    doc.text(`Weekly kg by Variety · ${table.year}`, MARGIN, height - MARGIN + 8);
+    doc.text(`${title} · ${table.year}`, MARGIN, height - MARGIN + 8);
     doc.text(`Page ${page} of ${pages}`, width - MARGIN, height - MARGIN + 8, { align: "right" });
   }
   return doc;

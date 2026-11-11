@@ -2,7 +2,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requireAnyPermission, requirePermission } from "../middleware/requirePermission";
-import { loadCatalogProducts } from "../utils/organizationProducts";
+import { loadCatalogProducts, loadSupportedUnitCodes, unitLabel } from "../utils/organizationProducts";
 
 // The organization's products from the GrowLink catalog (migrations 0148,
 // 0149): the ones it has enabled, with each one's default unit, supported
@@ -93,12 +93,30 @@ productsRouter.get("/products", canView, async (req, res) => {
   }
 });
 
-// Enable a catalog product for the organization, starting with the catalog's
-// default unit; enabling one the organization turned off makes it active
-// again with the unit it had.
+class UnitChoiceError extends Error {}
+
+// The unit a request asks for, checked against the units the product can be
+// recorded in (catalog_product_units). Absent: the fallback.
+async function resolveUnitChoice(productCode: string, productName: string, requested: unknown, fallback: string): Promise<string> {
+  if (requested === undefined || requested === null || requested === "") return fallback;
+  const code = typeof requested === "string" ? requested.trim() : "";
+  const supported = await loadSupportedUnitCodes(productCode);
+  if (!supported.includes(code)) {
+    throw new UnitChoiceError(
+      code ? `${productName} can't be recorded in ${unitLabel(code)}.` : "unit_code must be one of the product's units"
+    );
+  }
+  return code;
+}
+
+// Enable a catalog product for the organization in the unit chosen on the
+// Available to Enable row (unit_code), or the catalog's default unit when
+// none is sent. Enabling one the organization turned off makes it active
+// again, with the unit it had unless another one is chosen.
 productsRouter.post("/products/:code/enable", canEdit, async (req, res) => {
   const organizationId = req.organizationId as string;
   const code = String(req.params.code ?? "");
+  const requestedUnit = (req.body as Record<string, unknown> | undefined)?.unit_code;
 
   try {
     const catalog = await loadCatalogProducts();
@@ -109,29 +127,77 @@ productsRouter.post("/products/:code/enable", canEdit, async (req, res) => {
 
     const { data: existing, error: lookupError } = await supabase
       .from("organization_products")
-      .select("id, status")
+      .select("id, status, default_unit_code")
       .eq("organization_id", organizationId)
       .eq("product_code", code)
       .maybeSingle();
     if (lookupError) throw lookupError;
 
-    if (!existing) {
+    const current = existing as { id: string; status: string; default_unit_code: string } | null;
+    const unit = await resolveUnitChoice(code, product.name, requestedUnit, current?.default_unit_code ?? product.defaultUnitCode);
+
+    if (!current) {
       const { error } = await supabase
         .from("organization_products")
-        .insert({ organization_id: organizationId, product_code: code, default_unit_code: product.defaultUnitCode, status: "active" });
+        .insert({ organization_id: organizationId, product_code: code, default_unit_code: unit, status: "active" });
       if (error) throw error;
-    } else if ((existing as { status: string }).status !== "active") {
+    } else if (current.status !== "active" || current.default_unit_code !== unit) {
       const { error } = await supabase
         .from("organization_products")
-        .update({ status: "active", updated_at: new Date().toISOString() })
-        .eq("id", (existing as { id: string }).id)
+        .update({ status: "active", default_unit_code: unit, updated_at: new Date().toISOString() })
+        .eq("id", current.id)
         .eq("organization_id", organizationId);
       if (error) throw error;
     }
 
     return res.json(await loadProductsView(organizationId));
   } catch (error) {
+    if (error instanceof UnitChoiceError) {
+      return res.status(400).json({ message: error.message });
+    }
     return sendSafeError(res, 500, "Failed to enable product.", "Product enable error:", error);
+  }
+});
+
+// Change an enabled product's default unit. It applies to harvests entered
+// from now on; every saved harvest keeps the unit it was recorded in (kg in
+// yield_entries, pieces in yield_piece_entries), so nothing is converted.
+productsRouter.patch("/products/:code", canEdit, async (req, res) => {
+  const organizationId = req.organizationId as string;
+  const code = String(req.params.code ?? "");
+  const requestedUnit = (req.body as Record<string, unknown> | undefined)?.default_unit_code;
+
+  if (requestedUnit === undefined || requestedUnit === null || requestedUnit === "") {
+    return res.status(400).json({ message: "default_unit_code is required" });
+  }
+
+  try {
+    const product = (await loadCatalogProducts()).find((p) => p.code === code);
+    const { data: existing, error: lookupError } = await supabase
+      .from("organization_products")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("product_code", code)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    if (!product || !existing) {
+      return res.status(404).json({ message: "That product isn't enabled for your organization." });
+    }
+
+    const unit = await resolveUnitChoice(code, product.name, requestedUnit, product.defaultUnitCode);
+    const { error } = await supabase
+      .from("organization_products")
+      .update({ default_unit_code: unit, updated_at: new Date().toISOString() })
+      .eq("id", (existing as { id: string }).id)
+      .eq("organization_id", organizationId);
+    if (error) throw error;
+
+    return res.json(await loadProductsView(organizationId));
+  } catch (error) {
+    if (error instanceof UnitChoiceError) {
+      return res.status(400).json({ message: error.message });
+    }
+    return sendSafeError(res, 500, "Failed to change the default unit.", "Product default unit error:", error);
   }
 });
 
