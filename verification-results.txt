@@ -1,0 +1,45 @@
+PASS  Products: Cucumbers row offers Kilograms (kg), Pieces (pcs)
+PASS  Products: Bell Peppers has no unit choice (kg only)
+PASS  Products: Cucumbers enabled in kg
+PASS  Setup: Bonbon (Cucumbers, 6,000 m²) created
+PASS  Manual Entry: kg default → Enter Kg
+PASS  Products: change shows 'applies to new entries' before saving
+PASS  Products: notice "New Cucumbers harvests will be recorded in Pieces (pcs). Existing harvests keep their units."
+PASS  Products: Bell Peppers → pieces refused (400 Bell Peppers can't be recorded in Pieces (pcs).)
+PASS  Manual Entry: pieces default → Enter Pieces
+PASS  Manual Entry: no kg, fruit weight or cases fields for pieces
+PASS  Manual Entry: 12.5 pieces refused (whole counts only)
+PASS  Manual Entry: 48,000 pcs ÷ 6,000 m² = 8 pieces/m²
+PASS  Manual Entry: no add-to prompt — a kg week stays separate from pieces
+PASS  DB: week 33 piece count [{"organization":"Greenhouse Test Farm","product":"cucumber","week":33,"total_pieces":48000,"pieces_per_m2":8}]
+PASS  DB: week 33 kg harvest kept {"organization":"Greenhouse Test Farm","product":"cucumber","entries":1,"total_kg":7800}
+PASS  Manual Entry: second count asks to add pieces
+PASS  DB: count now 50,000 pcs; kg harvest still 7,800 kg
+PASS  Recent Entries: kg row has blank pieces cells (Bonbon,2026,33,2026-11-11,7800,,1.3,,650,-,EditDelete)
+PASS  Recent Entries: pieces row has blank kg/cases/AFW, 8.333 pcs/m² (Bonbon,2026,33,2026-11-11,,50,000 pcs,,8.333,,,EditDelete)
+PASS  Edit: old kg harvest opens in kg after the switch
+PASS  Edit: piece count opens in pieces
+PASS  Weekly: Bell Peppers view unchanged, no cucumbers
+PASS  Weekly: Cucumbers opens in its default unit (pieces)
+PASS  Weekly: pieces table = 50,000, no kg in it
+PASS  Weekly: CSV weekly-pieces-by-variety-cucumbers-2026.csv = 33,50000,50000 | Season total,50000,50000
+PASS  Weekly: kg table = 7,900.0 kg only
+PASS  Analytics: Bell Pepper KPIs identical to before
+PASS  Analytics: Bell Pepper Variety Summary identical to before
+PASS  Analytics: Bell Pepper CSV identical to before
+PASS  Analytics: Cucumbers Total kg = 7900 (kg harvests only)
+PASS  Analytics: Total pieces = 50000
+PASS  Analytics: Pieces / m² = 8.3 over Bonbon's 6,000 m²
+PASS  Analytics: headers Variety | Unit | Entries | Total kg | Total pieces | Waste % | Avg fw (g) | kg / m² | Pieces / m²
+PASS  Analytics: pieces row Bonbon | pieces | 1 |  | 50000 |  |  |  | 8.3
+PASS  Analytics: kg row Bonbon | kg | 1 | 7900 |  | 0.0% | 0 | 1.3 | 
+PASS  Analytics: Pieces / m² chart shown for Cucumbers
+PASS  Analytics: CSV header Variety,Unit,Entries,Total kg,Total pieces,Waste %,Avg fw (g),kg / m2,Pieces / m2
+PASS  Analytics: CSV rows = screen rows (growlink-variety-summary-cucumbers-2026.csv)
+PASS  Analytics: PDF preview rows = screen rows
+PASS  Analytics: PDF growlink-variety-summary-cucumbers-2026.pdf
+PASS  Pepper-only farm: enabled Cucumbers in pieces; Bell Peppers kg ([{"organization":"Pepper Only Farm","product":"bell_pepper","unit":"kg"},{"organization":"Pepper Only Farm","product":"cucumber","unit":"pcs"}])
+PASS  Pepper-only farm: can't count pieces on the other farm's variety (400 Selected variety was not found)
+PASS  DB: Greenhouse Test Farm Bell Peppers unchanged {"organization":"Greenhouse Test Farm","product":"bell_pepper","entries":39,"total_kg":145980}
+PASS  DB: Pepper Only Farm Bell Peppers unchanged {"organization":"Pepper Only Farm","product":"bell_pepper","entries":1,"total_kg":4100}
+PASS  DB: only piece count [{"organization":"Greenhouse Test Farm","product":"cucumber","week":33,"total_pieces":50000,"pieces_per_m2":8.333333333333334}]
