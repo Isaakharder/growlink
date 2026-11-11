@@ -1,4 +1,5 @@
 import { Request, Router } from "express";
+import { IMPORT_SIZE_CROP } from "../utils/cropSizes";
 import { sizedProductVarietiesOnly, unsizedProductName } from "../utils/organizationProducts";
 import multer from "multer";
 import { supabase } from "../config/supabase";
@@ -224,6 +225,7 @@ export async function loadOrgSizeContext(
       .from("yield_sizes")
       .select("id, name")
       .eq("organization_id", organizationId)
+      .eq("product_code", IMPORT_SIZE_CROP)
       .eq("status", "active"),
     supabase
       .from("flowmaster_size_rules")
@@ -845,6 +847,7 @@ pdfImportRouter.post("/pdf-import/import", canEdit, async (req, res) => {
       .from("yield_sizes")
       .select("id, name")
       .eq("organization_id", organizationId)
+      .eq("product_code", IMPORT_SIZE_CROP)
       .eq("status", "active"),
     supabase
       .from("yield_entries")

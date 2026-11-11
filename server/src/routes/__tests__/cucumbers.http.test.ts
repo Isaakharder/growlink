@@ -31,6 +31,9 @@ const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../
 const m0148 = migration("0148_product_catalog.sql");
 const m0149 = migration("0149_cucumber_product.sql");
 const m0150 = migration("0150_varieties_product_required.sql");
+// The server reads per-crop sizes (0152, which needs 0151), as production will have them.
+const m0151 = migration("0151_cucumber_pieces.sql");
+const m0152 = migration("0152_crop_yield_sizes.sql");
 
 let db: PGlite;
 let server: Server;
@@ -61,8 +64,13 @@ async function resetDatabase() {
       ('${RED}', 'Cadalora', 1000, 5, 'active', 'red', '${ORG}'),
       ('${YELLOW}', 'Sunny', 500, 5, 'active', 'yellow', '${ORG}'),
       ('${OTHER_RED}', 'Foxtrot', 999, 5, 'active', 'red', '${PEPPER_ONLY_ORG}');
-    create table yield_sizes (id uuid primary key, organization_id uuid not null, name text not null, sort_order int not null,
-      status text not null default 'active', created_at timestamptz not null default now());
+    -- yield_sizes as production has it before 0152 (0004 + 0018 + 0021)
+    create table yield_sizes (id uuid primary key default gen_random_uuid(), organization_id uuid not null, name text not null,
+      sort_order int not null default 0 check (sort_order >= 0),
+      status text not null default 'active' check (status in ('active', 'inactive')),
+      created_at timestamptz default now(), updated_at timestamptz default now(),
+      constraint yield_sizes_org_name_key unique (organization_id, name));
+    alter table yield_sizes enable row level security;
     insert into yield_sizes (id, organization_id, name, sort_order) values ('${LG}', '${ORG}', 'LG', 1), ('${XL}', '${ORG}', 'XL', 2);
     create table yield_entries (id uuid primary key default gen_random_uuid(), organization_id uuid not null,
       variety_id uuid not null references varieties(id), year int not null, week int not null, size_kg jsonb not null default '{}',
@@ -86,6 +94,8 @@ async function resetDatabase() {
   await db.exec(m0148);
   await db.exec(m0149);
   await db.exec(m0150);
+  await db.exec(m0151);
+  await db.exec(m0152);
 }
 
 // The shim cannot run PostgREST resource embedding; `varieties(...)` on
@@ -187,7 +197,8 @@ test("Cucumbers is off by default: in the catalog, not enabled, and nothing cucu
   const products = (await call("/products")).body;
   assert.deepEqual(products.products.map((p: any) => p.code), ["bell_pepper"]);
   assert.deepEqual(products.available.map((p: any) => [p.code, p.name, p.defaultUnit.code, p.supportedUnits.map((u: any) => u.code)]), [
-    ["cucumber", "Cucumbers", "kg", ["kg"]]
+    // Pieces arrive with 0151, which this suite applies (the server reads 0152's per-crop sizes).
+    ["cucumber", "Cucumbers", "kg", ["kg", "pcs"]]
   ]);
 
   assert.deepEqual(await call("/varieties", { body: cucumberVariety("Bonbon") }), {
@@ -293,20 +304,21 @@ test("Manual Entry: a cucumber harvest is a total kg — create, add to the same
   assert.equal((await db.query("select 1 from yield_entries where id = $1", [created.body.id])).rows.length, 0);
 });
 
-test("a cucumber harvest refuses size buckets and needs its total; a pepper harvest is unchanged", async () => {
+test("a cucumber harvest refuses Bell Peppers sizes and needs its total; a pepper harvest is unchanged", async () => {
   await enableCucumbers();
   const cucumber = await createCucumberVariety();
   const week = { year: 2026, week: 13, packed_date: "2026-03-24", average_fruit_weight_g: null };
 
+  // Cucumbers may be sized (0152), but only with its own sizes: LG is a Bell Peppers size.
   assert.deepEqual(await call("/yield-entries", { body: { ...week, variety_id: cucumber.id, size_kg: { [LG]: 100 } } }), {
-    status: 400, body: { message: "A Cucumbers harvest is a total kg without size buckets" }
+    status: 400, body: { message: "One or more sizes are not Cucumbers sizes." }
   });
   assert.deepEqual(await call("/yield-entries", { body: { ...week, variety_id: cucumber.id } }), { status: 400, body: { message: "total_kg is required" } });
   assert.deepEqual(await call("/yield-entries", { body: { ...week, variety_id: cucumber.id, total_kg: -1 } }), { status: 400, body: { message: "total_kg must be 0 or greater" } });
-  // The database refuses size buckets on a cucumber harvest from any writer (imports included).
+  // The database refuses another crop's sizes on a cucumber harvest from any writer (imports included).
   await assert.rejects(
     db.query(`insert into yield_entries (organization_id, variety_id, year, week, size_kg, total_kg) values ('${ORG}', '${cucumber.id}', 2026, 14, '{"${LG}": 5}', 5)`),
-    /total kg without size buckets/
+    /is not one of the Cucumbers sizes/
   );
 
   // Bell Peppers: kg per size, total summed from them, a sent total ignored — exactly as before.

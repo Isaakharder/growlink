@@ -9,6 +9,15 @@ export type YieldSizeOption = {
   name: string;
   sort_order: number;
   status: "active" | "inactive";
+  /** The crop the size belongs to (migration 0152); absent from a server before it, where every size is a Bell Peppers size. */
+  product_code?: string;
+};
+
+/** A size field on the entry form; retired marks a size kept only because an old harvest carries it. */
+export type EntrySizeField = {
+  id: string;
+  name: string;
+  retired: boolean;
 };
 
 export type ManualKgEntryVariety = {
@@ -27,6 +36,18 @@ export type ManualKgEntryForm = {
   total_kg?: string;
   /** A whole-number piece count, for a crop recorded in pieces. */
   total_pieces?: string;
+  /** Pieces per size, for a crop recorded in pieces with sizes. */
+  size_pieces?: Record<string, string>;
+  /**
+   * Whether the harvest is entered per size (the total is their sum) or as
+   * one total. Absent: per size for Bell Peppers, one total otherwise.
+   */
+  by_size?: boolean;
+  /**
+   * kg (or pieces) of an old harvest not allocated to any size: kept when a
+   * total-only harvest was combined with a sized one, so its total stays.
+   */
+  unsized?: string;
 };
 
 /** The unit a harvest is recorded in: kg, or a whole-number count of pieces. */
@@ -39,7 +60,10 @@ export type PieceEntryPayload = {
   week: number;
   packed_date: string | null;
   unit_code: "pcs";
-  total_pieces: number;
+  /** Sent for a count without sizes; with sizes the server sums them (plus any unsized pieces). */
+  total_pieces?: number;
+  size_pieces?: Record<string, number>;
+  unsized_pieces?: number;
 };
 
 /** What the form needs to know about the selected variety's product. */
@@ -62,8 +86,10 @@ export type ManualKgEntryPayload = {
   week: number;
   packed_date: string | null;
   size_kg: Record<string, number>;
-  /** Sent only for a product without size buckets; Bell Pepper totals are summed from sizes. */
+  /** Sent only for a harvest entered as one total; sized totals are summed from sizes. */
   total_kg?: number;
+  /** kg of a sized harvest not allocated to a size (an old total-only harvest combined with a sized one). */
+  unsized_kg?: number;
   average_fruit_weight_g: number | null;
 };
 
@@ -90,14 +116,89 @@ export function sumSizeKg(sizeKg: Record<string, string>) {
   return Object.values(sizeKg).reduce((sum, value) => sum + numberOrZero(value), 0);
 }
 
-/** True when the product's harvests are kg per size (Bell Peppers, and any variety whose product is unknown). */
+/** True when every harvest of the product is kg per size (Bell Peppers, and any variety whose product is unknown). */
 export function entersSizes(product: ManualKgEntryProduct | undefined) {
   return product?.tracksSizes !== false;
 }
 
-/** The form's live total: summed sizes, or the total typed for a product without sizes. */
+/** Whether the form enters the harvest per size: its own setting, else per size for Bell Peppers only. */
+export function formBySize(form: ManualKgEntryForm, product: ManualKgEntryProduct | undefined) {
+  return form.by_size ?? entersSizes(product);
+}
+
+/**
+ * The crop's own sizes, in its sort order (migration 0152). A size or a
+ * variety from a server before crops names no crop and is Bell Peppers.
+ */
+export function sizesForCrop(sizes: YieldSizeOption[], productCode: string | null | undefined, { activeOnly = true } = {}) {
+  const crop = productCode ?? "bell_pepper";
+  return sortYieldSizes(
+    sizes.filter((size) => (size.product_code ?? "bell_pepper") === crop && (!activeOnly || size.status === "active"))
+  );
+}
+
+/**
+ * Whether a new harvest of the crop is entered per size: always for Bell
+ * Peppers, and for another crop once it has active sizes. Without sizes it
+ * keeps the single total field.
+ */
+export function newHarvestBySize(product: ManualKgEntryProduct | undefined, cropActiveSizes: YieldSizeOption[]) {
+  return entersSizes(product) || cropActiveSizes.length > 0;
+}
+
+/**
+ * The size fields the form shows: the crop's active sizes, then any other
+ * size the harvest being edited carries with an amount (a retired size, or
+ * one since removed), so an edit never drops part of an old harvest.
+ */
+export function entrySizeFields(
+  sizes: YieldSizeOption[],
+  productCode: string | null | undefined,
+  entrySizes: Record<string, number | string> | null | undefined = null
+): EntrySizeField[] {
+  const active = sizesForCrop(sizes, productCode);
+  const fields: EntrySizeField[] = active.map((size) => ({ id: size.id, name: size.name, retired: false }));
+  const shown = new Set(fields.map((field) => field.id));
+  const byId = new Map(sizes.map((size) => [size.id, size]));
+  const kept = Object.entries(entrySizes ?? {})
+    .filter(([id, amount]) => !shown.has(id) && Number(amount) !== 0)
+    .map(([id]) => byId.get(id))
+    .filter((size): size is YieldSizeOption => !!size)
+    .sort((a, b) => a.sort_order - b.sort_order);
+  for (const size of kept) {
+    fields.push({ id: size.id, name: size.name, retired: true });
+    shown.add(size.id);
+  }
+  for (const [id, amount] of Object.entries(entrySizes ?? {})) {
+    if (!shown.has(id) && Number(amount) !== 0) {
+      fields.push({ id, name: "Removed size", retired: true });
+    }
+  }
+  return fields;
+}
+
+/** Each field's amount from the harvest being edited, else "0". */
+export function sizeFieldValues(fields: Array<{ id: string }>, entrySizes: Record<string, number | string> | null | undefined = null) {
+  const next: Record<string, string> = {};
+  for (const field of fields) {
+    const amount = entrySizes?.[field.id];
+    next[field.id] = amount === undefined || amount === null ? "0" : String(amount);
+  }
+  return next;
+}
+
+/** An old harvest's amount not allocated to a size (total - sizes), or 0. */
+export function unsizedAmount(total: number | null | undefined, entrySizes: Record<string, number | string> | null | undefined) {
+  const sizes = Object.values(entrySizes ?? {}).reduce<number>((sum, amount) => sum + numberOrZero(String(amount)), 0);
+  const rest = Number(total ?? 0) - sizes;
+  return Object.keys(entrySizes ?? {}).length > 0 && rest > 1e-9 ? rest : 0;
+}
+
+/** The form's live total: summed sizes (plus any unsized kg), or the total typed in. */
 export function formTotalKg(form: ManualKgEntryForm, product: ManualKgEntryProduct | undefined) {
-  return entersSizes(product) ? sumSizeKg(form.size_kg) : numberOrZero(form.total_kg ?? "");
+  return formBySize(form, product)
+    ? sumSizeKg(form.size_kg) + numberOrZero(form.unsized ?? "")
+    : numberOrZero(form.total_kg ?? "");
 }
 
 /** kg/m² for the variety, or null when it has no area. */
@@ -116,37 +217,78 @@ export function piecesPerM2For(totalPieces: number, variety: ManualKgEntryVariet
   return totalPieces / variety.area_m2;
 }
 
-/** The typed piece count when it is a whole number of 0 or more, else null. */
-export function formTotalPieces(form: ManualKgEntryForm): number | null {
-  const raw = (form.total_pieces ?? "").trim();
+const wholeCount = (value: string | undefined): number | null => {
+  const raw = (value ?? "").trim();
   return /^\d+$/.test(raw) ? Number(raw) : null;
+};
+
+/**
+ * The form's piece count when every count is a whole number of 0 or more,
+ * else null: the sizes' sum (plus any unsized pieces) per size, or the
+ * typed total.
+ */
+export function formTotalPieces(form: ManualKgEntryForm): number | null {
+  if (form.by_size) {
+    let total = 0;
+    for (const value of Object.values(form.size_pieces ?? {})) {
+      const count = (value ?? "").trim() === "" ? 0 : wholeCount(value);
+      if (count === null) return null;
+      total += count;
+    }
+    const unsized = (form.unsized ?? "").trim() === "" ? 0 : wholeCount(form.unsized);
+    return unsized === null ? null : total + unsized;
+  }
+  return wholeCount(form.total_pieces);
 }
 
 /**
  * The piece-count payload for the form, or the first validation message:
  * variety, pieces, year, week. Pieces are whole counts only; a count has no
- * size buckets, kg or fruit weight.
+ * kg or fruit weight. Entered per size, every size field in sizeFields is
+ * sent (blanks as 0) and the server totals them; otherwise the total is.
  */
-export function buildPieceEntryPayload(form: ManualKgEntryForm): { ok: true; payload: PieceEntryPayload } | { ok: false; error: string } {
+export function buildPieceEntryPayload(
+  form: ManualKgEntryForm,
+  sizeFields: Array<{ id: string }> = []
+): { ok: true; payload: PieceEntryPayload } | { ok: false; error: string } {
   if (!form.variety_id) {
     return { ok: false, error: "Variety is required." };
   }
-  const raw = (form.total_pieces ?? "").trim();
-  if (raw === "") {
-    return { ok: false, error: "Total pieces is required." };
-  }
-  const totalPieces = formTotalPieces(form);
-  if (totalPieces === null || !Number.isSafeInteger(totalPieces)) {
-    return { ok: false, error: "Pieces must be a whole number of 0 or more." };
-  }
-  const payload: PieceEntryPayload = {
+  const base = {
     variety_id: form.variety_id,
     year: Number(form.year),
     week: Number(form.week),
     packed_date: form.packed_date || null,
-    unit_code: "pcs",
-    total_pieces: totalPieces
+    unit_code: "pcs" as const
   };
+  let payload: PieceEntryPayload;
+  if (form.by_size) {
+    const sizePieces: Record<string, number> = {};
+    for (const field of sizeFields) {
+      const raw = (form.size_pieces?.[field.id] ?? "").trim();
+      const count = raw === "" ? 0 : wholeCount(raw);
+      if (count === null || !Number.isSafeInteger(count)) {
+        return { ok: false, error: "Pieces must be whole numbers of 0 or more." };
+      }
+      sizePieces[field.id] = count;
+    }
+    const unsizedRaw = (form.unsized ?? "").trim();
+    const unsized = unsizedRaw === "" ? 0 : wholeCount(unsizedRaw);
+    if (unsized === null) {
+      return { ok: false, error: "Pieces must be whole numbers of 0 or more." };
+    }
+    payload = { ...base, size_pieces: sizePieces, ...(unsized > 0 ? { unsized_pieces: unsized } : {}) };
+  } else {
+    const raw = (form.total_pieces ?? "").trim();
+    if (raw === "") {
+      return { ok: false, error: "Total pieces is required." };
+    }
+    const totalPieces = formTotalPieces(form);
+    if (totalPieces === null || !Number.isSafeInteger(totalPieces)) {
+      return { ok: false, error: "Pieces must be a whole number of 0 or more." };
+    }
+    payload = { ...base, total_pieces: totalPieces };
+  }
   if (!Number.isInteger(payload.year)) {
     return { ok: false, error: "Year is required." };
   }
@@ -174,7 +316,7 @@ export function totalCasesFor(totalKg: number, variety: ManualKgEntryVariety | u
  */
 export function buildManualKgEntryPayload(
   form: ManualKgEntryForm,
-  yieldSizes: YieldSizeOption[],
+  yieldSizes: Array<{ id: string }>,
   product?: ManualKgEntryProduct
 ): { ok: true; payload: ManualKgEntryPayload } | { ok: false; error: string } {
   if (!form.variety_id) {
@@ -183,14 +325,23 @@ export function buildManualKgEntryPayload(
 
   const payloadSizeKg: Record<string, number> = {};
   let totalKg: number | undefined;
+  let unsizedKg: number | undefined;
 
-  if (entersSizes(product)) {
+  if (formBySize(form, product)) {
     for (const size of yieldSizes) {
       const kg = numberOrZero(form.size_kg[size.id] ?? "0");
       if (kg < 0) {
         return { ok: false, error: "Kg values must be 0 or greater." };
       }
       payloadSizeKg[size.id] = kg;
+    }
+    // Kept from an old harvest only (a crop whose sizes are optional).
+    const unsized = numberOrZero(form.unsized ?? "");
+    if (unsized < 0) {
+      return { ok: false, error: "Kg values must be 0 or greater." };
+    }
+    if (unsized > 0 && !entersSizes(product)) {
+      unsizedKg = unsized;
     }
   } else {
     const raw = (form.total_kg ?? "").trim();
@@ -210,6 +361,7 @@ export function buildManualKgEntryPayload(
     packed_date: form.packed_date || null,
     size_kg: payloadSizeKg,
     ...(totalKg === undefined ? {} : { total_kg: totalKg }),
+    ...(unsizedKg === undefined ? {} : { unsized_kg: unsizedKg }),
     average_fruit_weight_g:
       form.average_fruit_weight_g.trim() === ""
         ? null

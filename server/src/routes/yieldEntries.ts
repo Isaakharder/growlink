@@ -8,6 +8,7 @@ import { writeSourceColumn } from "../utils/writeSource";
 import { mergeAverageFruitWeightG } from "../utils/averageFruitWeight";
 import { calculateYieldTotals, calculateYieldTotalsFromKg } from "../utils/yieldTotals";
 import { loadOrganizationProducts, productView, unitLabel, type OrganizationProduct } from "../utils/organizationProducts";
+import { assertSizeKeysForCrop, IMPORT_SIZE_CROP } from "../utils/cropSizes";
 
 type YieldEntryStatus = "active" | "inactive";
 type YieldEntryPayload = {
@@ -28,6 +29,16 @@ type YieldEntryRequest = Omit<YieldEntryPayload, "size_kg"> & {
   unit_code: "kg" | "pcs" | null;
   /** A whole-number piece count, for unit_code "pcs". */
   total_pieces: number | null;
+  /**
+   * Part of a sized harvest not allocated to any size (a crop whose sizes
+   * are optional): kept when a total-only harvest is combined with a sized
+   * one in the same week, so the total stays what was harvested.
+   */
+  unsized_kg: number | null;
+  /** Whole-number pieces per size (sizeId -> count), for unit_code "pcs". */
+  size_pieces: Record<string, number> | null;
+  /** Pieces of a sized count not allocated to any size. */
+  unsized_pieces: number | null;
 };
 
 type VarietyForCalc = {
@@ -80,6 +91,37 @@ function parseSizeKg(value: unknown): Record<string, number> {
   }
 
   return result;
+}
+
+function parseSizePieces(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("size_pieces must be an object of sizeId -> whole number of pieces");
+  }
+
+  const result: Record<string, number> = {};
+
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const parsed = typeof raw === "number" ? raw : Number(raw);
+
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new Error("Pieces per size must be whole numbers of 0 or more");
+    }
+
+    result[key] = parsed;
+  }
+
+  return result;
+}
+
+function parseOptionalAmount(value: unknown, fieldName: string, wholeNumber: boolean): number | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (wholeNumber ? !Number.isSafeInteger(parsed) || parsed < 0 : !Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${fieldName} must be ${wholeNumber ? "a whole number of 0 or more" : "0 or greater"}`);
+  }
+  return parsed;
 }
 
 function validatePayload(input: unknown): YieldEntryRequest {
@@ -137,6 +179,10 @@ function validatePayload(input: unknown): YieldEntryRequest {
       ? packedDateRaw
       : null;
 
+  const size_pieces = body.size_pieces === undefined || body.size_pieces === null ? null : parseSizePieces(body.size_pieces);
+  const unsized_kg = parseOptionalAmount(body.unsized_kg, "unsized_kg", false);
+  const unsized_pieces = parseOptionalAmount(body.unsized_pieces, "unsized_pieces", true);
+
   return {
     variety_id,
     year,
@@ -146,29 +192,54 @@ function validatePayload(input: unknown): YieldEntryRequest {
     average_fruit_weight_g,
     packed_date,
     unit_code,
-    total_pieces
+    total_pieces,
+    unsized_kg,
+    size_pieces,
+    unsized_pieces
   };
 }
 
 class EntryInputError extends Error {}
 
-// The entry as stored, by the variety's product: Bell Peppers are kg per size
-// with the total summed from them, exactly as before; a product without sizes
-// (Cucumbers) is one total kg and stores no size buckets.
+/** Totals that should match, allowing for floating-point sums of decimals. */
+const sameAmount = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
+
+// The entry as stored, by the variety's product:
+//   Bell Peppers (sizes required): kg per size with the total summed from
+//   them, exactly as before.
+//   A crop whose sizes are optional (Cucumbers): kg per size of its own size
+//   list, totalled as their sum plus any unsized kg; or, with no sizes, one
+//   total kg.
 function resolveEntryKg(request: YieldEntryRequest, product: OrganizationProduct): { payload: YieldEntryPayload; totalKg: number } {
-  const { total_kg, size_kg, unit_code, total_pieces, ...rest } = request;
+  const { total_kg, size_kg, unit_code, total_pieces, unsized_kg, size_pieces, unsized_pieces, ...rest } = request;
   void unit_code;
   void total_pieces;
+  void unsized_pieces;
+
+  if (size_pieces && Object.keys(size_pieces).length > 0) {
+    throw new EntryInputError("A kg harvest has no pieces per size; send size_kg");
+  }
 
   if (product.tracksSizes) {
     if (size_kg === null) {
       throw new EntryInputError("size_kg must be an object of sizeId -> kg number");
     }
+    if (unsized_kg !== null && unsized_kg !== 0) {
+      throw new EntryInputError(`Every ${product.name} harvest is recorded by size`);
+    }
     return { payload: { ...rest, size_kg }, totalKg: Object.values(size_kg).reduce((sum, kg) => sum + kg, 0) };
   }
 
-  if (size_kg && Object.values(size_kg).some((kg) => kg !== 0)) {
-    throw new EntryInputError(`A ${product.name} harvest is a total kg without size buckets`);
+  if (size_kg && Object.keys(size_kg).length > 0) {
+    const totalKg = Object.values(size_kg).reduce((sum, kg) => sum + kg, 0) + (unsized_kg ?? 0);
+    if (total_kg !== null && !sameAmount(total_kg, totalKg)) {
+      throw new EntryInputError("total_kg must equal the kg per size plus any unsized kg");
+    }
+    return { payload: { ...rest, size_kg }, totalKg };
+  }
+
+  if (unsized_kg !== null && unsized_kg !== 0) {
+    throw new EntryInputError("unsized_kg is only sent with kg per size");
   }
   if (total_kg === null) {
     throw new EntryInputError("total_kg is required");
@@ -219,11 +290,13 @@ type PieceEntryPayload = {
   year: number;
   week: number;
   total_pieces: number;
+  /** Pieces per size of the crop's size list; empty for a total-only count. */
+  size_pieces: Record<string, number>;
   packed_date: string | null;
 };
 
 const PIECE_ENTRY_SELECT =
-  "id, variety_id, year, week, packed_date, total_pieces, pieces_per_m2, created_at, updated_at, varieties(name, product_code)";
+  "id, variety_id, year, week, packed_date, total_pieces, size_pieces, pieces_per_m2, created_at, updated_at, varieties(name, product_code)";
 
 type RawPieceEntryRow = {
   id: string;
@@ -232,6 +305,7 @@ type RawPieceEntryRow = {
   week: number;
   packed_date: string | null;
   total_pieces: number | string;
+  size_pieces?: Record<string, unknown> | null;
   pieces_per_m2: number | string | null;
   created_at: string;
   updated_at: string;
@@ -265,6 +339,7 @@ function mapPieceEntryRow(entry: RawPieceEntryRow) {
     packed_date: isoDate(entry.packed_date),
     unit_code: "pcs" as const,
     total_pieces: Number(entry.total_pieces),
+    size_pieces: numberMap(entry.size_pieces),
     pieces_per_m2: entry.pieces_per_m2 === null ? null : Number(entry.pieces_per_m2),
     size_kg: {},
     total_kg: null,
@@ -279,27 +354,52 @@ function mapPieceEntryRow(entry: RawPieceEntryRow) {
   };
 }
 
-/** The piece count a request describes; refuses anything that would carry weight. */
+/** A JSONB sizeId -> amount map as numbers (values may arrive as strings). */
+function numberMap(value: Record<string, unknown> | null | undefined): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value ?? {})) {
+    const amount = typeof raw === "number" ? raw : Number(raw);
+    if (Number.isFinite(amount)) result[key] = amount;
+  }
+  return result;
+}
+
+/**
+ * The piece count a request describes; refuses anything that would carry
+ * weight. With pieces per size (from the crop's own size list) the total is
+ * their sum plus any unsized pieces; without, it is total_pieces.
+ */
 function resolvePieceEntry(request: YieldEntryRequest, product: OrganizationProduct): PieceEntryPayload {
   if (request.size_kg && Object.values(request.size_kg).some((kg) => kg !== 0)) {
-    throw new EntryInputError(`A ${product.name} piece count has no size buckets`);
+    throw new EntryInputError(`A ${product.name} piece count has no kg per size; send size_pieces`);
   }
   if (request.total_kg !== null && request.total_kg !== 0) {
     throw new EntryInputError("A piece count has no kg; send total_pieces");
   }
+  if (request.unsized_kg !== null && request.unsized_kg !== 0) {
+    throw new EntryInputError("A piece count has no kg; send unsized_pieces");
+  }
   if (request.average_fruit_weight_g !== null) {
     throw new EntryInputError("A piece count has no average fruit weight");
+  }
+  const base = { variety_id: request.variety_id, year: request.year, week: request.week, packed_date: request.packed_date };
+  if (request.size_pieces && Object.keys(request.size_pieces).length > 0) {
+    const total = Object.values(request.size_pieces).reduce((sum, count) => sum + count, 0) + (request.unsized_pieces ?? 0);
+    if (request.total_pieces !== null && request.total_pieces !== total) {
+      throw new EntryInputError("total_pieces must equal the pieces per size plus any unsized pieces");
+    }
+    if (!Number.isSafeInteger(total)) {
+      throw new EntryInputError("total_pieces must be a whole number of 0 or more");
+    }
+    return { ...base, total_pieces: total, size_pieces: request.size_pieces };
+  }
+  if (request.unsized_pieces !== null && request.unsized_pieces !== 0) {
+    throw new EntryInputError("unsized_pieces is only sent with pieces per size");
   }
   if (request.total_pieces === null) {
     throw new EntryInputError("total_pieces is required");
   }
-  return {
-    variety_id: request.variety_id,
-    year: request.year,
-    week: request.week,
-    total_pieces: request.total_pieces,
-    packed_date: request.packed_date
-  };
+  return { ...base, total_pieces: request.total_pieces, size_pieces: {} };
 }
 
 /**
@@ -308,6 +408,30 @@ function resolvePieceEntry(request: YieldEntryRequest, product: OrganizationProd
  */
 export const isMissingPieceTable = (error: { code?: string } | null | undefined) =>
   error?.code === "42P01" || error?.code === "PGRST205";
+
+/**
+ * The size keys already on a stored harvest that its edit may keep: all of
+ * them while the harvest stays the same crop, none when it moves to a
+ * variety of another crop (whose sizes are then checked afresh).
+ */
+async function storedSizeKeysForCrop(
+  organizationId: string,
+  storedVarietyId: string,
+  storedSizes: Record<string, unknown> | null | undefined,
+  variety: VarietyForCalc
+): Promise<Set<string>> {
+  const keys = Object.keys(storedSizes ?? {});
+  if (keys.length === 0) return new Set();
+  if (storedVarietyId === variety.id) return new Set(keys);
+  const { data, error } = await supabase
+    .from("varieties")
+    .select("product_code")
+    .eq("id", storedVarietyId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { product_code?: string } | null)?.product_code === variety.product_code ? new Set(keys) : new Set();
+}
 
 /** Whether the request asked for piece counts too (?units=all); without it, lists stay kg only. */
 const includesPieces = (query: Record<string, unknown>) => query.units === "all";
@@ -342,10 +466,10 @@ yieldEntriesRouter.get("/yield-entry-options", canYieldView, async (req, res) =>
       .order("name", { ascending: true }),
     supabase
       .from("yield_sizes")
-      .select("id, name, sort_order, status")
+      .select("id, name, sort_order, status, product_code")
       .eq("organization_id", organizationId)
-      .eq("status", "active")
       .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true })
   ]);
 
   if (varietiesResult.error) {
@@ -358,9 +482,19 @@ yieldEntriesRouter.get("/yield-entry-options", canYieldView, async (req, res) =>
 
   // Harvests are entered only for products the organization is using.
   const activeCodes = new Set(activeProducts.map((p) => p.code));
+  type SizeRow = { id: string; name: string; sort_order: number; status: string; product_code: string };
+  const sizeRows = (sizesResult.data ?? []) as SizeRow[];
   return res.json({
     varieties: (varietiesResult.data ?? []).filter((v) => activeCodes.has((v as { product_code: string }).product_code)),
-    yieldSizes: sizesResult.data ?? [],
+    // Active Bell Peppers sizes, as this list always held: what clients from
+    // before per-crop sizes show, and what the import screens map onto.
+    yieldSizes: sizeRows
+      .filter((size) => size.product_code === IMPORT_SIZE_CROP && size.status === "active")
+      .map(({ id, name, sort_order, status }) => ({ id, name, sort_order, status })),
+    // Every size of each crop in use, active and retired, naming its crop:
+    // Manual Entry offers a crop's active sizes and keeps a retired size
+    // readable on the old harvests that carry it.
+    sizes: sizeRows.filter((size) => activeCodes.has(size.product_code)),
     products: activeProducts.map(productView)
   });
 });
@@ -708,11 +842,15 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
         message: `New ${product.name} harvests are recorded in ${unitLabel(product.defaultUnitCode)}. Reload the page and enter it again.`
       });
     }
+    // A new harvest uses the crop's own active sizes only.
     if (unit === "pcs") {
-      return await createPieceEntry(res, organizationId as string, variety, resolvePieceEntry(request, product));
+      const piecePayload = resolvePieceEntry(request, product);
+      await assertSizeKeysForCrop(organizationId as string, product.code, product.name, Object.keys(piecePayload.size_pieces));
+      return await createPieceEntry(res, organizationId as string, variety, piecePayload);
     }
 
     const { payload, totalKg: incomingTotal } = resolveEntryKg(request, product);
+    await assertSizeKeysForCrop(organizationId as string, product.code, product.name, Object.keys(payload.size_kg));
 
     const { data: existing, error: lookupError } = await supabase
       .from("yield_entries")
@@ -741,7 +879,9 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
         mergedSizeKg[sizeId] = (mergedSizeKg[sizeId] ?? 0) + incomingKg;
       }
 
-      // A product without sizes adds to the stored total; its size buckets stay empty.
+      // Bell Peppers: the total is the sum of its sizes, as always. A crop
+      // whose sizes are optional adds to the stored total, so kg recorded
+      // without sizes stays in the week's total beside the sized kg.
       const existingTotal = product.tracksSizes
         ? Object.values(existingSizeKg).reduce((sum, kg) => sum + kg, 0)
         : Number(existing.total_kg ?? 0);
@@ -753,7 +893,7 @@ yieldEntriesRouter.post("/yield-entries", canYieldEdit, async (req, res) => {
       const { data: updated, error: updateError } = await supabase
         .from("yield_entries")
         .update({
-          size_kg: product.tracksSizes ? mergedSizeKg : {},
+          size_kg: mergedSizeKg,
           average_fruit_weight_g: mergeAverageFruitWeightG(
             existingTotal,
             existing.average_fruit_weight_g == null ? null : Number(existing.average_fruit_weight_g),
@@ -847,8 +987,13 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
     // An entry is edited in the unit it was recorded in, whatever the crop's
     // default unit is now: a kg harvest stays kg, a piece count stays pieces.
     const [kgLookup, pieceLookup] = await Promise.all([
-      supabase.from("yield_entries").select("id").eq("id", id).eq("organization_id", organizationId).maybeSingle(),
-      supabase.from("yield_piece_entries").select("id").eq("id", id).eq("organization_id", organizationId).maybeSingle()
+      supabase.from("yield_entries").select("id, variety_id, size_kg").eq("id", id).eq("organization_id", organizationId).maybeSingle(),
+      supabase
+        .from("yield_piece_entries")
+        .select("id, variety_id, size_pieces")
+        .eq("id", id)
+        .eq("organization_id", organizationId)
+        .maybeSingle()
     ]);
     if (kgLookup.error) {
       return sendSafeError(res, 500, "Failed to update yield entry.", "Yield entry lookup (edit) error:", kgLookup.error);
@@ -867,11 +1012,25 @@ yieldEntriesRouter.put("/yield-entries/:id", canYieldEdit, async (req, res) => {
 
     const { variety, product } = await fetchVarietyForCalc(request.variety_id, organizationId);
 
+    // Sizes already on the harvest stay allowed while it stays the same crop
+    // (a retired size keeps its history); any other size must be one of the
+    // crop's active sizes.
+    const stored = (kgLookup.data ?? pieceLookup.data) as { variety_id: string; size_kg?: unknown; size_pieces?: unknown };
+    const keptKeys = await storedSizeKeysForCrop(
+      organizationId as string,
+      stored.variety_id,
+      (recordedUnit === "kg" ? stored.size_kg : stored.size_pieces) as Record<string, unknown> | null,
+      variety
+    );
+
     if (recordedUnit === "pcs") {
-      return await updatePieceEntry(res, organizationId as string, String(id), variety, product, resolvePieceEntry(request, product));
+      const piecePayload = resolvePieceEntry(request, product);
+      await assertSizeKeysForCrop(organizationId as string, product.code, product.name, Object.keys(piecePayload.size_pieces), keptKeys);
+      return await updatePieceEntry(res, organizationId as string, String(id), variety, product, piecePayload);
     }
 
     const { payload, totalKg } = resolveEntryKg(request, product);
+    await assertSizeKeysForCrop(organizationId as string, product.code, product.name, Object.keys(payload.size_kg), keptKeys);
     const totals = entryTotals(payload, totalKg, product, variety);
 
     const { data, error } = await supabase
@@ -956,7 +1115,7 @@ async function createPieceEntry(
 ) {
   const { data: existing, error: lookupError } = await supabase
     .from("yield_piece_entries")
-    .select("id, total_pieces, packed_date")
+    .select("id, total_pieces, size_pieces, packed_date")
     .eq("organization_id", organizationId)
     .eq("variety_id", payload.variety_id)
     .eq("year", payload.year)
@@ -968,12 +1127,19 @@ async function createPieceEntry(
   }
 
   if (existing) {
-    const row = existing as { id: string; total_pieces: number | string; packed_date: string | null };
+    const row = existing as { id: string; total_pieces: number | string; size_pieces: Record<string, unknown> | null; packed_date: string | null };
+    // Sizes add to sizes and the total to the total, so pieces counted
+    // without sizes stay in the week's total beside the sized ones.
     const total = Number(row.total_pieces) + payload.total_pieces;
+    const sizePieces = numberMap(row.size_pieces);
+    for (const [sizeId, count] of Object.entries(payload.size_pieces)) {
+      sizePieces[sizeId] = (sizePieces[sizeId] ?? 0) + count;
+    }
     const { data: updated, error: updateError } = await supabase
       .from("yield_piece_entries")
       .update({
         total_pieces: total,
+        size_pieces: sizePieces,
         pieces_per_m2: piecesPerM2(total, variety.area_m2),
         packed_date: row.packed_date !== null ? row.packed_date : payload.packed_date,
         updated_at: new Date().toISOString()
@@ -1111,7 +1277,7 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
       .eq("organization_id", organizationId),
     supabase
       .from("yield_sizes")
-      .select("id, name, sort_order")
+      .select("id, name, sort_order, status, product_code")
       .eq("organization_id", organizationId)
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true }),
@@ -1139,7 +1305,8 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
     return sendSafeError(res, 500, "Failed to load yield analytics.", "Yield analytics - varieties error:", varietiesResult.error);
   }
 
-  const sizes = sizesResult.data ?? [];
+  // Each size names its crop; a variety's size mix uses its own crop's sizes.
+  const sizes = (sizesResult.data ?? []) as Array<{ id: string; name: string; sort_order: number; status: string; product_code: string }>;
   const varietiesMap = new Map<string, { id: string; name: string; area_m2: number; product_code: string }>();
   for (const v of varietiesResult.data ?? []) {
     varietiesMap.set(v.id, v);
@@ -1202,13 +1369,14 @@ yieldEntriesRouter.get("/yield-analytics/summary", canYieldView, async (req, res
     const kg_per_m2 = row.area_m2 > 0 ? row.total_kg / row.area_m2 : null;
 
     const size_pct: Record<string, number> = {};
+    const cropSizes = sizes.filter((size) => size.product_code === (row.product_code ?? IMPORT_SIZE_CROP));
     if (row.total_kg > 0) {
-      for (const size of sizes) {
+      for (const size of cropSizes) {
         const sizeKg = row.size_kg_sum[size.id] ?? 0;
         size_pct[size.id] = (sizeKg / row.total_kg) * 100;
       }
     } else {
-      for (const size of sizes) {
+      for (const size of cropSizes) {
         size_pct[size.id] = 0;
       }
     }

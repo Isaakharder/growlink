@@ -2881,6 +2881,36 @@ body.native-shell #root {
   cursor: pointer;
 }
 
+/* Setup -> Varieties: the crop both lists show and new varieties and sizes join. */
+.varieties-crop-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.varieties-crop-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+.varieties-crop-picker select {
+  min-width: 12rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+  padding: 0.45rem 0.6rem;
+}
+
+.varieties-modal-crop {
+  margin: 0;
+}
+
 .irrigation-toolbar {
   display: flex;
   flex-wrap: wrap;

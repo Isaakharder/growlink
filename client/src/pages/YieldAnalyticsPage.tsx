@@ -24,6 +24,8 @@ type YieldSize = {
   id: string;
   name: string;
   sort_order: number;
+  /** The crop the size belongs to (migration 0152); absent from a server before it, where every size is Bell Peppers. */
+  product_code?: string;
 };
 
 type AnalyticsRow = {
@@ -35,6 +37,8 @@ type AnalyticsRow = {
   avg_fruit_weight_g: number | null;
   kg_per_m2: number | null;
   size_pct: Record<string, number>;
+  /** The share recorded without a size, for a crop whose sizes are optional. */
+  unsized_pct?: number;
 };
 
 type WasteImport = {
@@ -76,6 +80,8 @@ type YieldEntry = {
   /** "pcs" for a piece count (migration 0151): its kg fields are null and never counted as kg. */
   unit_code?: "kg" | "pcs";
   total_pieces?: number;
+  /** Pieces per size of the crop's own sizes (migration 0152). */
+  size_pieces?: Record<string, number>;
   pieces_per_m2?: number | null;
 };
 
@@ -86,6 +92,8 @@ type PieceRow = {
   entries_count: number;
   total_pieces: number;
   pieces_per_m2: number | null;
+  /** Pieces per size, summed over the period. */
+  size_pieces_sum: Record<string, number>;
 };
 
 /** The Variety Summary as the screen, the preview, the CSV and the PDF all show it. */
@@ -804,11 +812,17 @@ export function YieldAnalyticsPage() {
 
   const filteredVarietySummary = useMemo(() => {
     if (!summary) {
-      return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[], averageRow: null as AnalyticsRow | null };
+      return { sizes: [] as YieldSize[], rows: [] as AnalyticsRow[], averageRow: null as AnalyticsRow | null, showUnsized: false };
     }
 
-    // A crop without size buckets (Cucumbers) has no size mix columns.
-    const sizes = selectedCrop && !selectedCrop.tracksSizes ? [] : summary.sizes ?? [];
+    // The selected crop's own sizes (each crop has its own list). A crop
+    // with no sizes (Cucumbers until it gets some) has no size mix columns.
+    const sizes = (summary.sizes ?? []).filter(
+      (size) => !selectedCrop || (size.product_code ?? "bell_pepper") === selectedCrop.code
+    );
+    // A crop whose sizes are optional can hold kg recorded without a size;
+    // its share gets its own "Not sized" column so the mix adds up to 100%.
+    const showUnsized = !!selectedCrop && !selectedCrop.tracksSizes && sizes.length > 0;
     const varietiesById = new Map<string, VarietyMeta>();
     for (const variety of varietyMeta) {
       varietiesById.set(variety.id, variety);
@@ -889,8 +903,10 @@ export function YieldAnalyticsPage() {
       .map((item) => {
         const sizePct: Record<string, number> = {};
 
+        let sizedKg = 0;
         for (const size of sizes) {
           const sizeKg = item.size_kg_sum[size.id] ?? 0;
+          sizedKg += sizeKg;
           sizePct[size.id] = item.total_kg > 0 ? (sizeKg / item.total_kg) * 100 : 0;
         }
 
@@ -906,7 +922,8 @@ export function YieldAnalyticsPage() {
           avg_fruit_weight_g:
             item.weighted_fw_kg > 0 ? item.weighted_fw_sum / item.weighted_fw_kg : null,
           kg_per_m2: item.area_m2 > 0 ? item.total_kg / item.area_m2 : null,
-          size_pct: sizePct
+          size_pct: sizePct,
+          ...(showUnsized ? { unsized_pct: item.total_kg > 0 ? Math.max(0, ((item.total_kg - sizedKg) / item.total_kg) * 100) : 0 } : {})
         };
       })
       .sort((a, b) => a.variety_name.localeCompare(b.variety_name));
@@ -941,10 +958,13 @@ export function YieldAnalyticsPage() {
         totalClassifiedSizeKg += sizeKgTotals[size.id] ?? 0;
       }
 
+      // With a "Not sized" column the denominator is all kg, so sizes and
+      // Not sized add up to 100%; Bell Peppers keep the classified-kg mix.
+      const averageDenominator = showUnsized ? totalKg : totalClassifiedSizeKg;
       const averageSizePct: Record<string, number> = {};
       for (const size of sizes) {
         const sizeKg = sizeKgTotals[size.id] ?? 0;
-        averageSizePct[size.id] = totalClassifiedSizeKg > 0 ? (sizeKg / totalClassifiedSizeKg) * 100 : 0;
+        averageSizePct[size.id] = averageDenominator > 0 ? (sizeKg / averageDenominator) * 100 : 0;
       }
 
       averageRow = {
@@ -960,11 +980,12 @@ export function YieldAnalyticsPage() {
         // Farm-wide: all qualifying kg over unique physical growing area (see farmKgPerM2.ts),
         // never a sum of variety area_m2, which double-counts renamed or split varieties.
         kg_per_m2: farmKgPerM2.kgPerM2,
-        size_pct: averageSizePct
+        size_pct: averageSizePct,
+        ...(showUnsized ? { unsized_pct: totalKg > 0 ? Math.max(0, ((totalKg - totalClassifiedSizeKg) / totalKg) * 100) : 0 } : {})
       };
     }
 
-    return { sizes, rows, averageRow };
+    return { sizes, rows, averageRow, showUnsized };
   }, [summary, selectedCrop, varietyMeta, filteredEntries, filteredWasteKgByVarietyId, farmKgPerM2]);
 
   // Piece counts per variety for the period: total pieces, and pieces/m² over
@@ -990,10 +1011,15 @@ export function YieldAnalyticsPage() {
         variety_name: areaById.get(entry.variety_id)?.name ?? entry.variety_name ?? "-",
         entries_count: 0,
         total_pieces: 0,
-        pieces_per_m2: null
+        pieces_per_m2: null,
+        size_pieces_sum: {}
       };
       row.entries_count += 1;
       row.total_pieces += pieces;
+      for (const [sizeId, count] of Object.entries(entry.size_pieces ?? {})) {
+        const value = Number(count);
+        if (Number.isFinite(value)) row.size_pieces_sum[sizeId] = (row.size_pieces_sum[sizeId] ?? 0) + value;
+      }
       byVariety.set(entry.variety_id, row);
     }
     const rows = Array.from(byVariety.values())
@@ -1008,7 +1034,11 @@ export function YieldAnalyticsPage() {
           variety_name: "Average",
           entries_count: rows.reduce((sum, row) => sum + row.entries_count, 0),
           total_pieces: rows.reduce((sum, row) => sum + row.total_pieces, 0),
-          pieces_per_m2: farmPiecesPerM2.kgPerM2
+          pieces_per_m2: farmPiecesPerM2.kgPerM2,
+          size_pieces_sum: rows.reduce<Record<string, number>>((sums, row) => {
+            for (const [sizeId, count] of Object.entries(row.size_pieces_sum)) sums[sizeId] = (sums[sizeId] ?? 0) + count;
+            return sums;
+          }, {})
         }
       : null;
     return { rows, total };
@@ -1021,6 +1051,21 @@ export function YieldAnalyticsPage() {
 
   const summaryTable = useMemo(() => {
     const sizes = filteredVarietySummary.sizes;
+    const showUnsized = filteredVarietySummary.showUnsized;
+    // A kg row's size mix is of its kg; a piece row's of its pieces. Kg and
+    // pieces are never combined.
+    const kgSizeCells = (row: AnalyticsRow): SummaryCell[] => [
+      ...sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0)),
+      ...(showUnsized ? [formatWholePercent(row.unsized_pct ?? 0)] : [])
+    ];
+    const pieceSizeCells = (row: PieceRow): SummaryCell[] => {
+      const sized = sizes.reduce((sum, size) => sum + (row.size_pieces_sum[size.id] ?? 0), 0);
+      const pct = (count: number) => formatWholePercent(row.total_pieces > 0 ? (count / row.total_pieces) * 100 : 0);
+      return [
+        ...sizes.map((size) => pct(row.size_pieces_sum[size.id] ?? 0)),
+        ...(showUnsized ? [pct(Math.max(0, row.total_pieces - sized))] : [])
+      ];
+    };
     const kgCells = (row: AnalyticsRow, name: string): SummaryCell[] =>
       showPieces
         ? [
@@ -1033,7 +1078,7 @@ export function YieldAnalyticsPage() {
             formatAvgFruitWeight(row.avg_fruit_weight_g),
             formatKgPerM2(row.kg_per_m2),
             "",
-            ...sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
+            ...kgSizeCells(row)
           ]
         : [
             name,
@@ -1042,7 +1087,7 @@ export function YieldAnalyticsPage() {
             formatWastePct(row.waste_pct),
             formatAvgFruitWeight(row.avg_fruit_weight_g),
             formatKgPerM2(row.kg_per_m2),
-            ...sizes.map((size) => formatWholePercent(row.size_pct[size.id] ?? 0))
+            ...kgSizeCells(row)
           ];
     const pieceCells = (row: PieceRow, name: string): SummaryCell[] => [
       name,
@@ -1054,7 +1099,7 @@ export function YieldAnalyticsPage() {
       "",
       "",
       formatKgPerM2(row.pieces_per_m2),
-      ...sizes.map(() => "")
+      ...pieceSizeCells(row)
     ];
 
     const body: Array<SummaryTableRow & { sortName: string; unitOrder: number }> = [
@@ -1092,7 +1137,8 @@ export function YieldAnalyticsPage() {
         "Avg fw (g)",
         `kg${perM2}`,
         ...(showPieces ? [`Pieces${perM2}`] : []),
-        ...sizes.map((size) => `${size.name} %`)
+        ...sizes.map((size) => `${size.name} %`),
+        ...(showUnsized ? ["Not sized %"] : [])
       ];
     };
 

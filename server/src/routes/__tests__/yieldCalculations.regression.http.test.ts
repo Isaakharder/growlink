@@ -70,9 +70,11 @@ async function resetDatabase() {
       ('${OTHER_RED}', '${OTHER_ORG}', 'Foxtrot Red', 'red', 999, 5, 'active'),
       ('${OTHER_GREEN}', '${OTHER_ORG}', 'Golf Green', 'green', 777, 5, 'active');
 
+    -- product_code as 0152 fills it in: every size that existed before is a Bell Peppers size.
     create table yield_sizes (id uuid primary key, organization_id uuid not null, name text not null, sort_order int not null,
-      created_at timestamptz not null default now());
-    insert into yield_sizes values
+      created_at timestamptz not null default now(), status text not null default 'active',
+      product_code text not null default 'bell_pepper');
+    insert into yield_sizes (id, organization_id, name, sort_order, created_at) values
       ('${MD}', '${ORG}', 'MD', 3, now()), ('${LG}', '${ORG}', 'LG', 1, now()), ('${XL}', '${ORG}', 'XL', 2, now()),
       ('${OTHER_SIZE}', '${OTHER_ORG}', 'Other', 1, now());
 

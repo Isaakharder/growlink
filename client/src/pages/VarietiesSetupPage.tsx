@@ -45,6 +45,8 @@ type YieldSize = {
   name: string;
   sort_order: number;
   status: YieldSizeStatus;
+  /** The crop the size belongs to (migration 0152); absent from a server before it, where every size is Bell Peppers. */
+  product_code?: string;
   created_at: string;
   updated_at: string;
 };
@@ -116,12 +118,26 @@ function toSizeFormState(size: YieldSize): YieldSizeFormState {
   };
 }
 
-function toSizePayload(form: YieldSizeFormState) {
+function toSizePayload(form: YieldSizeFormState, productCode: string) {
   return {
     name: form.name.trim(),
     sort_order: Number(form.sort_order),
-    status: form.status
+    status: form.status,
+    product_code: productCode
   };
+}
+
+/** A size's crop: a size from a server before per-crop sizes is a Bell Peppers size. */
+const sizeCrop = (size: YieldSize) => size.product_code ?? "bell_pepper";
+
+/** The server's message for a failed request, or the fallback. */
+async function responseMessage(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { message?: string };
+    return body.message || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function VarietiesSetupPage() {
@@ -140,6 +156,8 @@ export function VarietiesSetupPage() {
   const [editingSizeId, setEditingSizeId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSizeModalOpen, setIsSizeModalOpen] = useState(false);
+  // The crop both lists show and new varieties and sizes are added to.
+  const [selectedCropCode, setSelectedCropCode] = useState("");
 
   async function fetchVarieties() {
     setLoading(true);
@@ -215,6 +233,26 @@ export function VarietiesSetupPage() {
     products.find((product) => product.status === "active")?.code ??
     "";
 
+  // Crops to choose from: those enabled for the organization, plus a crop
+  // that was turned off but still has varieties or sizes, so they stay
+  // reachable.
+  const cropChoices = products.filter(
+    (product) =>
+      product.status === "active" ||
+      varieties.some((variety) => variety.product_code === product.code) ||
+      sizes.some((size) => sizeCrop(size) === product.code)
+  );
+  const cropCode = cropChoices.some((crop) => crop.code === selectedCropCode) ? selectedCropCode : defaultProductCode;
+  const selectedCrop = productByCode.get(cropCode);
+  const cropName = selectedCrop?.name ?? "this crop";
+  const cropVarieties = cropCode ? varieties.filter((variety) => variety.product_code === cropCode) : varieties;
+  const cropSizes = (cropCode ? sizes.filter((size) => sizeCrop(size) === cropCode) : sizes)
+    .slice()
+    .sort((a, b) => a.sort_order - b.sort_order);
+  const showColour = selectedCrop?.tracksColour !== false;
+  const editingSize = editingSizeId ? sizes.find((size) => size.id === editingSizeId) : undefined;
+  const sizeModalCrop = productByCode.get(editingSize ? sizeCrop(editingSize) : cropCode);
+
   useEffect(() => {
     void fetchSizes();
   }, []);
@@ -283,7 +321,7 @@ export function VarietiesSetupPage() {
 
   function openAddModal() {
     setEditingId(null);
-    setForm({ ...INITIAL_FORM, product_code: defaultProductCode });
+    setForm({ ...INITIAL_FORM, product_code: cropCode || defaultProductCode });
     setError(null);
     setIsModalOpen(true);
   }
@@ -313,7 +351,7 @@ export function VarietiesSetupPage() {
     try {
       const response = await apiFetch(`${API_BASE}/${id}`, { method: "DELETE" });
       if (!response.ok) {
-        throw new Error(`Delete failed (${response.status})`);
+        throw new Error(await responseMessage(response, `Delete failed (${response.status})`));
       }
 
       if (editingId === id) {
@@ -334,7 +372,13 @@ export function VarietiesSetupPage() {
     event.preventDefault();
     setSizesError(null);
 
-    const payload = toSizePayload(sizeForm);
+    // A new size joins the selected crop; an edited size keeps its own.
+    const payload = toSizePayload(sizeForm, editingSize ? sizeCrop(editingSize) : cropCode);
+
+    if (!payload.product_code) {
+      setSizesError("Choose a crop for this size.");
+      return;
+    }
 
     if (!payload.name) {
       setSizesError("Size name is required.");
@@ -417,7 +461,8 @@ export function VarietiesSetupPage() {
     try {
       const response = await apiFetch(`${YIELD_SIZES_API_BASE}/${id}`, { method: "DELETE" });
       if (!response.ok) {
-        throw new Error(`Delete failed (${response.status})`);
+        // A size on recorded harvests is retired (Inactive) rather than deleted.
+        throw new Error(await responseMessage(response, `Delete failed (${response.status})`));
       }
 
       if (editingSizeId === id) {
@@ -439,7 +484,18 @@ export function VarietiesSetupPage() {
         <p>Manage crop varieties and baseline growing attributes.</p>
       </header>
 
-      <div className="varieties-toolbar">
+      <div className="varieties-toolbar varieties-crop-toolbar">
+        <label className="varieties-crop-picker">
+          Crop
+          <select value={cropCode} onChange={(event) => setSelectedCropCode(event.target.value)} disabled={cropChoices.length === 0}>
+            {cropChoices.length === 0 ? <option value="">No crops enabled</option> : null}
+            {cropChoices.map((crop) => (
+              <option key={crop.code} value={crop.code}>
+                {crop.status === "active" ? crop.name : `${crop.name} (turned off)`}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="button" onClick={openAddModal}>
           + Add Variety
         </button>
@@ -447,21 +503,21 @@ export function VarietiesSetupPage() {
 
       <div className="coming-soon-card">
         <h2>Existing Varieties</h2>
+        <p className="form-hint">{selectedCrop ? `${selectedCrop.name} varieties.` : "Every variety."}</p>
 
         {error ? <p className="form-error">{error}</p> : null}
 
         {loading ? <p>Loading...</p> : null}
 
-        {!loading && varieties.length === 0 ? <p>No varieties added yet.</p> : null}
+        {!loading && cropVarieties.length === 0 ? <p>No {selectedCrop ? `${cropName} ` : ""}varieties added yet.</p> : null}
 
-        {!loading && varieties.length > 0 ? (
+        {!loading && cropVarieties.length > 0 ? (
           <div className="varieties-table-wrapper">
             <table className="varieties-table">
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Product</th>
-                  <th>Color</th>
+                  {showColour ? <th>Color</th> : null}
                   <th>Area m²</th>
                   <th>Case kg</th>
                   <th>Planting date</th>
@@ -471,7 +527,7 @@ export function VarietiesSetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {varieties.map((variety) => (
+                {cropVarieties.map((variety) => (
                   <tr key={variety.id}>
                     {(() => {
                       const color = variety.color;
@@ -479,7 +535,7 @@ export function VarietiesSetupPage() {
                       return (
                         <>
                           <td>{variety.name}</td>
-                          <td>{productByCode.get(variety.product_code)?.name ?? variety.product_code}</td>
+                          {showColour ? (
                           <td>
                             {color ? (
                               <span className={`color-badge ${color}`}>{colorLabel(color)}</span>
@@ -487,6 +543,7 @@ export function VarietiesSetupPage() {
                               <span className="form-hint" aria-label="No colour">—</span>
                             )}
                           </td>
+                          ) : null}
                           <td>{variety.area_m2}</td>
                           <td>{variety.case_kg}</td>
                           <td>{variety.planting_date ?? "-"}</td>
@@ -528,21 +585,31 @@ export function VarietiesSetupPage() {
       </div>
 
       <div className="varieties-toolbar">
-        <button type="button" onClick={openAddSizeModal}>
+        <button type="button" onClick={openAddSizeModal} disabled={!cropCode}>
           + Add Size
         </button>
       </div>
 
       <div className="coming-soon-card">
         <h2>Yield Sizes</h2>
+        <p className="form-hint">
+          {selectedCrop ? `${selectedCrop.name} sizes, in the order Manual Entry shows them. ` : ""}
+          Each crop has its own sizes. Set a size to Inactive to retire it: it leaves Manual Entry, and the harvests that used it keep it.
+        </p>
 
-        {sizesError ? <p className="form-error">{sizesError}</p> : null}
+        {sizesError && !isSizeModalOpen ? <p className="form-error">{sizesError}</p> : null}
 
         {sizesLoading ? <p>Loading...</p> : null}
 
-        {!sizesLoading && sizes.length === 0 ? <p>No sizes added yet.</p> : null}
+        {!sizesLoading && cropSizes.length === 0 ? (
+          <p>
+            {selectedCrop
+              ? `No ${cropName} sizes yet. Without sizes, Manual Entry records each ${cropName} harvest as a single total.`
+              : "No sizes added yet."}
+          </p>
+        ) : null}
 
-        {!sizesLoading && sizes.length > 0 ? (
+        {!sizesLoading && cropSizes.length > 0 ? (
           <div className="varieties-table-wrapper">
             <table className="varieties-table">
               <thead>
@@ -554,7 +621,7 @@ export function VarietiesSetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {sizes.map((size) => (
+                {cropSizes.map((size) => (
                   <tr key={size.id}>
                     <td>{size.name}</td>
                     <td>{size.sort_order}</td>
@@ -608,8 +675,9 @@ export function VarietiesSetupPage() {
                 />
               </label>
 
+              {editingId ? (
               <label>
-                Product
+                Crop
                 <select
                   value={form.product_code}
                   onChange={(event) =>
@@ -625,6 +693,11 @@ export function VarietiesSetupPage() {
                   ))}
                 </select>
               </label>
+              ) : (
+              <p className="varieties-modal-crop">
+                Crop: <strong>{selectedProduct?.name ?? "—"}</strong>
+              </p>
+              )}
 
               <label>
                 Area in m²
@@ -734,7 +807,12 @@ export function VarietiesSetupPage() {
         <ModalOverlay onClose={closeSizeModal} contentClassName="variety-modal" titleId="variety-size-modal-title">
             <h2 id="variety-size-modal-title">{editingSizeId ? "Edit Size" : "Add Size"}</h2>
 
+            {sizesError ? <p className="form-error">{sizesError}</p> : null}
+
             <form className="varieties-form" onSubmit={handleSizeSubmit}>
+              <p className="varieties-modal-crop">
+                Crop: <strong>{sizeModalCrop?.name ?? "—"}</strong>
+              </p>
               <label>
                 Size name
                 <input
