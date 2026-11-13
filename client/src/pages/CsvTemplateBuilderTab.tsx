@@ -3261,7 +3261,7 @@ function WeeklyCardView({
               {card.kgPerM2 !== null ? (
                 `${card.kgPerM2.toFixed(3)} kg/m²`
               ) : (
-                <Link to="/setup/varieties" className="csv-weekly-area-not-set-link">
+                <Link to="/crop-planner/varieties" className="csv-weekly-area-not-set-link">
                   Area not set
                 </Link>
               )}
@@ -3425,7 +3425,7 @@ function ImportConfirmModal({
             {card.kgPerM2 !== null ? (
               `${card.kgPerM2.toFixed(3)} kg/m²`
             ) : (
-              <Link to="/setup/varieties" className="csv-weekly-area-not-set-link">
+              <Link to="/crop-planner/varieties" className="csv-weekly-area-not-set-link">
                 Area not set
               </Link>
             )}

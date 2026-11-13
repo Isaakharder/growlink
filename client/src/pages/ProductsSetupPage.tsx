@@ -322,7 +322,7 @@ export function ProductsSetupPage() {
       ) : null}
 
       <p className="form-hint">
-        GrowLink adds products and the units they support. Varieties are managed in Varieties Setup.
+        GrowLink adds products and the units they support. Varieties are managed in Crop Planner → Varieties.
       </p>
     </section>
   );

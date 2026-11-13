@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { createBrowserRouter, Navigate, type RouteObject } from "react-router-dom";
+import { createBrowserRouter, Navigate, useLocation, type RouteObject } from "react-router-dom";
 import { AppLayout } from "../components/layout/AppLayout";
 import { MobileLayout } from "../components/layout/MobileLayout";
 import { LazyRoute } from "../components/LazyRoute";
@@ -47,6 +47,12 @@ import { MobilePestCalibrationPage } from "../pages/MobilePestCalibrationPage";
 import { MobilePestCalibrationDeviceCompletePage } from "../pages/MobilePestCalibrationDeviceCompletePage";
 import { MAINTENANCE_ACCESS_PERMISSIONS } from "../pages/maintenance/access";
 import { PrivacyPolicyPage } from "../pages/PrivacyPolicyPage";
+
+/** A moved page: keep any ?query and #hash so old bookmarks still open the same view. */
+function RedirectKeepingQuery({ to }: { to: string }) {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: to, search, hash }} replace />;
+}
 
 // Maintenance (Equipment/Inventory/Reports/Setup tabs and their sheets) is
 // the single largest module in the app and is only ever reached by users
@@ -355,6 +361,14 @@ export const appRouteConfig: RouteObject[] = [
             )
           },
           {
+            path: "crop-planner/varieties",
+            element: (
+              <RequirePermission permission="greenhouse_setup:view">
+                <VarietiesSetupPage />
+              </RequirePermission>
+            )
+          },
+          {
             path: "setup/products",
             element: (
               <RequirePermission permission="greenhouse_setup:view">
@@ -364,13 +378,10 @@ export const appRouteConfig: RouteObject[] = [
               </RequirePermission>
             )
           },
+          // The old Varieties Setup URL: bookmarks land on Crop Planner → Varieties.
           {
             path: "setup/varieties",
-            element: (
-              <RequirePermission permission="greenhouse_setup:view">
-                <VarietiesSetupPage />
-              </RequirePermission>
-            )
+            element: <RedirectKeepingQuery to="/crop-planner/varieties" />
           },
           {
             path: "setup/food-safety",

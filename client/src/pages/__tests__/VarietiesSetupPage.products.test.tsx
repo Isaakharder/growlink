@@ -75,6 +75,8 @@ async function chooseCrop(user: ReturnType<typeof userEvent.setup>, code: string
 describe("Varieties Setup — organized by crop", () => {
   it("lists the enabled crops and opens on Bell Peppers: only its varieties and its sizes, in sort order", async () => {
     await renderPage();
+    // Now under Crop Planner → Varieties; the page itself is unchanged.
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^Varieties$/);
     expect(within(cropPicker()).getAllByRole("option").map((o) => o.textContent)).toEqual(["Bell Peppers", "Cucumbers"]);
     expect(cropPicker()).toHaveValue("bell_pepper");
     expect(rowsOf(tableUnder("Existing Varieties"))).toEqual([["Cadalora", "Red"]]);
