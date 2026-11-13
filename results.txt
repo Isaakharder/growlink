@@ -1,35 +1,37 @@
 PASS  map saved for the local copy (200)
 PASS  today before: 2 | 18 | 1,648 m² | 5,976 | 9,792
-PASS  new planting is Upcoming
 PASS  Link rows window not open until asked
-PASS  card says no rows linked yet
-PASS  new planting opens with no rows selected
 PASS  rows in use at an overlapping time are marked on the map
-PASS  Phase 2 row 6 is listed off the map
 PASS  map click + Shift-click range: 8 rows selected
-PASS  clicking the phase name on the map adds the whole phase, including the row off the map: 14 rows selected
-PASS  conflict lists Phase 1 rows 1–8 and Phase 2 rows 1–6 under this year's Cadalora: Phase 1 rows 1–8; Phase 2 rows 1–6 have Cadalora (Dec 15, 2025 – no pull-out date).
-PASS  window still open after the refusal
+PASS  phase name adds the whole phase, including the row off the map: 14 rows selected
+PASS  conflict names the planting and its dates
+PASS  exact rows per phase: Phase 1: rows 1–8 / Phase 2: rows 1–6
+PASS  choices: Leave these 14 rows out / Open Cadalora
 PASS  conflicting rows highlighted on the map
-PASS  Cancel closes the window
-PASS  Cancel saved nothing
-PASS  this year's crop was not ended
-PASS  reopening shows the original selection
-PASS  explicit "End Cadalora on Dec 7, 2026 (all 14 rows)" offered
-PASS  ending is confirmed, rows not yet saved
-PASS  rows still not linked until Save rows
-PASS  Save rows closes the window
-PASS  returned to the same planting card (highlighted)
+PASS  the refused save changed no other planting
+PASS  separate editor says it changes Cadalora only
+PASS  the 14 conflicting rows start selected in the editor (14)
+PASS  suggested end date: the day before next year's planting
+PASS  Link rows window stays open underneath
+PASS  partial pull-out confirmed
+PASS  Cadalora as a whole has no pull-out date
+PASS  only Phase 1 rows 1–8 end; Phase 2 rows 1–6 carry on
+PASS  Cadalora 2027 still has no rows until Save rows
+PASS  back in Link rows with the selection kept
+PASS  Link rows notes the freed rows: 8 rows are no longer in conflict. Save rows to link them.
+PASS  still in conflict: Phase 2: rows 1–6
+PASS  returned to the same planting card
 PASS  focus is on the card
 PASS  updated totals: 8 | 800 m² | 2,544 | 5,088
-PASS  card lists Phase 1 rows 1–8
-PASS  this year's card shows its new pull-out date
+PASS  Cadalora's card lists the rows pulled out early
+PASS  Cadalora itself carries on
 PASS  today's counts unchanged: 2 | 18 | 1,648 m² | 5,976 | 9,792
 PASS  today's totals from the API unchanged
-PASS  on Dec 8, 2026 Phase 1 rows 1–8 are next year's crop
-PASS  Mar 1, 2026 still has this year's crop on those rows
+PASS  Dec 8, 2026: Phase 1 rows 1–8 are next year's crop
+PASS  Dec 8, 2026: Phase 2 rows 1–6 are still this year's Cadalora
+PASS  Mar 1, 2026 keeps this year's crop
 PASS  linked rows are preselected on reopening
 PASS  a failed save keeps the window open with the message
 PASS  Cancel after a failed save keeps the 8 saved rows
-PASS  phone: the Link rows window fits (0px over)
+PASS  phone: the planting editor fits (0px over)
 PASS  Greenhouse Setup's live assignments unchanged
