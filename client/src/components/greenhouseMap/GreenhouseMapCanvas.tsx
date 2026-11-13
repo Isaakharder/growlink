@@ -1,5 +1,16 @@
 import { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { CanvasTransform, clampPan, computeFitTransform, zoomAtPoint } from "../../lib/greenhouseMap/canvasTransform";
+import {
+  CanvasTransform,
+  MapRotation,
+  clampPan,
+  computeFitTransform,
+  normalizeRotation,
+  rotateBy,
+  viewLandSize,
+  viewToWorld,
+  worldRectToView,
+  zoomAtPoint
+} from "../../lib/greenhouseMap/canvasTransform";
 import { GreenhouseMap, MapRow, rowExtent } from "../../lib/greenhouseMap/types";
 
 // The greenhouse map, adapted from LabourLink's GreenhouseLiveCanvas (row
@@ -26,7 +37,29 @@ type Props = {
   preview?: { groupId: string; rows: MapRow[]; valid: boolean } | null;
   ariaLabel: string;
   toolbar?: ReactNode;
+  // Shows rotate left/right and Reset orientation. The orientation is this
+  // viewer's preference, kept in this browser under this key; it never changes
+  // the saved layout.
+  rotationStorageKey?: string;
 };
+
+function readRotation(key: string | undefined): MapRotation {
+  if (!key) return 0;
+  try {
+    return normalizeRotation(window.localStorage.getItem(key));
+  } catch {
+    return 0;
+  }
+}
+
+function writeRotation(key: string, rotation: MapRotation) {
+  try {
+    if (rotation === 0) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, String(rotation));
+  } catch {
+    // Storage blocked: the rotation still applies for this visit.
+  }
+}
 
 const ROW_LABEL_MIN_SCALE = 3;
 const PAN_DRAG_THRESHOLD_PX = 4;
@@ -44,7 +77,8 @@ export function GreenhouseMapCanvas({
   snapFeet = 0,
   preview,
   ariaLabel,
-  toolbar
+  toolbar,
+  rotationStorageKey
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const gRef = useRef<SVGGElement>(null);
@@ -55,13 +89,24 @@ export function GreenhouseMapCanvas({
   const fittedFor = useRef<string | null>(null);
   const panRef = useRef<{ pointerId: number; startX: number; startY: number; startPan: { x: number; y: number }; captured: boolean } | null>(null);
   const dragRef = useRef<{ groupId: string; dx: number; dy: number } | null>(null);
+  const [rotation, setRotationState] = useState<MapRotation>(() => readRotation(rotationStorageKey));
+  useEffect(() => setRotationState(readRotation(rotationStorageKey)), [rotationStorageKey]);
+  const setRotation = (next: MapRotation) => {
+    setRotationState(next);
+    if (rotationStorageKey) writeRotation(rotationStorageKey, next);
+  };
+  // Everything below draws, fits and pans in view feet: the land turned by
+  // `rotation`. Row and phase identity never depends on it.
+  const land = { east_west_feet: map.east_west_feet, north_south_feet: map.north_south_feet };
+  const viewLand = viewLandSize(land, rotation);
+  const toView = (rect: { x: number; y: number; width: number; height: number }) => worldRectToView(land, rotation, rect);
 
   const fit = useCallback(() => {
     if (size.width <= 0 || size.height <= 0) return;
-    const next = computeFitTransform(map, size.width, size.height);
+    const next = computeFitTransform(viewLandSize(map, rotation), size.width, size.height);
     setFitScale(next.scale);
     setTransform(next);
-  }, [map, size.width, size.height]);
+  }, [map, rotation, size.width, size.height]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -76,11 +121,11 @@ export function GreenhouseMapCanvas({
 
   // Fit once per land size (not on every edit, so the view doesn't jump while building).
   useEffect(() => {
-    const key = `${map.east_west_feet}x${map.north_south_feet}:${size.width > 0 && size.height > 0}`;
+    const key = `${map.east_west_feet}x${map.north_south_feet}@${rotation}:${size.width > 0 && size.height > 0}`;
     if (fittedFor.current === key || size.width <= 0) return;
     fittedFor.current = key;
     fit();
-  }, [map.east_west_feet, map.north_south_feet, size.width, size.height, fit]);
+  }, [map.east_west_feet, map.north_south_feet, rotation, size.width, size.height, fit]);
 
   const minScale = fitScale * 0.25;
   const maxScale = fitScale * 12;
@@ -110,7 +155,7 @@ export function GreenhouseMapCanvas({
     pt.x = clientX;
     pt.y = clientY;
     const p = pt.matrixTransform(ctm.inverse());
-    return { x: p.x, y: p.y };
+    return viewToWorld(land, rotation, p.x, p.y);
   }
 
   // ── Pan (empty canvas) ─────────────────────────────────────────────────────
@@ -150,7 +195,7 @@ export function GreenhouseMapCanvas({
       setIsPanning(true);
     }
     const next = { x: pan.startPan.x + e.clientX - pan.startX, y: pan.startPan.y + e.clientY - pan.startY };
-    setTransform((t) => ({ scale: t.scale, pan: clampPan(next, t.scale, map, size.width, size.height) }));
+    setTransform((t) => ({ scale: t.scale, pan: clampPan(next, t.scale, viewLand, size.width, size.height) }));
   }
   function onViewportPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
     if (panRef.current?.pointerId === e.pointerId) panRef.current = null;
@@ -178,9 +223,8 @@ export function GreenhouseMapCanvas({
 
   const showLabels = transform.scale >= ROW_LABEL_MIN_SCALE;
   const renderRow = (groupId: string, px: number, py: number, row: MapRow, look: RowAppearance, key: string, selected: boolean, interactive: boolean) => {
-    const { width, height } = rowExtent(row);
-    const x = px + row.x_ft;
-    const y = py + row.y_ft;
+    const extent = rowExtent(row);
+    const { x, y, width, height } = toView({ x: px + row.x_ft, y: py + row.y_ft, width: extent.width, height: extent.height });
     return (
       <g key={key}>
         <rect
@@ -224,6 +268,19 @@ export function GreenhouseMapCanvas({
         <button type="button" onClick={() => zoomBy(1.25)} aria-label="Zoom in">+</button>
         <button type="button" onClick={() => zoomBy(0.8)} aria-label="Zoom out">−</button>
         <button type="button" onClick={fit}>Fit to screen</button>
+        {rotationStorageKey ? (
+          <>
+            <button type="button" onClick={() => setRotation(rotateBy(rotation, -1))} aria-label="Rotate map 90° left" title="Rotate 90° left">
+              ⟲ 90°
+            </button>
+            <button type="button" onClick={() => setRotation(rotateBy(rotation, 1))} aria-label="Rotate map 90° right" title="Rotate 90° right">
+              ⟳ 90°
+            </button>
+            <button type="button" onClick={() => setRotation(0)} disabled={rotation === 0}>
+              Reset orientation
+            </button>
+          </>
+        ) : null}
       </div>
       <div
         ref={viewportRef}
@@ -235,20 +292,21 @@ export function GreenhouseMapCanvas({
       >
         <svg className="gh-map-svg" role="group" aria-label={ariaLabel}>
           <g ref={gRef} transform={`translate(${transform.pan.x} ${transform.pan.y}) scale(${transform.scale})`}>
-            <rect x={0} y={0} width={map.east_west_feet} height={map.north_south_feet} className="gh-map-land" vectorEffect="non-scaling-stroke" />
+            <rect x={0} y={0} width={viewLand.east_west_feet} height={viewLand.north_south_feet} className="gh-map-land" vectorEffect="non-scaling-stroke" />
             {map.phases.map((phase) => {
               const px = phase.x_feet_from_west;
               const py = phase.y_feet_from_north;
+              const box = toView({ x: px, y: py, width: phase.east_west_feet, height: phase.north_south_feet });
               const name = groupName(phase.group_id);
               const labelSize = Math.max(10 / transform.scale, Math.min(phase.east_west_feet, phase.north_south_feet) * 0.04);
               const isPreview = preview?.groupId === phase.group_id;
               return (
                 <g key={phase.group_id}>
                   <rect
-                    x={px}
-                    y={py}
-                    width={phase.east_west_feet}
-                    height={phase.north_south_feet}
+                    x={box.x}
+                    y={box.y}
+                    width={box.width}
+                    height={box.height}
                     className={`gh-map-phase${selectedPhaseId === phase.group_id ? " selected" : ""}${onPhaseMove ? " draggable" : ""}`}
                     vectorEffect="non-scaling-stroke"
                     onPointerDown={(e) => onPhasePointerDown(e, phase.group_id)}
@@ -266,8 +324,8 @@ export function GreenhouseMapCanvas({
                       )
                     : null}
                   <text
-                    x={px + labelSize * 0.4}
-                    y={py - labelSize * 0.35}
+                    x={box.x + labelSize * 0.4}
+                    y={box.y - labelSize * 0.35}
                     fontSize={labelSize}
                     className={`gh-map-phase-label${onPhaseClick ? " clickable" : ""}`}
                     role={onPhaseClick ? "button" : undefined}
@@ -288,7 +346,10 @@ export function GreenhouseMapCanvas({
             })}
           </g>
         </svg>
-        <div className="gh-map-compass" aria-hidden="true">▲<span>N</span></div>
+        <div className="gh-map-compass" aria-hidden="true" data-rotation={rotation}>
+          <span className="gh-map-compass-arrow" style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}>▲</span>
+          <span>N</span>
+        </div>
       </div>
     </div>
   );
