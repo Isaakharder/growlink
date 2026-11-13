@@ -68,6 +68,7 @@ const navItems: NavItem[] = [
       { label: "Reports", to: "/food-safety/reports", permission: "food_safety:view" },
     ],
   },
+  { type: "link", label: "Crop Planner", to: "/crop-planner", permission: "greenhouse_setup:view" },
   {
     type: "group",
     label: "Setup",

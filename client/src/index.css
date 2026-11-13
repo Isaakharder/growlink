@@ -12500,3 +12500,267 @@ details.pack-week-manual > :not(summary) {
 .yield-entry-layout > .rebuild-ranges {
   grid-column: 1 / -1;
 }
+
+/* ── Crop Planner ─────────────────────────────────────────────────────────────
+   The greenhouse map (one block of row tiles per phase, coloured by the
+   assignment in the current mode), the selection panel and the order summary. */
+.crop-plan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin: 1rem 0;
+}
+
+.crop-plan-toolbar label,
+.crop-plan-assign label,
+.crop-plan-range label,
+.crop-plan-layout-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+.crop-plan-toolbar select,
+.crop-plan-toolbar button,
+.crop-plan-assign select,
+.crop-plan-assign input,
+.crop-plan-assign button,
+.crop-plan-range select,
+.crop-plan-range input,
+.crop-plan-range button,
+.crop-plan-group-head button,
+.crop-plan-mode button,
+.crop-plan-clear,
+.crop-plan-oversow,
+.crop-plan-layout-inputs input {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+  padding: 0.45rem 0.7rem;
+}
+
+.crop-plan-toolbar button.danger,
+.crop-plan-assign button.danger {
+  color: #a3352a;
+}
+
+.crop-plan-mode {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.crop-plan-mode button.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.crop-plan-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .crop-plan-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.crop-plan-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0.5rem 0 1rem;
+  font-size: 0.9rem;
+}
+
+.crop-plan-legend i {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+
+.crop-plan-legend i.unassigned {
+  background: var(--surface-soft);
+  border: 1px dashed #9aaba4;
+}
+
+.crop-plan-group {
+  margin-bottom: 1rem;
+}
+
+.crop-plan-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.crop-plan-group-head button {
+  margin-left: auto;
+  padding: 0.25rem 0.6rem;
+}
+
+.crop-plan-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.6rem, 1fr));
+  gap: 0.3rem;
+}
+
+.crop-plan-row {
+  position: relative;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  padding: 0.35rem 0;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+
+.crop-plan-row.unassigned {
+  background: var(--surface-soft);
+  border: 2px dashed #9aaba4;
+  color: var(--text-muted);
+}
+
+.crop-plan-row.selected {
+  outline: 3px solid #1f2a2e;
+  outline-offset: 1px;
+}
+
+.crop-plan-row-flag {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: #d49a1f;
+  color: #1f2a2e;
+  font-size: 0.7rem;
+  line-height: 1rem;
+}
+
+.crop-plan-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.crop-plan-range input {
+  width: 6rem;
+}
+
+.crop-plan-panel {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.crop-plan-assign {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.crop-plan-inline {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.crop-plan-inline input {
+  flex: 1;
+  min-width: 0;
+}
+
+.crop-plan-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid #e3c27a;
+  background: #fff8e6;
+  border-radius: 10px;
+  padding: 0.6rem;
+}
+
+.crop-plan-conflict p,
+.crop-plan-assigned ul {
+  margin: 0;
+}
+
+.crop-plan-flag,
+.crop-plan-incomplete {
+  color: #9a5b00;
+}
+
+.crop-plan-incomplete {
+  font-weight: 600;
+}
+
+.crop-plan-incomplete-banner {
+  border-left: 4px solid #d49a1f;
+  background: #fff8e6;
+  padding: 0.5rem 0.75rem;
+}
+
+.crop-plan-layout-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.crop-plan-layout-inputs summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.crop-plan-order {
+  margin-top: 1rem;
+}
+
+.crop-plan-order-table .crop-plan-phase-line td {
+  color: var(--text-muted);
+}
+
+.crop-plan-order-table .crop-plan-total-line td {
+  border-bottom: 2px solid var(--border);
+}
+
+.crop-plan-oversow {
+  width: 6rem;
+}
+
+.crop-plan-print-modal {
+  width: min(1000px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+@media print {
+  .crop-plan-print {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: #fff;
+  }
+}
