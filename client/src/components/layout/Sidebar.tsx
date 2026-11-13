@@ -68,7 +68,15 @@ const navItems: NavItem[] = [
       { label: "Reports", to: "/food-safety/reports", permission: "food_safety:view" },
     ],
   },
-  { type: "link", label: "Crop Planner", to: "/crop-planner", permission: "greenhouse_setup:view" },
+  {
+    type: "group",
+    label: "Crop Planner",
+    base: "/crop-planner",
+    children: [
+      { label: "Plans",     to: "/crop-planner",           permission: "greenhouse_setup:view" },
+      { label: "Varieties", to: "/crop-planner/varieties", permission: "greenhouse_setup:view" },
+    ],
+  },
   {
     type: "group",
     label: "Setup",
@@ -78,7 +86,6 @@ const navItems: NavItem[] = [
       { label: "Greenhouse Setup",   to: "/setup/greenhouse",    permission: "greenhouse_setup:view" },
       { label: "Irrigation Setup",   to: "/setup/irrigation",    permission: "irrigation:view" },
       { label: "Products Setup",     to: "/setup/products",      permission: "greenhouse_setup:view" },
-      { label: "Varieties Setup",    to: "/setup/varieties",     permission: "greenhouse_setup:view" },
       { label: "Food Safety Setup",  to: "/setup/food-safety",   permission: "food_safety:view" },
       { label: "Settings",           to: "/setup/settings" }, // visible to everyone
     ],
