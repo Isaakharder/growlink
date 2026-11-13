@@ -62,6 +62,10 @@ const MobileMaintenancePage = lazy(() =>
 const ProductsSetupPage = lazy(() =>
   import("../pages/ProductsSetupPage").then((m) => ({ default: m.ProductsSetupPage }))
 );
+// Crop Planner: lazy, like the other pages opened a few times a season.
+const CropPlannerPage = lazy(() =>
+  import("../pages/CropPlannerPage").then((m) => ({ default: m.CropPlannerPage }))
+);
 const MobileMaintenanceEquipmentDetailPage = lazy(() =>
   import("../pages/MobileMaintenanceEquipmentDetailPage").then((m) => ({ default: m.MobileMaintenanceEquipmentDetailPage }))
 );
@@ -323,6 +327,16 @@ export const appRouteConfig: RouteObject[] = [
             element: (
               <RequirePermission permission="irrigation:view">
                 <IrrigationSetupPage />
+              </RequirePermission>
+            )
+          },
+          {
+            path: "crop-planner",
+            element: (
+              <RequirePermission permission="greenhouse_setup:view">
+                <LazyRoute>
+                  <CropPlannerPage />
+                </LazyRoute>
               </RequirePermission>
             )
           },
