@@ -3,6 +3,8 @@ import { apiFetch } from "../lib/api";
 import { usePermissions } from "../hooks/usePermissions";
 import { ModalOverlay } from "../components/ModalOverlay";
 import { downloadBlobFile } from "../lib/downloadFile";
+import { GreenhouseMapCanvas, mapRowKey } from "../components/greenhouseMap/GreenhouseMapCanvas";
+import type { GreenhouseMapResponse, MapRow } from "../lib/greenhouseMap/types";
 import {
   formatRowRanges,
   layoutIndex,
@@ -42,11 +44,13 @@ type PlanDetail = {
   products: Product[];
 };
 type Mode = "planting" | "slabs";
+type View = "map" | "list";
 type Conflict = { rows: RowRef[]; message: string };
 
 const PLANS_URL = "/api/crop-planner/plans";
 const SLAB_TYPES_URL = "/api/crop-planner/slab-types";
 const LAST_PLAN_KEY = "cropPlanner.lastPlanId";
+const VIEW_KEY = "cropPlanner.view";
 // Colours for assignments on the map, in the order assignments appear.
 const PALETTE = ["#2f7d5b", "#c0563f", "#d49a1f", "#3d6fb6", "#8a5cb8", "#2a9aa0", "#b5487d", "#6b8e23", "#a0662b", "#4b5d9c"];
 
@@ -66,6 +70,20 @@ function readLastPlan() {
     return localStorage.getItem(LAST_PLAN_KEY);
   } catch {
     return null;
+  }
+}
+function readView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "map";
+  } catch {
+    return "map";
+  }
+}
+function rememberView(view: View) {
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    // A per-viewer convenience only.
   }
 }
 function rememberPlan(id: string) {
@@ -99,6 +117,10 @@ export function CropPlannerPage() {
   const [planModal, setPlanModal] = useState<{ editing: boolean; season: string; name: string } | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
   const [oversowDraft, setOversowDraft] = useState<Record<string, string>>({});
+  // The organization's greenhouse map (Crop Planner → Edit map). Without one,
+  // or with the list chosen, rows are shown as tiles by phase.
+  const [greenhouseMap, setGreenhouseMap] = useState<GreenhouseMapResponse["map"]>(null);
+  const [view, setView] = useState<View>(readView);
 
   async function loadPlans(preferId?: string) {
     const response = await apiFetch(PLANS_URL);
@@ -118,6 +140,14 @@ export function CropPlannerPage() {
     setDetail(body);
     setOversowDraft({});
   }
+
+  useEffect(() => {
+    // The map is optional: if it can't be loaded the planner keeps the list.
+    apiFetch("/api/greenhouse-map")
+      .then(async (response) => (response.ok ? ((await response.json()) as GreenhouseMapResponse).map : null))
+      .then((map) => setGreenhouseMap(map ?? null))
+      .catch(() => setGreenhouseMap(null));
+  }, []);
 
   useEffect(() => {
     loadPlans()
@@ -167,6 +197,27 @@ export function CropPlannerPage() {
     return new Map(ids.map((id, index) => [id, PALETTE[index % PALETTE.length]]));
   }, [assignmentByRow]);
   const labelOf = (id: string) => (mode === "planting" ? varietyName.get(id) : slabTypeName.get(id)) ?? "Unknown";
+  const plantingByRow = useMemo(() => new Map((detail?.plantings ?? []).map((p) => [rowKey(p), p.variety_id])), [detail]);
+  const slabByRow = useMemo(() => new Map((detail?.slabs ?? []).map((s) => [rowKey(s), s.slab_type_id])), [detail]);
+
+  // The map, limited to rows that are in Greenhouse Setup (and so in the plan);
+  // Setup rows the map doesn't place are listed under it so they stay selectable.
+  const setupKeys = useMemo(() => new Set((detail?.greenhouse.rows ?? []).map(rowKey)), [detail]);
+  const plannerMap = useMemo(() => {
+    if (!greenhouseMap || !detail) return null;
+    return {
+      ...greenhouseMap,
+      phases: greenhouseMap.phases.map((p) => ({ ...p, rows: p.rows.filter((r) => setupKeys.has(mapRowKey(p.group_id, r.row_number))) }))
+    };
+  }, [greenhouseMap, detail, setupKeys]);
+  const showMap = Boolean(plannerMap) && view === "map";
+  const offMapGroups = useMemo(() => {
+    if (!plannerMap) return [] as Array<{ group: PlanGroup; rows: PlanGreenhouseRow[] }>;
+    const onMap = new Set(plannerMap.phases.flatMap((p) => p.rows.map((r) => mapRowKey(p.group_id, r.row_number))));
+    return groups
+      .map((group) => ({ group, rows: (rowsByGroup.get(group.id) ?? []).filter((r) => !onMap.has(rowKey(r))) }))
+      .filter((g) => g.rows.length > 0);
+  }, [plannerMap, groups, rowsByGroup]);
 
   const seeds = useMemo(
     () => (detail ? seedOrder({ plantings: detail.plantings, groups, varieties: detail.varieties, oversow: detail.oversow, layoutOf }) : []),
@@ -416,6 +467,52 @@ export function CropPlannerPage() {
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  const rowTiles = (group: PlanGroup, groupRows: PlanGreenhouseRow[]) =>
+    groupRows.map((row) => {
+      const key = rowKey(row);
+      const assigned = assignmentByRow.get(key);
+      const layout = layoutOf(row);
+      const missing = mode === "planting" ? layout.plants === null : layout.slabsPerRow === null;
+      return (
+        <button
+          key={key}
+          type="button"
+          className={`crop-plan-row${selection.has(key) ? " selected" : ""}${assigned ? "" : " unassigned"}`}
+          style={assigned ? { background: colourOf.get(assigned) } : undefined}
+          aria-pressed={selection.has(key)}
+          aria-label={`${group.name} row ${row.row_number}: ${assigned ? labelOf(assigned) : "unassigned"}${missing ? ", missing layout inputs" : ""}`}
+          title={`Row ${row.row_number} · ${assigned ? labelOf(assigned) : "Unassigned"} · ${layout.plants === null ? `missing ${layout.missing.join(", ")}` : `${layout.slabsPerRow} slabs × ${layout.plantsPerSlab} plants = ${layout.plants} plants`}`}
+          onClick={(e) => toggleRow(row, e.shiftKey)}
+        >
+          {row.row_number}
+          {missing ? <span className="crop-plan-row-flag" aria-hidden="true">!</span> : null}
+        </button>
+      );
+    });
+
+  // On the map a row shows its assignment in the current mode, and both
+  // assignments in its tooltip, so neither mode's work is hidden.
+  const mapRowAppearance = (groupId: string, row: MapRow) => {
+    const ref = { group_id: groupId, row_number: row.row_number };
+    const key = rowKey(ref);
+    const assigned = assignmentByRow.get(key);
+    const layout = layoutOf(ref);
+    const missing = mode === "planting" ? layout.plants === null : layout.slabsPerRow === null;
+    const planting = plantingByRow.get(key);
+    const slab = slabByRow.get(key);
+    const title = [
+      `${groupName.get(groupId) ?? "Phase"} row ${row.row_number}: ${assigned ? labelOf(assigned) : "unassigned"}${missing ? ", missing layout inputs" : ""}`,
+      `Planting: ${planting ? varietyName.get(planting) ?? "Unknown" : "none"}`,
+      `Slab type: ${slab ? slabTypeName.get(slab) ?? "Unknown" : "none"}`,
+      layout.plants === null ? `Missing ${layout.missing.join(", ")}` : `${layout.slabsPerRow} slabs × ${layout.plantsPerSlab} plants = ${layout.plants} plants`
+    ].join("\n");
+    return {
+      fill: assigned ? colourOf.get(assigned) : undefined,
+      className: `${assigned ? "assigned" : "unassigned"}${missing ? " missing-inputs" : ""}`,
+      title
+    };
+  };
+
   const anyIncomplete = seeds.some((s) => s.incomplete) || slabs.some((s) => s.incomplete);
   // A phase breakdown when a variety or slab type spans phases, or when its
   // one phase has rows still missing inputs; otherwise the total says it all.
@@ -560,9 +657,20 @@ export function CropPlannerPage() {
 
           <div className="crop-plan-layout">
             <div className="coming-soon-card crop-plan-map" aria-label="Greenhouse map">
-              <h2>Greenhouse map · {mode === "planting" ? "planting" : "slab types"}</h2>
+              <div className="crop-plan-map-head">
+                <h2>Greenhouse map · {mode === "planting" ? "planting" : "slab types"}</h2>
+                {plannerMap ? (
+                  <div className="crop-plan-view" role="group" aria-label="Map view">
+                    <button type="button" aria-pressed={view === "map"} className={view === "map" ? "active" : ""} onClick={() => { setView("map"); rememberView("map"); }}>Map</button>
+                    <button type="button" aria-pressed={view === "list"} className={view === "list" ? "active" : ""} onClick={() => { setView("list"); rememberView("list"); }}>Rows by phase</button>
+                  </div>
+                ) : null}
+                {canEdit ? <a className="crop-plan-map-edit" href="/crop-planner/map">{greenhouseMap ? "Edit map" : "Build a map"}</a> : null}
+              </div>
               <p className="form-hint">
-                Click a row to select it, Shift-click to select a range, or select a whole phase. Rows marked ! are missing layout inputs.
+                {showMap
+                  ? "Click a row on the map to select it, Shift-click another row in the same phase to select the range, or click a phase name to select the whole phase. Drag to pan, scroll to zoom. Rows with a dashed amber edge are missing layout inputs."
+                  : "Click a row to select it, Shift-click to select a range, or select a whole phase. Rows marked ! are missing layout inputs."}
               </p>
               <div className="crop-plan-legend">
                 {Array.from(colourOf.entries()).map(([id, colour]) => (
@@ -571,41 +679,55 @@ export function CropPlannerPage() {
                 <span><i className="unassigned" /> Unassigned ({fmt(mode === "planting" ? unplanted.length : unslabbed.length)})</span>
               </div>
               {groups.length === 0 ? <p>No greenhouse rows yet. Add phases and rows in Greenhouse Setup.</p> : null}
-              {groups.map((group) => {
-                const groupRows = rowsByGroup.get(group.id) ?? [];
-                return (
-                  <section key={group.id} className="crop-plan-group" aria-label={group.name}>
-                    <div className="crop-plan-group-head">
-                      <strong>{group.name}</strong>
-                      <span className="form-hint">{group.type === "phase" ? "Phase" : group.type} · {groupRows.length} rows</span>
-                      <button type="button" onClick={() => selectRows(groupRows)}>Select phase</button>
+              {showMap && plannerMap ? (
+                <>
+                  <GreenhouseMapCanvas
+                    map={plannerMap}
+                    ariaLabel={`${plannerMap.name} map`}
+                    groupName={(id) => groupName.get(id) ?? "Phase"}
+                    rowAppearance={mapRowAppearance}
+                    selectedKeys={selection}
+                    onRowClick={(groupId, rowNumber, { shiftKey }) => toggleRow({ group_id: groupId, row_number: rowNumber }, shiftKey)}
+                    onPhaseClick={(groupId) => selectRows(rowsByGroup.get(groupId) ?? [])}
+                  />
+                  <div className="crop-plan-phase-buttons" role="group" aria-label="Select a whole phase">
+                    {groups.map((group) => (
+                      <button key={group.id} type="button" onClick={() => selectRows(rowsByGroup.get(group.id) ?? [])}>
+                        Select {group.name} ({fmt(rowsByGroup.get(group.id)?.length ?? 0)} rows)
+                      </button>
+                    ))}
+                  </div>
+                  {offMapGroups.length ? (
+                    <div className="crop-plan-off-map">
+                      <h3>Rows not on the map</h3>
+                      <p className="form-hint">These Greenhouse Setup rows have no place on the map yet. They can still be selected here.</p>
+                      {offMapGroups.map(({ group, rows: groupRows }) => (
+                        <section key={group.id} className="crop-plan-group" aria-label={`${group.name} rows not on the map`}>
+                          <div className="crop-plan-group-head">
+                            <strong>{group.name}</strong>
+                            <span className="form-hint">{groupRows.length} row{groupRows.length === 1 ? "" : "s"}</span>
+                          </div>
+                          <div className="crop-plan-rows">{rowTiles(group, groupRows)}</div>
+                        </section>
+                      ))}
                     </div>
-                    <div className="crop-plan-rows">
-                      {groupRows.map((row) => {
-                        const key = rowKey(row);
-                        const assigned = assignmentByRow.get(key);
-                        const layout = layoutOf(row);
-                        const missing = mode === "planting" ? layout.plants === null : layout.slabsPerRow === null;
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            className={`crop-plan-row${selection.has(key) ? " selected" : ""}${assigned ? "" : " unassigned"}`}
-                            style={assigned ? { background: colourOf.get(assigned) } : undefined}
-                            aria-pressed={selection.has(key)}
-                            aria-label={`${group.name} row ${row.row_number}: ${assigned ? labelOf(assigned) : "unassigned"}${missing ? ", missing layout inputs" : ""}`}
-                            title={`Row ${row.row_number} · ${assigned ? labelOf(assigned) : "Unassigned"} · ${layout.plants === null ? `missing ${layout.missing.join(", ")}` : `${layout.slabsPerRow} slabs × ${layout.plantsPerSlab} plants = ${layout.plants} plants`}`}
-                            onClick={(e) => toggleRow(row, e.shiftKey)}
-                          >
-                            {row.row_number}
-                            {missing ? <span className="crop-plan-row-flag" aria-hidden="true">!</span> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </section>
-                );
-              })}
+                  ) : null}
+                </>
+              ) : (
+                groups.map((group) => {
+                  const groupRows = rowsByGroup.get(group.id) ?? [];
+                  return (
+                    <section key={group.id} className="crop-plan-group" aria-label={group.name}>
+                      <div className="crop-plan-group-head">
+                        <strong>{group.name}</strong>
+                        <span className="form-hint">{group.type === "phase" ? "Phase" : group.type} · {groupRows.length} rows</span>
+                        <button type="button" onClick={() => selectRows(groupRows)}>Select phase</button>
+                      </div>
+                      <div className="crop-plan-rows">{rowTiles(group, groupRows)}</div>
+                    </section>
+                  );
+                })
+              )}
               <form className="crop-plan-range" onSubmit={addRange}>
                 <label>
                   Phase

@@ -66,6 +66,10 @@ const ProductsSetupPage = lazy(() =>
 const CropPlannerPage = lazy(() =>
   import("../pages/CropPlannerPage").then((m) => ({ default: m.CropPlannerPage }))
 );
+// Crop Planner → Greenhouse map builder (and LabourLink import).
+const GreenhouseMapBuilderPage = lazy(() =>
+  import("../pages/GreenhouseMapBuilderPage").then((m) => ({ default: m.GreenhouseMapBuilderPage }))
+);
 const MobileMaintenanceEquipmentDetailPage = lazy(() =>
   import("../pages/MobileMaintenanceEquipmentDetailPage").then((m) => ({ default: m.MobileMaintenanceEquipmentDetailPage }))
 );
@@ -336,6 +340,16 @@ export const appRouteConfig: RouteObject[] = [
               <RequirePermission permission="greenhouse_setup:view">
                 <LazyRoute>
                   <CropPlannerPage />
+                </LazyRoute>
+              </RequirePermission>
+            )
+          },
+          {
+            path: "crop-planner/map",
+            element: (
+              <RequirePermission permission="greenhouse_setup:edit">
+                <LazyRoute>
+                  <GreenhouseMapBuilderPage />
                 </LazyRoute>
               </RequirePermission>
             )

@@ -12764,3 +12764,299 @@ details.pack-week-manual > :not(summary) {
     background: #fff;
   }
 }
+
+/* Greenhouse map (Crop Planner and map builder) — adapted from LabourLink's
+   greenhouse canvas: world-feet SVG with pan/zoom. */
+.gh-map {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.gh-map-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.gh-map-controls button {
+  min-width: 2.2rem;
+}
+
+.gh-map-viewport {
+  position: relative;
+  height: min(70vh, 640px);
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
+
+.gh-map-viewport.panning {
+  cursor: grabbing;
+}
+
+.gh-map-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.gh-map-land {
+  fill: #ffffff;
+  stroke: #b7c6bf;
+  stroke-width: 1;
+}
+
+.gh-map-phase {
+  fill: #f7faf8;
+  stroke: #7f938b;
+  stroke-width: 1.5;
+}
+
+.gh-map-phase.selected {
+  stroke: var(--brand);
+  stroke-width: 3;
+}
+
+.gh-map-phase.draggable {
+  cursor: move;
+}
+
+.gh-map-phase-label {
+  fill: var(--text);
+  font-weight: 700;
+  user-select: none;
+}
+
+.gh-map-phase-label.clickable {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.gh-map-row {
+  fill: #eef6ff;
+  stroke: #60a5fa;
+  stroke-width: 1;
+}
+
+.gh-map-row.clickable {
+  cursor: pointer;
+}
+
+.gh-map-row.unassigned {
+  fill: #eef2f0;
+  stroke: #9aaba4;
+  stroke-dasharray: 3 2;
+}
+
+.gh-map-row.assigned {
+  stroke: rgba(31, 42, 46, 0.45);
+}
+
+.gh-map-row.missing-inputs {
+  stroke: #d49a1f;
+  stroke-width: 2;
+  stroke-dasharray: 4 2;
+}
+
+.gh-map-row.selected {
+  fill: #f59e0b;
+  stroke: #b45309;
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+.gh-map-row.builder {
+  fill: #d8f3eb;
+  stroke: #0f7660;
+}
+
+.gh-map-row.builder.selected {
+  fill: #f59e0b;
+  stroke: #b45309;
+}
+
+.gh-map-row.preview {
+  fill: rgba(59, 130, 246, 0.35);
+  stroke: #2563eb;
+}
+
+.gh-map-row.preview-invalid {
+  fill: rgba(239, 68, 68, 0.35);
+  stroke: #b91c1c;
+}
+
+.gh-map-row.import-matched {
+  fill: #cfeee2;
+  stroke: #2f7d5b;
+}
+
+.gh-map-row.import-resolved {
+  fill: #dbe7fb;
+  stroke: #3d6fb6;
+}
+
+.gh-map-row.import-unmatched,
+.gh-map-row.import-ambiguous {
+  fill: #fde2dd;
+  stroke: #c0563f;
+  stroke-width: 2;
+}
+
+.gh-map-row.import-skipped {
+  fill: #eceeed;
+  stroke: #9aaba4;
+  stroke-dasharray: 2 2;
+}
+
+.crop-plan-legend i.import-matched { background: #cfeee2; border: 1px solid #2f7d5b; }
+.crop-plan-legend i.import-resolved { background: #dbe7fb; border: 1px solid #3d6fb6; }
+.crop-plan-legend i.import-unmatched { background: #fde2dd; border: 1px solid #c0563f; }
+.crop-plan-legend i.import-skipped { background: #eceeed; border: 1px dashed #9aaba4; }
+
+.gh-map-row-label {
+  fill: #1f2a2e;
+  font-weight: 600;
+  user-select: none;
+}
+
+.gh-map-compass {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.crop-plan-map-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+}
+
+.crop-plan-map-head h2 {
+  margin-right: auto;
+}
+
+.crop-plan-view {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.crop-plan-view button.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+.crop-plan-phase-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+
+.crop-plan-off-map {
+  margin-top: 0.8rem;
+}
+
+.gh-map-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.gh-map-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+
+.gh-map-fields .gh-map-toggle,
+.gh-map-fields .gh-map-preview-note,
+.gh-map-fields .form-actions {
+  grid-column: 1 / -1;
+}
+
+.gh-map-toggle {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.gh-map-phase-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.gh-map-phase-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.gh-map-phase-list li.active {
+  border-color: var(--brand);
+  background: var(--active);
+}
+
+.gh-map-file {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.gh-map-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.gh-map-new {
+  max-width: 520px;
+}
+
+.gh-map-import .crop-plan-layout > * {
+  min-width: 0;
+}
+
+.gh-map-import .crop-plan-panel {
+  overflow-x: auto;
+}
+
+.gh-map-import .varieties-table select {
+  max-width: 14rem;
+}
+
+@media (max-width: 720px) {
+  .gh-map-viewport {
+    height: 60vh;
+  }
+}
