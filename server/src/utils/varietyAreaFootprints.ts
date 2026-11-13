@@ -56,7 +56,8 @@ function positive(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function rowAreaM2(row: FootprintRowInput, sectionsById: Map<string, FootprintSectionInput>): number | null {
+/** A row's m²: its own width × length, else its section's; null when neither is set. */
+export function rowAreaM2(row: FootprintRowInput, sectionsById: Map<string, FootprintSectionInput>): number | null {
   if (positive(row.width_meters) && positive(row.length_meters)) return row.width_meters * row.length_meters;
   const section = row.section_id ? sectionsById.get(row.section_id) : undefined;
   if (section && positive(section.width_meters) && positive(section.length_meters)) {

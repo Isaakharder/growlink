@@ -17,7 +17,7 @@ import {
 } from "../lib/greenhouseMap/rowLayout";
 import type { GreenhouseMap, GreenhouseMapResponse, ImportReport, MapPhase, MapRow, SetupGroup, SetupRow } from "../lib/greenhouseMap/types";
 
-// Crop Planner → Greenhouse map: build and edit the organization's own map
+// Setup → Map: build and edit the organization's own map
 // from its Greenhouse Setup groups and rows, or import a LabourLink layout
 // file. Modelled on LabourLink's Greenhouse Layout editor: a land in feet,
 // phases placed on it (type a position or drag), and rows placed in a phase
@@ -370,7 +370,6 @@ export function GreenhouseMapBuilderPage() {
   return (
     <section className="page-shell crop-planner-page gh-map-builder">
       <header>
-        <p><a href="/crop-planner">← Crop Planner</a></p>
         <h1>Greenhouse map</h1>
         <p>
           Draw your greenhouse from the phases and rows in Greenhouse Setup, so the Crop Planner can select rows by clicking them.
