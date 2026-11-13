@@ -1,0 +1,22 @@
+PASS  sidebar: Plants, Plans, Varieties; Plants highlighted ([{"text":"Plants","active":true},{"text":"Plans","active":false},{"text":"Varieties","active":false}])
+PASS  Active: Cadalora,Sunny
+PASS  Upcoming: Cadalora 2027
+PASS  Past (collapsed): Lucinda
+PASS  Cadalora rows 14
+PASS  Cadalora area 1,248 m² + 1 row missing
+PASS  Cadalora plants 4,704
+PASS  Cadalora heads 7,248
+PASS  by phase: ["Phase 1 | 1–8 | 800 | 2,544 | 5,088","Phase 2 | 1–6 | 448 + 1 row missing | 2,160 | 2,160"]
+PASS  Cadalora dates
+PASS  missing width flagged, not zero
+PASS  next year's crop lists the same rows 1–8
+PASS  next year's crop doesn't clash with today's on rows 1–8
+PASS  Plants is read-only (no buttons)
+PASS  phone width: Plants content fits (0px over)
+PASS  Setup menu: Pest Control Setup,Greenhouse Setup,Map,Irrigation Setup,Products Setup,Food Safety Setup,Settings
+PASS  Map highlighted under Setup
+PASS  no back link to Crop Planner on the map page
+PASS  /crop-planner/map redirects: http://localhost:5198/setup/map?x=1
+PASS  Plans' "Build a map" link points to /setup/map
+PASS  Plans still opens and is highlighted
+PASS  live assignments unchanged
