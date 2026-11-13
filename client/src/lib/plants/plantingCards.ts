@@ -13,7 +13,8 @@
 
 export type PlantingStatus = "active" | "upcoming" | "past";
 
-export type PlantingsData = {
+/** The greenhouse and catalog every card is worked out against. */
+export type PlantsGreenhouse = {
   today: string; // YYYY-MM-DD in the organization's time zone
   timeZone: string;
   groups: Array<{ id: string; type: string; name: string; status: string }>;
@@ -26,14 +27,6 @@ export type PlantingsData = {
     /** The row's m² (its own width × length, else its section's); null when neither is set. */
     area_m2: number | null;
   }>;
-  assignments: Array<{
-    id: string;
-    group_id: string;
-    variety_id: string;
-    start_row: number;
-    end_row: number;
-    assignment_pattern: "all" | "every_other";
-  }>;
   varieties: Array<{
     id: string;
     name: string;
@@ -44,6 +37,34 @@ export type PlantingsData = {
     pull_out_date: string | null;
   }>;
   products: Array<{ code: string; name: string; status: string }>;
+};
+
+export type RowRef = { group_id: string; row_number: number };
+
+/** One variety on a set of rows from its planting date to its optional pull-out date. */
+export type PlantingInput = {
+  id: string;
+  variety_id: string;
+  planting_date: string | null;
+  pull_out_date: string | null;
+  rows: RowRef[];
+};
+
+/** Stage 1: today's undated Greenhouse Setup assignments; the variety carries the dates. */
+export type PlantingsData = PlantsGreenhouse & {
+  assignments: Array<{
+    id: string;
+    group_id: string;
+    variety_id: string;
+    start_row: number;
+    end_row: number;
+    assignment_pattern: "all" | "every_other";
+  }>;
+};
+
+/** The dated planting model (0156): each planting has its own dates and rows. */
+export type DatedPlantingsData = PlantsGreenhouse & {
+  plantings: Array<PlantingInput & { planting_date: string; notes: string | null }>;
 };
 
 /** A total over rows: the sum of the rows that have the input, and how many rows don't. */
@@ -62,6 +83,7 @@ export type PhaseLine = {
 };
 
 export type PlantingCard = {
+  plantingId: string;
   varietyId: string;
   varietyName: string;
   color: string | null;
@@ -115,31 +137,50 @@ const add = (into: Measure, value: number | null) => {
 const zero = (): Measure => ({ value: 0, missingRows: 0 });
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** Stage 1: one planting per variety, from its live assignments and the variety's dates. */
 export function buildPlantingBoard(data: PlantingsData): PlantingBoard {
+  const byVariety = new Map<string, RowRef[]>();
+  for (const a of data.assignments) {
+    const list = byVariety.get(a.variety_id) ?? [];
+    byVariety.set(a.variety_id, list);
+    for (const r of assignmentRows(a)) list.push({ group_id: a.group_id, row_number: r });
+  }
+  const varieties = new Map(data.varieties.map((v) => [v.id, v]));
+  const plantings: PlantingInput[] = [...byVariety].map(([varietyId, rows]) => ({
+    id: varietyId,
+    variety_id: varietyId,
+    planting_date: varieties.get(varietyId)?.planting_date ?? null,
+    pull_out_date: varieties.get(varietyId)?.pull_out_date ?? null,
+    rows
+  }));
+  return buildBoard(data, plantings);
+}
+
+/** One card per planting, sorted into Active, Upcoming and Past by the organization's today. */
+export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): PlantingBoard {
   const rowsByKey = new Map(data.rows.map((r) => [`${r.group_id}:${r.row_number}`, r]));
   const groupsById = new Map(data.groups.map((g) => [g.id, g]));
   const groupOrder = new Map(data.groups.map((g, i) => [g.id, i]));
   const varietiesById = new Map(data.varieties.map((v) => [v.id, v]));
   const productNames = new Map(data.products.map((p) => [p.code, p.name]));
 
-  // variety → group → row numbers (an assignment can repeat or overlap another of the same variety)
-  const byVariety = new Map<string, Map<string, Set<number>>>();
-  for (const a of data.assignments) {
-    const groups = byVariety.get(a.variety_id) ?? new Map<string, Set<number>>();
-    byVariety.set(a.variety_id, groups);
-    const set = groups.get(a.group_id) ?? new Set<number>();
-    groups.set(a.group_id, set);
-    for (const r of assignmentRows(a)) set.add(r);
-  }
-
   const board: PlantingBoard = { active: [], upcoming: [], past: [] };
   const cards: PlantingCard[] = [];
 
-  for (const [varietyId, groups] of byVariety) {
+  for (const planting of plantings) {
+    const varietyId = planting.variety_id;
+    // group → row numbers (a row listed twice counts once)
+    const groups = new Map<string, Set<number>>();
+    for (const r of planting.rows) {
+      const set = groups.get(r.group_id) ?? new Set<number>();
+      groups.set(r.group_id, set);
+      set.add(r.row_number);
+    }
     const variety = varietiesById.get(varietyId);
-    const plantingDate = variety?.planting_date ?? null;
-    const pullOutDate = variety?.pull_out_date ?? null;
+    const plantingDate = planting.planting_date;
+    const pullOutDate = planting.pull_out_date;
     const card: PlantingCard = {
+      plantingId: planting.id,
       varietyId,
       varietyName: variety?.name ?? "Unknown variety",
       color: variety?.color ?? null,
@@ -197,6 +238,7 @@ export function buildPlantingBoard(data: PlantingsData): PlantingBoard {
     // Flags, never zeros.
     if (!variety) card.issues.push("This variety no longer exists in Varieties.");
     if (!plantingDate) card.issues.push("No planting date. Add one in Crop Planner → Varieties.");
+    if (planting.rows.length === 0) card.issues.push("No rows linked yet.");
     if (plantingDate && pullOutDate && pullOutDate < plantingDate) card.issues.push("The pull-out date is before the planting date.");
     for (const line of card.phases) {
       if (line.rowsNotInSetup.length) {
@@ -219,7 +261,7 @@ export function buildPlantingBoard(data: PlantingsData): PlantingBoard {
     for (const line of card.phases) {
       for (const n of line.rowNumbers) {
         const key = `${line.groupId}:${n}`;
-        activeOwners.set(key, [...(activeOwners.get(key) ?? []), card.varietyId]);
+        activeOwners.set(key, [...(activeOwners.get(key) ?? []), card.plantingId]);
       }
     }
   }
@@ -227,8 +269,9 @@ export function buildPlantingBoard(data: PlantingsData): PlantingBoard {
     for (const line of card.phases) {
       const shared = line.rowNumbers.filter((n) => (activeOwners.get(`${line.groupId}:${n}`) ?? []).length > 1);
       if (shared.length) {
+        const nameOf = new Map(cards.map((c) => [c.plantingId, c.varietyName]));
         const others = new Set(
-          shared.flatMap((n) => activeOwners.get(`${line.groupId}:${n}`)!).filter((id) => id !== card.varietyId).map((id) => varietiesById.get(id)?.name ?? "another variety")
+          shared.flatMap((n) => activeOwners.get(`${line.groupId}:${n}`)!).filter((id) => id !== card.plantingId).map((id) => nameOf.get(id) ?? "another variety")
         );
         card.issues.push(`${line.groupName} rows ${compressRows(shared)} are also assigned to ${[...others].join(", ")} today.`);
       }
