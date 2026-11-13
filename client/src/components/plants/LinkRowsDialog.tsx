@@ -1,26 +1,28 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ModalOverlay } from "../ModalOverlay";
 import { GreenhouseMapCanvas, mapRowKey } from "../greenhouseMap/GreenhouseMapCanvas";
 import type { GreenhouseMapResponse, MapRow } from "../../lib/greenhouseMap/types";
-import { compressRows, type PlantsGreenhouse, type RowRef } from "../../lib/plants/plantingCards";
+import { compressRows, rowEnd, type PlantingRowRef, type PlantsGreenhouse, type RowRef } from "../../lib/plants/plantingCards";
 
 // Link rows → Save rows for one dated planting (preview). Opens only when the
 // person clicks Link rows. The planting's current rows start selected; rows
 // are picked on the greenhouse map (click, Shift-click a range, click a phase
 // name), by whole phase, by From/To rows, or from the rows listed off the map.
 //
-// Save rows sends the whole selection. If the server refuses it (rows another
-// planting occupies at an overlapping time, rows not in Greenhouse Setup, or
-// any other failure), the window stays open and shows which rows need
-// attention. Nothing is ended or replaced unless the person clicks the button
-// that says so. Cancel closes without changing anything.
+// Save rows sends the whole selection and changes only this planting. If the
+// server refuses it (rows another planting occupies at an overlapping time,
+// rows not in Greenhouse Setup, or any other failure), the window stays open
+// and shows the exact rows and the planting they are linked to. The person can
+// leave those rows out, or open that planting in its own editor (on top of
+// this window, which keeps its selection) to change it there. Nothing here
+// changes another planting. Cancel closes without changing anything.
 
 export type OtherPlanting = {
   id: string;
   varietyName: string;
   planting_date: string;
   pull_out_date: string | null;
-  rows: RowRef[];
+  rows: PlantingRowRef[];
 };
 
 export type RowConflict = RowRef & {
@@ -28,6 +30,8 @@ export type RowConflict = RowRef & {
   variety_name: string;
   planting_date: string;
   pull_out_date: string | null;
+  /** The other planting's own pull-out date for this row, if it ends early. */
+  row_pull_out_date?: string | null;
 };
 
 export type SaveRowsResult =
@@ -40,7 +44,10 @@ type Props = {
   others: OtherPlanting[];
   map: GreenhouseMapResponse["map"];
   onSave: (rows: RowRef[]) => Promise<SaveRowsResult>;
-  onEndPlanting: (plantingId: string, pullOutDate: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Opens another planting in its own editor, with these rows selected there. */
+  onOpenPlanting: (plantingId: string, rows: RowRef[]) => void;
+  /** True while another editor is open on top: Escape belongs to that editor. */
+  suspended?: boolean;
   onCancel: () => void;
 };
 
@@ -62,7 +69,7 @@ const overlaps = (aStart: string, aEnd: string | null, bStart: string, bEnd: str
 const plural = (n: number, word: string) => `${fmt(n)} ${word}${n === 1 ? "" : "s"}`;
 const span = (start: string, end: string | null) => `${formatDate(start)} – ${end ? formatDate(end) : "no pull-out date"}`;
 
-export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onEndPlanting, onCancel }: Props) {
+export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onOpenPlanting, suspended = false, onCancel }: Props) {
   const [selection, setSelection] = useState<Set<string>>(() => new Set(planting.rows.map(key)));
   const [anchor, setAnchor] = useState<RowRef | null>(null);
   const [view, setView] = useState<"map" | "list">(map ? "map" : "list");
@@ -84,14 +91,30 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onEn
 
   // Rows another planting occupies at a time that overlaps this planting's dates.
   const occupiedBy = useMemo(() => {
-    const m = new Map<string, OtherPlanting>();
+    const m = new Map<string, OtherPlanting & { rowEnd: string | null }>();
     for (const o of others) {
-      if (!overlaps(planting.planting_date, planting.pull_out_date, o.planting_date, o.pull_out_date)) continue;
-      for (const r of o.rows) m.set(key(r), o);
+      for (const r of o.rows) {
+        const end = rowEnd(r.pull_out_date, o.pull_out_date);
+        if (overlaps(planting.planting_date, planting.pull_out_date, o.planting_date, end)) m.set(key(r), { ...o, rowEnd: end });
+      }
     }
     return m;
   }, [others, planting.planting_date, planting.pull_out_date]);
   const conflictKeys = useMemo(() => new Set(conflicts.map(key)), [conflicts]);
+
+  // After the other planting is changed in its own editor, the rows it no longer
+  // holds at an overlapping time stop being conflicts. The selection is kept.
+  useEffect(() => {
+    if (!conflicts.length) return;
+    const still = conflicts.filter((c) => occupiedBy.get(key(c))?.id === c.planting_id);
+    if (still.length === conflicts.length) return;
+    const freed = conflicts.length - still.length;
+    setConflicts(still);
+    setNotice(`${freed} row${freed === 1 ? " is" : "s are"} no longer in conflict. Save rows to link ${freed === 1 ? "it" : "them"}.`);
+    if (!still.length) setError(null);
+    // Only when the other plantings change; conflicts are read as they are now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [occupiedBy]);
 
   // The map, limited to Greenhouse Setup rows; Setup rows the map doesn't place are listed under it.
   const pickerMap = useMemo(() => {
@@ -194,26 +217,12 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onEn
     setNotice(`${describe(rows)} left out. Save rows to apply.`);
     setError(null);
   }
-  async function endOther(c: RowConflict, totalRows: number) {
-    const date = dayBefore(planting.planting_date);
-    setSaving(true);
-    const result = await onEndPlanting(c.planting_id, date);
-    setSaving(false);
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    setConflicts((cs) => cs.filter((x) => x.planting_id !== c.planting_id));
-    setError(null);
-    setNotice(`${c.variety_name} now ends ${formatDate(date)} on all ${plural(totalRows, "row")}. Save rows to link the rows.`);
-  }
-
   const appearance = (groupId: string, row: MapRow) => {
     const k = mapRowKey(groupId, row.row_number);
     const other = occupiedBy.get(k);
     const name = `${groupName.get(groupId) ?? "Phase"} row ${row.row_number}`;
     if (conflictKeys.has(k)) return { className: "conflict", title: `${name}: needs attention (${other?.varietyName ?? "another planting"})` };
-    if (other) return { className: "occupied", title: `${name}: ${other.varietyName}, ${span(other.planting_date, other.pull_out_date)}` };
+    if (other) return { className: "occupied", title: `${name}: ${other.varietyName}, ${span(other.planting_date, other.rowEnd)}` };
     return { className: "unassigned", title: `${name}: free for these dates` };
   };
   const tiles = (rows: RowRef[]) =>
@@ -227,8 +236,8 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onEn
           type="button"
           className={`crop-plan-row unassigned${selection.has(k) ? " selected" : ""}${other ? " occupied" : ""}${conflictKeys.has(k) ? " conflict" : ""}`}
           aria-pressed={selection.has(k)}
-          aria-label={`${name}${other ? `: ${other.varietyName}, ${span(other.planting_date, other.pull_out_date)}` : ""}${conflictKeys.has(k) ? ", needs attention" : ""}`}
-          title={other ? `${other.varietyName}, ${span(other.planting_date, other.pull_out_date)}` : "Free for these dates"}
+          aria-label={`${name}${other ? `: ${other.varietyName}, ${span(other.planting_date, other.rowEnd)}` : ""}${conflictKeys.has(k) ? ", needs attention" : ""}`}
+          title={other ? `${other.varietyName}, ${span(other.planting_date, other.rowEnd)}` : "Free for these dates"}
           onClick={(e) => toggle(r, e.shiftKey)}
         >
           {r.row_number}
@@ -237,7 +246,7 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onEn
     });
 
   return (
-    <ModalOverlay onClose={onCancel} contentClassName="plants-link-modal" titleId="plants-link-title" trapFocus>
+    <ModalOverlay onClose={onCancel} contentClassName="plants-link-modal" titleId="plants-link-title" trapFocus closeOnEscape={!suspended}>
       <header className="plants-link-head">
         <h2 id="plants-link-title">Link rows · {planting.varietyName}</h2>
         <p className="plants-muted">{span(planting.planting_date, planting.pull_out_date)}</p>
@@ -335,28 +344,38 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onEn
           {conflictGroups.length ? (
             <div className="crop-plan-conflict" aria-label="Rows that need attention">
               {conflictGroups.map(({ first, rows }) => {
-                const other = others.find((o) => o.id === first.planting_id);
-                const canEnd = first.planting_date < planting.planting_date;
+                const byGroup = new Map<string, number[]>();
+                for (const r of rows) byGroup.set(r.group_id, [...(byGroup.get(r.group_id) ?? []), r.row_number]);
                 return (
-                  <div key={first.planting_id} className="plants-link-conflict">
+                  <section key={first.planting_id} className="plants-link-conflict" aria-label={`Linked to ${first.variety_name}`}>
                     <p>
-                      <strong>{describe(rows)}</strong> {rows.length === 1 ? "has" : "have"} {first.variety_name} ({span(first.planting_date, first.pull_out_date)}).
+                      Already linked to <strong>{first.variety_name}</strong>, planted {formatDate(first.planting_date)},{" "}
+                      {first.pull_out_date ? `pull-out ${formatDate(first.pull_out_date)}` : "no pull-out date"}:
                     </p>
+                    <ul className="plants-link-conflict-rows">
+                      {[...byGroup].map(([g, nums]) => (
+                        <li key={g}>
+                          {groupName.get(g) ?? "Phase"}: row{nums.length === 1 ? "" : "s"} {compressRows(nums)}
+                        </li>
+                      ))}
+                    </ul>
                     <div className="plants-link-conflict-actions">
                       <button type="button" className="secondary" disabled={saving} onClick={() => void leaveOut(rows)}>
                         Leave {rows.length === 1 ? "this row" : `these ${fmt(rows.length)} rows`} out
                       </button>
-                      {canEnd ? (
-                        <button type="button" disabled={saving} onClick={() => void endOther(first, other?.rows.length ?? rows.length)}>
-                          End {first.variety_name} on {formatDate(dayBefore(planting.planting_date))} (all {plural(other?.rows.length ?? rows.length, "row")})
-                        </button>
-                      ) : (
-                        <span className="form-hint">It starts on or after this planting; change one planting's dates instead.</span>
-                      )}
+                      <button
+                        type="button"
+                        disabled={saving}
+                        aria-label={`Open ${first.variety_name} (planted ${formatDate(first.planting_date)}) in its own editor`}
+                        onClick={() => onOpenPlanting(first.planting_id, rows.map(({ group_id, row_number }) => ({ group_id, row_number })))}
+                      >
+                        Open {first.variety_name}
+                      </button>
                     </div>
-                  </div>
+                  </section>
                 );
               })}
+              <p className="form-hint">Opening a planting doesn't change it; it opens on top of this window, which keeps your selection.</p>
             </div>
           ) : null}
           {notInSetup.length ? (

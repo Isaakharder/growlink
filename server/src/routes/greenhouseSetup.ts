@@ -499,6 +499,21 @@ greenhouseSetupRouter.delete("/greenhouse-groups/:id", canEdit, async (req, res)
   const organizationId = req.organizationId;
   const { id } = req.params;
 
+  // A phase with planting history (dated plantings, 0156) is kept so the
+  // history stays readable. Before 0156 is applied the table doesn't exist,
+  // the lookup fails, and deleting works as before.
+  const history = await supabase
+    .from("planting_rows")
+    .select("planting_id")
+    .eq("organization_id", organizationId)
+    .eq("group_id", id)
+    .limit(1);
+  if (!history.error && (history.data ?? []).length > 0) {
+    return res.status(409).json({
+      message: "This phase has planting history, so it can't be deleted. Its plantings still need it to show what was grown where."
+    });
+  }
+
   const { error } = await supabase
     .from("greenhouse_groups")
     .delete()
@@ -506,6 +521,9 @@ greenhouseSetupRouter.delete("/greenhouse-groups/:id", canEdit, async (req, res)
     .eq("organization_id", organizationId);
 
   if (error) {
+    if ((error as { code?: string }).code === "23503") {
+      return res.status(409).json({ message: "This phase is still used by other records (such as planting history), so it can't be deleted." });
+    }
     return sendSafeError(res, 500, "Failed to delete greenhouse group.", "Greenhouse group delete error:", error);
   }
 

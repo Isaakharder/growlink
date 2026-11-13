@@ -2,8 +2,10 @@
 // year's crop and next year's crop, today's counts see only what is in the
 // ground today, a past date still sees what was in the ground then, and
 // overlaps are refused with the rows listed — nothing is ended or replaced
-// silently. The real router runs on PGlite with 0148-0150 and 0156 applied
-// verbatim.
+// silently. Save rows changes only the planting being edited, some rows can
+// be pulled out early without ending the planting, and a phase with planting
+// history can't be deleted. The real routers run on PGlite with 0148-0150 and
+// 0156 applied verbatim.
 // Run: node --require tsx/cjs --test src/routes/__tests__/datedPlantings.http.test.ts
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -89,6 +91,7 @@ before(async () => {
   require.cache[id] = { id, filename: id, loaded: true, exports: { supabase: client } } as unknown as NodeJS.Module;
   /* eslint-disable @typescript-eslint/no-var-requires */
   const { datedPlantingsRouter } = require("../datedPlantings") as typeof import("../datedPlantings");
+  const { greenhouseSetupRouter } = require("../greenhouseSetup") as typeof import("../greenhouseSetup");
   /* eslint-enable @typescript-eslint/no-var-requires */
   const app = express();
   app.use(express.json());
@@ -98,6 +101,7 @@ before(async () => {
     next();
   });
   app.use("/api", datedPlantingsRouter);
+  app.use("/api", greenhouseSetupRouter);
   server = app.listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -126,6 +130,17 @@ async function addPlanting(variety_id: string, planting_date: string, pull_out_d
 }
 const saveRows = (id: string, list: unknown[]) => call(`/dated-plantings/${id}/rows`, { method: "PUT", body: { rows: list } });
 const on = (date: string) => call(`/dated-plantings/on?date=${date}`);
+const plantingsFingerprint = async (exceptId: string) =>
+  (
+    await db.query<{ f: string }>(
+      `select md5(coalesce(string_agg(t::text, '|' order by t::text), '')) f from (
+         select p.id, p.planting_date, p.pull_out_date, p.updated_at, r.group_id, r.row_number, r.pull_out_date as row_end
+           from plantings p left join planting_rows r on r.planting_id = p.id where p.id <> $1) t`,
+      [exceptId]
+    )
+  ).rows[0].f;
+const endRows = (id: string, list: unknown[], pull_out_date: string | null) =>
+  call(`/dated-plantings/${id}/rows/pull-out`, { method: "PUT", body: { rows: list, pull_out_date } });
 const assignmentsFingerprint = async () =>
   (await db.query<{ f: string }>("select md5(string_agg(t::text, '|' order by id)) f from greenhouse_variety_assignments t")).rows[0].f;
 
@@ -152,7 +167,7 @@ test("one row carries this year's crop and next year's crop; today's counts see 
   assert.equal(refused.body.conflicts.length, 8);
   assert.deepEqual(
     { ...refused.body.conflicts[0], group_id: undefined },
-    { group_id: undefined, row_number: 1, planting_id: thisYear, variety_id: CAD, variety_name: "Cadalora", planting_date: "2025-12-15", pull_out_date: null }
+    { group_id: undefined, row_number: 1, planting_id: thisYear, variety_id: CAD, variety_name: "Cadalora", planting_date: "2025-12-15", pull_out_date: null, row_pull_out_date: null }
   );
   // Nothing was ended or saved.
   let all = await call("/dated-plantings");
@@ -245,4 +260,75 @@ test("each organization sees and changes only its own plantings; viewers read bu
   assert.equal((await call("/dated-plantings", { user: VIEWER })).status, 200);
   assert.equal((await call("/dated-plantings", { user: VIEWER, body: { variety_id: CAD, planting_date: "2026-01-01" } })).status, 403);
   assert.equal((await call(`/dated-plantings/${p}/rows`, { user: VIEWER, method: "PUT", body: { rows: [] } })).status, 403);
+});
+
+test("Save rows changes only the planting being edited, whether it succeeds or is refused", async () => {
+  const thisYear = await addPlanting(CAD, "2025-12-15");
+  await saveRows(thisYear, rows(1, 8));
+  const nextYear = await addPlanting(CAD27, "2026-12-08");
+  const before = await plantingsFingerprint(nextYear);
+
+  const refused = await saveRows(nextYear, rows(5, 10));
+  assert.equal(refused.status, 409);
+  // The exact rows and the planting they are linked to.
+  assert.deepEqual(refused.body.conflicts.map((c: any) => [c.row_number, c.planting_id, c.variety_name]), [5, 6, 7, 8].map((n) => [n, thisYear, "Cadalora"]));
+  assert.equal(await plantingsFingerprint(nextYear), before, "refused save touched no other planting");
+
+  assert.equal((await saveRows(nextYear, rows(9, 10))).status, 200);
+  assert.equal(await plantingsFingerprint(nextYear), before, "successful save touched no other planting");
+});
+
+test("partial pull-out: ending some rows frees only those rows; the planting and its other rows carry on", async () => {
+  const thisYear = await addPlanting(CAD, "2025-12-15");
+  await saveRows(thisYear, rows(1, 8));
+  const nextYear = await addPlanting(CAD27, "2026-12-08");
+
+  // End rows 1-4 of this year's crop on Nov 27; the planting itself has no pull-out date.
+  const ended = await endRows(thisYear, rows(1, 4), "2026-11-27");
+  assert.equal(ended.status, 200, JSON.stringify(ended.body));
+  let all = (await call("/dated-plantings")).body.plantings;
+  const mine = all.find((p: any) => p.id === thisYear);
+  assert.equal(mine.pull_out_date, null);
+  assert.deepEqual(mine.rows.map((r: any) => [r.row_number, r.pull_out_date]), [1, 2, 3, 4, 5, 6, 7, 8].map((n) => [n, n <= 4 ? "2026-11-27" : null]));
+
+  // Next year's crop fits on rows 1-4 only; rows 5-8 are refused, listed exactly.
+  const refused = await saveRows(nextYear, rows(1, 8));
+  assert.equal(refused.status, 409);
+  assert.deepEqual(refused.body.conflicts.map((c: any) => [c.row_number, c.planting_id, c.row_pull_out_date]), [5, 6, 7, 8].map((n) => [n, thisYear, null]));
+  assert.equal((await saveRows(nextYear, rows(1, 4))).status, 200);
+
+  // Today: all 8 rows are this year's. Dec 8: rows 1-4 next year's, rows 5-8 still this year's.
+  assert.deepEqual((await on("2026-11-13")).body.totals.map((t: any) => [t.variety_id, t.rows]), [[CAD, 8]]);
+  const dec8 = (await on("2026-12-08")).body.rows.map((r: any) => [r.row_number, r.variety_id]).sort((a: any, b: any) => a[0] - b[0]);
+  assert.deepEqual(dec8, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => [n, n <= 4 ? CAD27 : CAD]));
+
+  // Un-ending rows 1-4 would run into next year's crop: refused, nothing changes.
+  const unend = await endRows(thisYear, rows(1, 4), null);
+  assert.equal(unend.status, 409);
+  assert.deepEqual(unend.body.conflicts.map((c: any) => [c.row_number, c.planting_id]), [1, 2, 3, 4].map((n) => [n, nextYear]));
+  // Rows not linked, or ending before the planting date, are refused.
+  assert.equal((await endRows(thisYear, rows(9, 9), "2026-11-27")).status, 400);
+  assert.equal((await endRows(thisYear, rows(5, 5), "2025-12-01")).status, 400);
+  // The planting's date can't move after a row's own end.
+  assert.equal((await call(`/dated-plantings/${thisYear}`, { method: "PUT", body: { planting_date: "2026-11-28" } })).status, 400);
+  // The database refuses the same changes directly.
+  await assert.rejects(db.query(`update planting_rows set pull_out_date = null where planting_id = $1 and row_number = 1`, [thisYear]), (e: any) => e.code === "23P01");
+  await assert.rejects(db.query(`update planting_rows set pull_out_date = '2025-01-01' where planting_id = $1 and row_number = 5`, [thisYear]), (e: any) => e.code === "23514");
+  all = (await call("/dated-plantings")).body.plantings;
+  assert.equal(all.find((p: any) => p.id === thisYear).rows.filter((r: any) => r.pull_out_date).length, 4);
+});
+
+test("a phase with planting history can't be deleted; one without can", async () => {
+  const past = await addPlanting(CAD, "2024-12-10", "2025-11-20");
+  await saveRows(past, rows(1, 2));
+  const res = await fetch(`${baseUrl}/api/greenhouse-groups/${P1}`, { method: "DELETE", headers: { "x-test-user": OWNER, "x-test-org": ORG } });
+  assert.equal(res.status, 409);
+  assert.match(((await res.json()) as any).message, /planting history/);
+  assert.equal((await db.query("select 1 from greenhouse_groups where id = $1", [P1])).rows.length, 1);
+  // The database backs this up.
+  await assert.rejects(db.query("delete from greenhouse_groups where id = $1", [P1]), (e: any) => e.code === "23503");
+
+  await db.query(`insert into greenhouse_groups (id, organization_id, type, name) values ('d0000000-0000-4000-8000-000000000005', '${ORG}', 'phase', 'Empty')`);
+  const ok = await fetch(`${baseUrl}/api/greenhouse-groups/d0000000-0000-4000-8000-000000000005`, { method: "DELETE", headers: { "x-test-user": OWNER, "x-test-org": ORG } });
+  assert.equal(ok.status, 204);
 });

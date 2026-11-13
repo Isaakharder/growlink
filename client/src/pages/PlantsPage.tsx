@@ -3,16 +3,18 @@ import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { usePermissions } from "../hooks/usePermissions";
 import { ModalOverlay } from "../components/ModalOverlay";
-import { LinkRowsDialog, formatDate, type OtherPlanting, type RowConflict, type SaveRowsResult } from "../components/plants/LinkRowsDialog";
+import { LinkRowsDialog, dayBefore, formatDate, type OtherPlanting, type RowConflict, type SaveRowsResult } from "../components/plants/LinkRowsDialog";
+import { PlantingEditor, type EditorResult } from "../components/plants/PlantingEditor";
 import type { GreenhouseMapResponse } from "../lib/greenhouseMap/types";
 import { buildBoard, compressRows, type DatedPlantingsData, type Measure, type PlantingCard, type PlantingStatus, type RowRef } from "../lib/plants/plantingCards";
 
 // Crop Planner → Plants (PREVIEW of the dated planting model, 0156): cards in
 // Active, Upcoming and Past, each a variety on its own rows from its planting
 // date to its optional pull-out date. Add planting → choose variety → set
-// dates → Link rows → Save rows. Dates are compared with the organization's
-// local today. This preview never reads or writes Greenhouse Setup's live
-// assignments.
+// dates → Link rows → Save rows (this planting only). Edit planting changes one
+// planting's dates or ends some of its rows early (partial pull-out). Dates are
+// compared with the organization's local today. This preview never reads or
+// writes Greenhouse Setup's live assignments.
 
 const PLANTINGS_URL = "/api/crop-planner/dated-plantings";
 const fmt = (n: number, digits = 0) => n.toLocaleString("en-US", { maximumFractionDigits: digits });
@@ -25,7 +27,8 @@ const SECTIONS: Array<{ status: PlantingStatus; title: string; empty: string }> 
 const COLOR_SWATCH: Record<string, string> = { red: "#d64545", orange: "#e8862a", yellow: "#e2c12b", green: "#3f9a4f" };
 
 type OnDate = { date: string; today: string; totals: Array<{ variety_id: string; rows: number; m2: number; plants: number; heads: number; rows_missing_inputs: number }> };
-type DatesForm = { mode: "add" | "edit"; plantingId?: string; cropCode: string; varietyId: string; plantingDate: string; pullOutDate: string; error?: string; conflicts?: RowConflict[] };
+type AddForm = { cropCode: string; varietyId: string; plantingDate: string; pullOutDate: string; error?: string };
+type Editing = { plantingId: string; focusRows?: RowRef[]; suggestedEndDate?: string; openedFrom?: string };
 
 async function readJson(res: Response) {
   const text = await res.text();
@@ -90,6 +93,11 @@ function PlantingCardView({ card, canEdit, highlighted, onLink, onEdit }: { card
           </tbody>
         </table>
       ) : null}
+      {card.endedEarly.length ? (
+        <ul className="plants-ended" aria-label="Rows pulled out early">
+          {card.endedEarly.map((e) => <li key={e.date}>{e.rows} pulled out {formatDate(e.date)}</li>)}
+        </ul>
+      ) : null}
       {card.issues.length ? (
         <ul className="plants-issues" aria-label="Needs attention">
           {card.issues.map((issue) => <li key={issue}>{issue}</li>)}
@@ -98,7 +106,7 @@ function PlantingCardView({ card, canEdit, highlighted, onLink, onEdit }: { card
       {canEdit ? (
         <div className="plants-card-actions">
           <button type="button" onClick={onLink}>Link rows</button>
-          <button type="button" className="secondary" onClick={onEdit}>Edit dates</button>
+          <button type="button" className="secondary" onClick={onEdit}>Edit planting</button>
         </div>
       ) : null}
     </article>
@@ -113,7 +121,8 @@ export function PlantsPage() {
   const [map, setMap] = useState<GreenhouseMapResponse["map"] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [linking, setLinking] = useState<string | null>(null);
-  const [datesForm, setDatesForm] = useState<DatesForm | null>(null);
+  const [addForm, setAddForm] = useState<AddForm | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const highlightTimer = useRef<number | null>(null);
 
@@ -176,81 +185,64 @@ export function PlantsPage() {
     }
   }
 
-  async function endPlanting(id: string, pullOutDate: string) {
-    try {
-      const res = await apiFetch(`${PLANTINGS_URL}/${id}`, { method: "PUT", body: JSON.stringify({ pull_out_date: pullOutDate }) });
-      const body = await readJson(res);
-      if (!res.ok) return { ok: false as const, message: body?.message ?? "Setting the pull-out date failed." };
-      await load();
-      return { ok: true as const };
-    } catch {
-      return { ok: false as const, message: "Setting the pull-out date failed (no connection)." };
-    }
-  }
-
   const activeCrops = (data?.products ?? []).filter((p) => p.status === "active");
   function openAdd() {
     const crop = activeCrops.find((c) => c.code === "bell_pepper")?.code ?? activeCrops[0]?.code ?? "";
-    setDatesForm({ mode: "add", cropCode: crop, varietyId: "", plantingDate: "", pullOutDate: "" });
+    setAddForm({ cropCode: crop, varietyId: "", plantingDate: "", pullOutDate: "" });
   }
-  function openEdit(card: PlantingCard) {
-    const v = data?.varieties.find((x) => x.id === card.varietyId);
-    setDatesForm({ mode: "edit", plantingId: card.plantingId, cropCode: v?.product_code ?? "", varietyId: card.varietyId, plantingDate: card.plantingDate ?? "", pullOutDate: card.pullOutDate ?? "" });
-  }
-  async function submitDates(e: FormEvent) {
+  async function submitAdd(e: FormEvent) {
     e.preventDefault();
-    if (!datesForm) return;
-    const f = datesForm;
-    const payload = f.mode === "add"
-      ? { variety_id: f.varietyId, planting_date: f.plantingDate, pull_out_date: f.pullOutDate || null }
-      : { planting_date: f.plantingDate, pull_out_date: f.pullOutDate || null };
+    if (!addForm) return;
+    const f = addForm;
     try {
-      const res = await apiFetch(f.mode === "add" ? PLANTINGS_URL : `${PLANTINGS_URL}/${f.plantingId}`, { method: f.mode === "add" ? "POST" : "PUT", body: JSON.stringify(payload) });
+      const res = await apiFetch(PLANTINGS_URL, {
+        method: "POST",
+        body: JSON.stringify({ variety_id: f.varietyId, planting_date: f.plantingDate, pull_out_date: f.pullOutDate || null })
+      });
       const body = await readJson(res);
       if (!res.ok) {
-        setDatesForm({ ...f, error: body?.message ?? "Saving failed. Nothing was changed.", conflicts: body?.conflicts });
+        setAddForm({ ...f, error: body?.message ?? "Saving failed. Nothing was changed." });
         return;
       }
-      setDatesForm(null);
+      setAddForm(null);
       await load();
-      setHighlight(f.mode === "add" ? body.id : f.plantingId!);
+      setHighlight(body.id);
     } catch {
-      setDatesForm({ ...f, error: "Saving failed (no connection). Nothing was changed." });
+      setAddForm({ ...f, error: "Saving failed (no connection). Nothing was changed." });
     }
   }
-  async function deletePlanting() {
-    if (!datesForm?.plantingId || !window.confirm("Delete this planting and its row links? Greenhouse Setup is not changed.")) return;
-    const res = await apiFetch(`${PLANTINGS_URL}/${datesForm.plantingId}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = await readJson(res);
-      setDatesForm({ ...datesForm, error: body?.message ?? "Deleting failed." });
-      return;
+
+  // The planting editor: every call changes the edited planting only.
+  async function editorCall(path: string, body: unknown): Promise<EditorResult> {
+    try {
+      const res = await apiFetch(path, { method: "PUT", body: JSON.stringify(body) });
+      const json = await readJson(res);
+      if (!res.ok) return { ok: false, message: json?.message ?? "Saving failed. Nothing was changed.", conflicts: json?.conflicts };
+      await load();
+      return { ok: true };
+    } catch {
+      return { ok: false, message: "Saving failed (no connection). Nothing was changed." };
     }
-    setDatesForm(null);
-    await load();
+  }
+  async function deleteEdited() {
+    if (!editing || !window.confirm("Delete this planting and its row links? Greenhouse Setup is not changed.")) return;
+    const res = await apiFetch(`${PLANTINGS_URL}/${editing.plantingId}`, { method: "DELETE" });
+    if (res.ok) {
+      setEditing(null);
+      await load();
+    }
   }
 
   const linkingPlanting = data?.plantings.find((p) => p.id === linking) ?? null;
   const others: OtherPlanting[] = (data?.plantings ?? [])
     .filter((p) => p.id !== linking)
     .map((p) => ({ id: p.id, varietyName: varietyName.get(p.variety_id) ?? "Unknown variety", planting_date: p.planting_date, pull_out_date: p.pull_out_date, rows: p.rows }));
-  const cropVarieties = (data?.varieties ?? []).filter((v) => (v.product_code ?? "bell_pepper") === datesForm?.cropCode && v.status !== "inactive");
+  const cropVarieties = (data?.varieties ?? []).filter((v) => (v.product_code ?? "bell_pepper") === addForm?.cropCode && v.status !== "inactive");
+  const editedPlanting = data?.plantings.find((p) => p.id === editing?.plantingId) ?? null;
   const todayTotals = today?.totals.reduce(
     (t, v) => ({ varieties: t.varieties + 1, rows: t.rows + v.rows, m2: t.m2 + v.m2, plants: t.plants + v.plants, heads: t.heads + v.heads, missing: t.missing + v.rows_missing_inputs }),
     { varieties: 0, rows: 0, m2: 0, plants: 0, heads: 0, missing: 0 }
   );
-  const describeConflicts = (cs: RowConflict[]) => {
-    const byPlanting = new Map<string, RowConflict[]>();
-    for (const c of cs) byPlanting.set(c.planting_id, [...(byPlanting.get(c.planting_id) ?? []), c]);
-    const groupName = new Map((data?.groups ?? []).map((g) => [g.id, g.name]));
-    return [...byPlanting.values()].map((list) => {
-      const byGroup = new Map<string, number[]>();
-      for (const c of list) byGroup.set(c.group_id, [...(byGroup.get(c.group_id) ?? []), c.row_number]);
-      const where = [...byGroup].map(([g, nums]) => `${groupName.get(g) ?? "Phase"} rows ${compressRows(nums)}`).join("; ");
-      return `${where}: ${list[0].variety_name} (${formatDate(list[0].planting_date)} – ${list[0].pull_out_date ? formatDate(list[0].pull_out_date) : "no pull-out date"})`;
-    });
-  };
-
   return (
     <section className="page-shell plants-page">
       <header className="plants-page-head">
@@ -298,7 +290,7 @@ export function PlantsPage() {
                     canEdit={canEdit}
                     highlighted={highlight === card.plantingId}
                     onLink={() => void openLink(card.plantingId)}
-                    onEdit={() => openEdit(card)}
+                    onEdit={() => setEditing({ plantingId: card.plantingId })}
                   />
                 ))}
               </div>
@@ -332,45 +324,68 @@ export function PlantsPage() {
           others={others}
           map={map ?? null}
           onSave={(rows) => saveRows(linkingPlanting.id, rows)}
-          onEndPlanting={endPlanting}
+          onOpenPlanting={(plantingId, rows) =>
+            setEditing({
+              plantingId,
+              focusRows: rows,
+              suggestedEndDate: dayBefore(linkingPlanting.planting_date),
+              openedFrom: varietyName.get(linkingPlanting.variety_id) ?? "this planting"
+            })
+          }
+          suspended={Boolean(editing)}
           onCancel={() => setLinking(null)}
         />
       ) : null}
 
-      {datesForm ? (
-        <ModalOverlay onClose={() => setDatesForm(null)} contentClassName="variety-modal" titleId="plants-dates-title" trapFocus>
-          <h2 id="plants-dates-title">{datesForm.mode === "add" ? "Add planting" : `Edit dates · ${varietyName.get(datesForm.varietyId) ?? ""}`}</h2>
-          <form className="varieties-form" onSubmit={submitDates}>
-            {datesForm.mode === "add" ? (
-              <>
-                <label>
-                  Crop
-                  <select value={datesForm.cropCode} onChange={(e) => setDatesForm({ ...datesForm, cropCode: e.target.value, varietyId: "" })}>
-                    {activeCrops.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
-                  </select>
-                </label>
-                <label>
-                  Variety
-                  <select value={datesForm.varietyId} onChange={(e) => setDatesForm({ ...datesForm, varietyId: e.target.value })} required>
-                    <option value="">Choose a variety…</option>
-                    {cropVarieties.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                  </select>
-                </label>
-              </>
-            ) : null}
-            <label>Planting date<input type="date" value={datesForm.plantingDate} onChange={(e) => setDatesForm({ ...datesForm, plantingDate: e.target.value })} required /></label>
-            <label>Pull-out date (optional)<input type="date" value={datesForm.pullOutDate} min={datesForm.plantingDate || undefined} onChange={(e) => setDatesForm({ ...datesForm, pullOutDate: e.target.value })} /></label>
+      {editedPlanting && data && editing ? (
+        <PlantingEditor
+          key={editing.plantingId}
+          planting={{
+            id: editedPlanting.id,
+            varietyName: varietyName.get(editedPlanting.variety_id) ?? "Planting",
+            planting_date: editedPlanting.planting_date,
+            pull_out_date: editedPlanting.pull_out_date,
+            rows: editedPlanting.rows
+          }}
+          greenhouse={data}
+          focusRows={editing.focusRows}
+          suggestedEndDate={editing.suggestedEndDate}
+          openedFrom={editing.openedFrom}
+          onSaveDates={(dates) => editorCall(`${PLANTINGS_URL}/${editedPlanting.id}`, dates)}
+          onSetRowsPullOut={(rows, pullOutDate) => editorCall(`${PLANTINGS_URL}/${editedPlanting.id}/rows/pull-out`, { rows, pull_out_date: pullOutDate })}
+          onDelete={editing.openedFrom ? undefined : () => void deleteEdited()}
+          onClose={() => {
+            const id = editing.plantingId;
+            setEditing(null);
+            if (!linking) setHighlight(id);
+          }}
+        />
+      ) : null}
+
+      {addForm ? (
+        <ModalOverlay onClose={() => setAddForm(null)} contentClassName="variety-modal" titleId="plants-add-title" trapFocus>
+          <h2 id="plants-add-title">Add planting</h2>
+          <form className="varieties-form" onSubmit={submitAdd}>
+            <label>
+              Crop
+              <select value={addForm.cropCode} onChange={(e) => setAddForm({ ...addForm, cropCode: e.target.value, varietyId: "" })}>
+                {activeCrops.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Variety
+              <select value={addForm.varietyId} onChange={(e) => setAddForm({ ...addForm, varietyId: e.target.value })} required>
+                <option value="">Choose a variety…</option>
+                {cropVarieties.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </label>
+            <label>Planting date<input type="date" value={addForm.plantingDate} onChange={(e) => setAddForm({ ...addForm, plantingDate: e.target.value })} required /></label>
+            <label>Pull-out date (optional)<input type="date" value={addForm.pullOutDate} min={addForm.plantingDate || undefined} onChange={(e) => setAddForm({ ...addForm, pullOutDate: e.target.value })} /></label>
             <p className="form-hint">The planting counts from its planting date in the greenhouse's time zone. Rows are linked next, with Link rows.</p>
-            {datesForm.error ? <p className="form-error" role="alert">{datesForm.error}</p> : null}
-            {datesForm.conflicts?.length ? (
-              <ul className="plants-issues" aria-label="Rows that need attention">
-                {describeConflicts(datesForm.conflicts).map((line) => <li key={line}>{line}</li>)}
-              </ul>
-            ) : null}
+            {addForm.error ? <p className="form-error" role="alert">{addForm.error}</p> : null}
             <div className="form-actions">
-              <button type="submit">{datesForm.mode === "add" ? "Add planting" : "Save dates"}</button>
-              <button type="button" className="secondary" onClick={() => setDatesForm(null)}>Cancel</button>
-              {datesForm.mode === "edit" ? <button type="button" className="danger" onClick={() => void deletePlanting()}>Delete planting</button> : null}
+              <button type="submit">Add planting</button>
+              <button type="button" className="secondary" onClick={() => setAddForm(null)}>Cancel</button>
             </div>
           </form>
         </ModalOverlay>

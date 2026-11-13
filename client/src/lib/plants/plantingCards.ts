@@ -40,6 +40,14 @@ export type PlantsGreenhouse = {
 };
 
 export type RowRef = { group_id: string; row_number: number };
+/** A planting's row; pull_out_date is the row's own (partial pull-out), if it ends before the planting. */
+export type PlantingRowRef = RowRef & { pull_out_date?: string | null };
+
+/** A row's last day in the ground: the earlier of its own pull-out date and its planting's (null = open-ended). */
+export function rowEnd(rowPullOut: string | null | undefined, plantingPullOut: string | null): string | null {
+  if (rowPullOut && plantingPullOut) return rowPullOut < plantingPullOut ? rowPullOut : plantingPullOut;
+  return rowPullOut ?? plantingPullOut;
+}
 
 /** One variety on a set of rows from its planting date to its optional pull-out date. */
 export type PlantingInput = {
@@ -47,7 +55,7 @@ export type PlantingInput = {
   variety_id: string;
   planting_date: string | null;
   pull_out_date: string | null;
-  rows: RowRef[];
+  rows: PlantingRowRef[];
 };
 
 /** Stage 1: today's undated Greenhouse Setup assignments; the variety carries the dates. */
@@ -97,6 +105,8 @@ export type PlantingCard = {
   plants: Measure;
   heads: Measure;
   issues: string[];
+  /** Rows pulled out before the planting's own pull-out date, by date: "Phase 1 rows 1–4". */
+  endedEarly: Array<{ date: string; rows: string }>;
 };
 
 export type PlantingBoard = Record<PlantingStatus, PlantingCard[]>;
@@ -193,7 +203,8 @@ export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): 
       m2: zero(),
       plants: zero(),
       heads: zero(),
-      issues: []
+      issues: [],
+      endedEarly: []
     };
 
     const orderedGroups = [...groups.entries()].sort(
@@ -235,6 +246,21 @@ export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): 
       }
     }
 
+    // Rows pulled out early, grouped by date and phase.
+    const early = new Map<string, Map<string, number[]>>();
+    for (const r of planting.rows) {
+      if (!r.pull_out_date || (pullOutDate && r.pull_out_date >= pullOutDate)) continue;
+      const byGroup = early.get(r.pull_out_date) ?? new Map<string, number[]>();
+      early.set(r.pull_out_date, byGroup);
+      byGroup.set(r.group_id, [...(byGroup.get(r.group_id) ?? []), r.row_number]);
+    }
+    card.endedEarly = [...early.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([date, byGroup]) => ({
+        date,
+        rows: [...byGroup].map(([g, nums]) => `${groupsById.get(g)?.name ?? "Phase"} row${nums.length === 1 ? "" : "s"} ${compressRows(nums)}`).join("; ")
+      }));
+
     // Flags, never zeros.
     if (!variety) card.issues.push("This variety no longer exists in Varieties.");
     if (!plantingDate) card.issues.push("No planting date. Add one in Crop Planner → Varieties.");
@@ -257,17 +283,24 @@ export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): 
 
   // A row assigned to two varieties that are both in the ground today.
   const activeOwners = new Map<string, string[]>();
+  const rowEnds = new Map<string, string | null>();
+  for (const p of plantings) for (const r of p.rows) rowEnds.set(`${p.id}|${r.group_id}:${r.row_number}`, rowEnd(r.pull_out_date, p.pull_out_date));
   for (const card of cards.filter((c) => c.status === "active")) {
     for (const line of card.phases) {
       for (const n of line.rowNumbers) {
         const key = `${line.groupId}:${n}`;
+        const end = rowEnds.get(`${card.plantingId}|${key}`);
+        if (end && end < data.today) continue; // pulled out early: not in the ground today
         activeOwners.set(key, [...(activeOwners.get(key) ?? []), card.plantingId]);
       }
     }
   }
   for (const card of cards.filter((c) => c.status === "active")) {
     for (const line of card.phases) {
-      const shared = line.rowNumbers.filter((n) => (activeOwners.get(`${line.groupId}:${n}`) ?? []).length > 1);
+      const shared = line.rowNumbers.filter((n) => {
+        const owners = activeOwners.get(`${line.groupId}:${n}`) ?? [];
+        return owners.length > 1 && owners.includes(card.plantingId);
+      });
       if (shared.length) {
         const nameOf = new Map(cards.map((c) => [c.plantingId, c.varietyName]));
         const others = new Set(

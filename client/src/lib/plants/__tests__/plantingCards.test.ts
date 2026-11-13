@@ -127,3 +127,33 @@ describe("buildPlantingBoard", () => {
     expect(cad.issues).toEqual(["Phase 1 rows 5–6 are also assigned to Sunny today."]);
   });
 });
+
+describe("partial pull-out on cards", () => {
+  it("lists rows pulled out early, and a row ended before today doesn't clash with today's planting", async () => {
+    const { buildBoard } = await import("../plantingCards");
+    const base = data({ varieties: [variety("cad", "Cadalora", null), variety("sun", "Sunny", null)] });
+    const board = buildBoard(base, [
+      {
+        id: "a",
+        variety_id: "cad",
+        planting_date: "2025-12-15",
+        pull_out_date: null,
+        rows: [
+          { group_id: P1, row_number: 1, pull_out_date: "2026-10-01" },
+          { group_id: P1, row_number: 2, pull_out_date: "2026-10-01" },
+          { group_id: P2, row_number: 1, pull_out_date: "2026-11-01" },
+          { group_id: P1, row_number: 3, pull_out_date: null }
+        ]
+      },
+      // Sunny went onto row 1 after Cadalora's row 1 was pulled out.
+      { id: "b", variety_id: "sun", planting_date: "2026-10-15", pull_out_date: null, rows: [{ group_id: P1, row_number: 1 }] }
+    ]);
+    const cad = board.active.find((c) => c.varietyName === "Cadalora")!;
+    expect(cad.endedEarly).toEqual([
+      { date: "2026-10-01", rows: "Phase 1 rows 1–2" },
+      { date: "2026-11-01", rows: "Phase 2 row 1" }
+    ]);
+    expect(cad.rowCount).toBe(4);
+    expect([...cad.issues, ...board.active.find((c) => c.varietyName === "Sunny")!.issues].some((i) => i.includes("also assigned"))).toBe(false);
+  });
+});

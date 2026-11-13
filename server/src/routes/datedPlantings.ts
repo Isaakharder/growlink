@@ -44,7 +44,10 @@ export type RowConflict = {
   variety_name: string;
   planting_date: string;
   pull_out_date: string | null;
+  /** The other planting's own pull-out date for this row (partial pull-out), if any. */
+  row_pull_out_date: string | null;
 };
+type PlantingRow = RowRef & { planting_id: string; pull_out_date: string | null };
 
 const rowKey = (r: RowRef) => `${r.group_id}:${r.row_number}`;
 
@@ -78,6 +81,12 @@ function parseRows(value: unknown): RowRef[] {
 /** Two date ranges overlap; both ends are inclusive and a missing pull-out date runs on indefinitely. */
 export function rangesOverlap(aStart: string, aEnd: string | null, bStart: string, bEnd: string | null): boolean {
   return aStart <= (bEnd ?? "9999-12-31") && bStart <= (aEnd ?? "9999-12-31");
+}
+
+/** A row's last day in the ground: the earlier of its own pull-out date and its planting's (null = open-ended). */
+export function rowEnd(rowPullOut: string | null, plantingPullOut: string | null): string | null {
+  if (rowPullOut && plantingPullOut) return rowPullOut < plantingPullOut ? rowPullOut : plantingPullOut;
+  return rowPullOut ?? plantingPullOut;
 }
 
 function toPlanting(row: Record<string, unknown>): PlantingRecord {
@@ -116,7 +125,7 @@ async function loadAll(organizationId: string) {
     fetchAll<Record<string, unknown>>((from, to) =>
       supabase
         .from("planting_rows")
-        .select("planting_id, group_id, row_number")
+        .select("planting_id, group_id, row_number, pull_out_date")
         .eq("organization_id", organizationId)
         .order("group_id", { ascending: true })
         .order("row_number", { ascending: true })
@@ -125,41 +134,61 @@ async function loadAll(organizationId: string) {
   ]);
   return {
     plantings: plantings.map(toPlanting),
-    rows: rows.map((r) => ({ planting_id: String(r.planting_id), group_id: String(r.group_id), row_number: Number(r.row_number) }))
+    rows: rows.map(
+      (r): PlantingRow => ({ planting_id: String(r.planting_id), group_id: String(r.group_id), row_number: Number(r.row_number), pull_out_date: isoDate(r.pull_out_date) })
+    )
   };
 }
 
-/** The rows, of those asked for, that another planting occupies at an overlapping time. */
+/**
+ * The rows, of those asked for, that another planting occupies at an
+ * overlapping time. Each asked-for row runs from the planting's planting date
+ * to its own end (its row pull-out date, if given, else the planting's).
+ * Other plantings' rows use their own effective ends, so a row ended early
+ * frees the row after that date.
+ */
 async function findConflicts(
   organizationId: string,
   planting: { id: string | null; planting_date: string; pull_out_date: string | null },
-  rows: RowRef[]
+  rows: Array<RowRef & { pull_out_date?: string | null }>
 ): Promise<RowConflict[]> {
   if (rows.length === 0) return [];
-  const wanted = new Set(rows.map(rowKey));
+  const wanted = new Map(rows.map((r) => [rowKey(r), rowEnd(r.pull_out_date ?? null, planting.pull_out_date)]));
   const all = await loadAll(organizationId);
   const others = new Map(all.plantings.filter((p) => p.id !== planting.id).map((p) => [p.id, p]));
-  const overlapping = new Map(
-    [...others].filter(([, p]) => rangesOverlap(planting.planting_date, planting.pull_out_date, p.planting_date, p.pull_out_date))
-  );
-  if (overlapping.size === 0) return [];
+  const clashing = all.rows.filter((r) => {
+    const other = others.get(r.planting_id);
+    if (!other || !wanted.has(rowKey(r))) return false;
+    return rangesOverlap(planting.planting_date, wanted.get(rowKey(r)) ?? null, other.planting_date, rowEnd(r.pull_out_date, other.pull_out_date));
+  });
+  if (clashing.length === 0) return [];
   const { data: varieties, error } = await supabase.from("varieties").select("id, name").eq("organization_id", organizationId);
   if (error) throw error;
   const names = new Map((varieties ?? []).map((v: { id: string; name: string }) => [v.id, v.name]));
-  return all.rows
-    .filter((r) => overlapping.has(r.planting_id) && wanted.has(rowKey(r)))
-    .map((r) => {
-      const other = overlapping.get(r.planting_id)!;
-      return {
-        group_id: r.group_id,
-        row_number: r.row_number,
-        planting_id: other.id,
-        variety_id: other.variety_id,
-        variety_name: names.get(other.variety_id) ?? "Unknown variety",
-        planting_date: other.planting_date,
-        pull_out_date: other.pull_out_date
-      };
-    });
+  return clashing.map((r) => {
+    const other = others.get(r.planting_id)!;
+    return {
+      group_id: r.group_id,
+      row_number: r.row_number,
+      planting_id: other.id,
+      variety_id: other.variety_id,
+      variety_name: names.get(other.variety_id) ?? "Unknown variety",
+      planting_date: other.planting_date,
+      pull_out_date: other.pull_out_date,
+      row_pull_out_date: r.pull_out_date
+    };
+  });
+}
+
+/** This planting's own rows, with their own pull-out dates. */
+async function ownRows(organizationId: string, plantingId: string): Promise<Array<RowRef & { pull_out_date: string | null }>> {
+  const { data, error } = await supabase
+    .from("planting_rows")
+    .select("group_id, row_number, pull_out_date")
+    .eq("organization_id", organizationId)
+    .eq("planting_id", plantingId);
+  if (error) throw error;
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({ group_id: String(r.group_id), row_number: Number(r.row_number), pull_out_date: isoDate(r.pull_out_date) }));
 }
 
 function handleError(res: Response, error: unknown, message: string, context: string) {
@@ -175,8 +204,10 @@ datedPlantingsRouter.get("/crop-planner/dated-plantings", canView, async (req, r
   const organizationId = req.organizationId as string;
   try {
     const [greenhouse, all] = await Promise.all([loadPlantsGreenhouse(organizationId), loadAll(organizationId)]);
-    const rowsByPlanting = new Map<string, RowRef[]>();
-    for (const r of all.rows) rowsByPlanting.set(r.planting_id, [...(rowsByPlanting.get(r.planting_id) ?? []), { group_id: r.group_id, row_number: r.row_number }]);
+    const rowsByPlanting = new Map<string, Array<RowRef & { pull_out_date: string | null }>>();
+    for (const r of all.rows) {
+      rowsByPlanting.set(r.planting_id, [...(rowsByPlanting.get(r.planting_id) ?? []), { group_id: r.group_id, row_number: r.row_number, pull_out_date: r.pull_out_date }]);
+    }
     return res.json({ ...greenhouse, plantings: all.plantings.map((p) => ({ ...p, rows: rowsByPlanting.get(p.id) ?? [] })) });
   } catch (error) {
     return handleError(res, error, "Failed to load plantings.", "Dated plantings load error:");
@@ -255,9 +286,10 @@ datedPlantingsRouter.put("/crop-planner/dated-plantings/:id", canEdit, async (re
     if (pullOutDate && pullOutDate < plantingDate) throw new InputError("The pull-out date can't be before the planting date");
     const notes = "notes" in body ? (typeof body.notes === "string" && body.notes.trim() ? body.notes.trim().slice(0, 2000) : null) : current.notes;
 
-    const { data: ownRows, error: rowsError } = await supabase.from("planting_rows").select("group_id, row_number").eq("organization_id", organizationId).eq("planting_id", current.id);
-    if (rowsError) throw rowsError;
-    const conflicts = await findConflicts(organizationId, { id: current.id, planting_date: plantingDate, pull_out_date: pullOutDate }, (ownRows ?? []) as RowRef[]);
+    const mine = await ownRows(organizationId, current.id);
+    const endedTooSoon = mine.filter((r) => r.pull_out_date && r.pull_out_date < plantingDate).map(({ group_id, row_number }) => ({ group_id, row_number }));
+    if (endedTooSoon.length) throw new InputError("Some rows of this planting were pulled out before that planting date", 400, { rowsEndedBefore: endedTooSoon });
+    const conflicts = await findConflicts(organizationId, { id: current.id, planting_date: plantingDate, pull_out_date: pullOutDate }, mine);
     if (conflicts.length) throw new InputError("These dates overlap another planting on some of this planting's rows", 409, { conflicts });
 
     const { data, error } = await supabase
@@ -286,8 +318,11 @@ datedPlantingsRouter.put("/crop-planner/dated-plantings/:id/rows", canEdit, asyn
     const notInSetup = rows.filter((r) => !setupKeys.has(rowKey(r)));
     if (notInSetup.length) throw new InputError("Some rows aren't in Greenhouse Setup", 400, { rowsNotInSetup: notInSetup });
 
-    const conflicts = await findConflicts(organizationId, planting, rows);
-    if (conflicts.length) throw new InputError("Some rows already have a planting at that time", 409, { conflicts });
+    // Only this planting changes. Rows it keeps keep their own pull-out dates.
+    const kept = new Map((await ownRows(organizationId, planting.id)).map((r) => [rowKey(r), r.pull_out_date]));
+    const asked = rows.map((r) => ({ ...r, pull_out_date: kept.get(rowKey(r)) ?? null }));
+    const conflicts = await findConflicts(organizationId, planting, asked);
+    if (conflicts.length) throw new InputError("Some rows are already linked to another planting at that time", 409, { conflicts });
 
     const { data, error } = await supabase.rpc("set_planting_rows", {
       p_organization_id: organizationId,
@@ -298,14 +333,50 @@ datedPlantingsRouter.put("/crop-planner/dated-plantings/:id/rows", canEdit, asyn
     if (error) {
       if ((error as { code?: string }).code === "23P01") {
         // Someone saved overlapping rows between our check and our save: list them now.
-        const late = await findConflicts(organizationId, planting, rows);
-        return res.status(409).json({ message: "Some rows already have a planting at that time", conflicts: late });
+        const late = await findConflicts(organizationId, planting, asked);
+        return res.status(409).json({ message: "Some rows are already linked to another planting at that time", conflicts: late });
       }
       throw error;
     }
     return res.json({ id: planting.id, rows, saved: data });
   } catch (error) {
     return handleError(res, error, "Failed to save the rows.", "Dated planting rows error:");
+  }
+});
+
+// Partial pull-out: end (or, with null, un-end) some of this planting's rows on a date.
+// Only this planting changes; the planting and its other rows carry on.
+datedPlantingsRouter.put("/crop-planner/dated-plantings/:id/rows/pull-out", canEdit, async (req, res) => {
+  const organizationId = req.organizationId as string;
+  try {
+    const planting = await loadPlanting(String(req.params.id), organizationId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rows = parseRows(body.rows);
+    if (rows.length === 0) throw new InputError("Choose the rows to change");
+    const pullOutDate = parseDate(body.pull_out_date, "pull_out_date", false);
+    if (pullOutDate && pullOutDate < planting.planting_date) throw new InputError("A row can't be pulled out before the planting date");
+    if (pullOutDate && planting.pull_out_date && pullOutDate > planting.pull_out_date) {
+      throw new InputError("That's after the planting's own pull-out date; change the planting's dates instead");
+    }
+    const mine = new Map((await ownRows(organizationId, planting.id)).map((r) => [rowKey(r), r]));
+    const notLinked = rows.filter((r) => !mine.has(rowKey(r)));
+    if (notLinked.length) throw new InputError("Some rows aren't linked to this planting", 400, { rowsNotLinked: notLinked });
+
+    // Un-ending a row, or moving its end later, can run into another planting.
+    const conflicts = await findConflicts(organizationId, planting, rows.map((r) => ({ ...r, pull_out_date: pullOutDate })));
+    if (conflicts.length) throw new InputError("Those rows would overlap another planting", 409, { conflicts });
+
+    const { data, error } = await supabase.rpc("set_planting_rows_pull_out", {
+      p_organization_id: organizationId,
+      p_planting_id: planting.id,
+      p_rows: rows,
+      p_pull_out_date: pullOutDate,
+      p_user_id: req.userId ?? null
+    });
+    if (error) throw error;
+    return res.json({ id: planting.id, rows, pull_out_date: pullOutDate, saved: data });
+  } catch (error) {
+    return handleError(res, error, "Failed to change the rows' pull-out date.", "Dated planting row pull-out error:");
   }
 });
 
