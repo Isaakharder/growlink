@@ -12937,6 +12937,11 @@ details.pack-week-manual > :not(summary) {
   color: var(--text-muted);
   pointer-events: none;
 }
+.gh-map-compass-arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
 
 .crop-plan-map-head {
   display: flex;

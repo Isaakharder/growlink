@@ -689,6 +689,7 @@ export function CropPlannerPage() {
                     selectedKeys={selection}
                     onRowClick={(groupId, rowNumber, { shiftKey }) => toggleRow({ group_id: groupId, row_number: rowNumber }, shiftKey)}
                     onPhaseClick={(groupId) => selectRows(rowsByGroup.get(groupId) ?? [])}
+                    rotationStorageKey={`cropPlanner.mapRotation.${plannerMap.id ?? "map"}`}
                   />
                   <div className="crop-plan-phase-buttons" role="group" aria-label="Select a whole phase">
                     {groups.map((group) => (

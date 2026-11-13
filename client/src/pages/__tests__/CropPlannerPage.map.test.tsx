@@ -171,4 +171,68 @@ describe("Crop Planner on the greenhouse map", () => {
     await user.click(screen.getByRole("button", { name: "Map" }));
     expect(mapEl()).toBeInTheDocument();
   });
+
+  // Rotation is a view preference. Rows are found by where they are drawn:
+  // a physical spot on the floor (in north-up feet) is turned the way the
+  // viewer turned the map, and whatever rectangle is drawn there gets clicked.
+  // At every orientation that must be the same Greenhouse Setup row.
+  describe.each([
+    { turns: [] as string[], rotation: 0 },
+    { turns: ["Rotate map 90° right"], rotation: 90 },
+    { turns: ["Rotate map 90° right", "Rotate map 90° right"], rotation: 180 },
+    { turns: ["Rotate map 90° left"], rotation: 270 }
+  ])("rotated to $rotation°", ({ turns, rotation }) => {
+    const W = MAP.east_west_feet;
+    const H = MAP.north_south_feet;
+    // Clockwise turn, written out independently of the canvas code.
+    const turn = (x: number, y: number) =>
+      rotation === 90 ? [H - y, x] : rotation === 180 ? [W - x, H - y] : rotation === 270 ? [y, W - x] : [x, y];
+    function rowDrawnAt(worldX: number, worldY: number) {
+      const [vx, vy] = turn(worldX, worldY);
+      const hits = [...mapEl().querySelectorAll<SVGRectElement>("rect[data-row-key]")].filter((el) => {
+        const [x, y, w, h] = ["x", "y", "width", "height"].map((a) => Number(el.getAttribute(a)));
+        return vx >= x && vx <= x + w && vy >= y && vy <= y + h;
+      });
+      expect(hits).toHaveLength(1);
+      return hits[0];
+    }
+
+    it("a click and a Shift-click select the rows drawn there, and the layout is never saved", async () => {
+      const user = await renderPage();
+      for (const name of turns) await user.click(screen.getByRole("button", { name }));
+      expect(screen.getByRole("button", { name: "Reset orientation" })).toHaveProperty("disabled", rotation === 0);
+      const svgLand = mapEl().querySelector("rect.gh-map-land")!;
+      expect([Number(svgLand.getAttribute("width")), Number(svgLand.getAttribute("height"))]).toEqual(rotation % 180 ? [H, W] : [W, H]);
+
+      // Phase 2's westmost row is row 13 (x 155-161 ft); row 11 is the next one east.
+      const westmost = rowDrawnAt(150 + 5 + 3, 60);
+      expect(westmost.getAttribute("data-row-key")).toBe(`${P2}:13`);
+      await user.click(westmost);
+      expect(within(panel()).getByText("Phase 2 row 13")).toBeInTheDocument();
+
+      // Phase 1 row 2 (y 10-15 ft) to row 4 (y 26-31 ft), picked by position.
+      await user.click(within(panel()).getByRole("button", { name: "Clear selection" }));
+      await user.click(rowDrawnAt(50, 12));
+      await user.keyboard("{Shift>}");
+      await user.click(rowDrawnAt(50, 28));
+      await user.keyboard("{/Shift}");
+      expect(within(panel()).getByText("Phase 1 rows 2–4")).toBeInTheDocument();
+
+      // Labels are drawn upright at each row's centre (no rotate transform anywhere on the map).
+      expect(mapEl().querySelector("[transform*='rotate']")).toBeNull();
+      expect(localStorage.getItem("cropPlanner.mapRotation.map-1")).toBe(rotation ? String(rotation) : null);
+      expect(writes.filter((w) => w.path.includes("greenhouse-map"))).toEqual([]);
+    });
+  });
+
+  it("remembers the orientation for this viewer, and Reset orientation goes back to north-up", async () => {
+    localStorage.setItem("cropPlanner.mapRotation.map-1", "90");
+    const user = await renderPage();
+    const svgLand = () => mapEl().querySelector("rect.gh-map-land")!;
+    expect(svgLand().getAttribute("width")).toBe("200");
+    await user.click(screen.getByRole("button", { name: "Reset orientation" }));
+    expect(svgLand().getAttribute("width")).toBe("300");
+    expect(localStorage.getItem("cropPlanner.mapRotation.map-1")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset orientation" })).toBeDisabled();
+  });
 });
