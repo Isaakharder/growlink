@@ -14,6 +14,7 @@ import { loadOrganizationProducts } from "../utils/organizationProducts";
 import { DEFAULT_ORG_TIMEZONE } from "../config/orgTimezone";
 import { todayInOrgTimezone } from "./foodSafety/services/checklistPeriod";
 import { rowAreaM2, type FootprintSectionInput } from "../utils/varietyAreaFootprints";
+import { loadRowMeasurements, measuredArea, measurementOn, rowAvailableFrom } from "../utils/rowMeasurements";
 
 const plantingsRouter = Router();
 const canView = requireAnyPermission(["greenhouse_setup:view", "greenhouse_setup:edit"]);
@@ -38,19 +39,26 @@ export const isoDate = (value: unknown): string | null =>
 const numOrNull = (value: unknown) => (value === null || value === undefined || value === "" ? null : Number(value));
 
 /**
- * The organization's greenhouse as Plants reads it: groups, rows with their
- * m² (row width × length, else its section's, as yield analytics works it out),
- * varieties with their dates, crops, and today's local date.
+ * The organization's greenhouse as Plants reads it: groups, rows, varieties
+ * with their dates, crops, and today's local date.
+ *
+ * Row area: with dated measurements (0157), area_m2 is the size in effect
+ * today and measurements lists every version, so a planting reads the size
+ * that applied on its own date. Without them (0157 not applied, or the
+ * baseline not copied yet) area_m2 is today's Greenhouse Setup value (row
+ * width × length, else its section's, as yield analytics works it out).
+ * Plants and heads always come from the row's slabs, plants per slab and
+ * stems, never from its size.
  */
 export async function loadPlantsGreenhouse(organizationId: string) {
-  const [groups, rows, sections, varieties, products] = await Promise.all([
+  const [groups, rows, sections, varieties, products, measurements] = await Promise.all([
     fetchAll<Record<string, unknown>>((from, to) =>
       supabase.from("greenhouse_groups").select("id, type, name, status").eq("organization_id", organizationId).order("created_at", { ascending: true }).range(from, to)
     ),
     fetchAll<Record<string, unknown>>((from, to) =>
       supabase
         .from("greenhouse_rows")
-        .select("group_id, row_number, section_id, slab_count, plants_per_slab, stems_per_plant, width_meters, length_meters")
+        .select("id, group_id, row_number, section_id, slab_count, plants_per_slab, stems_per_plant, width_meters, length_meters")
         .eq("organization_id", organizationId)
         .order("group_id", { ascending: true })
         .order("row_number", { ascending: true })
@@ -67,24 +75,23 @@ export async function loadPlantsGreenhouse(organizationId: string) {
         .order("name", { ascending: true })
         .range(from, to)
     ),
-    loadOrganizationProducts(organizationId)
+    loadOrganizationProducts(organizationId),
+    loadRowMeasurements(organizationId)
   ]);
+  const today = todayInOrgTimezone(DEFAULT_ORG_TIMEZONE);
 
   const sectionsById = new Map<string, FootprintSectionInput>(
     sections.map((s) => [String(s.id), { id: String(s.id), width_meters: numOrNull(s.width_meters), length_meters: numOrNull(s.length_meters) }])
   );
 
   return {
-    today: todayInOrgTimezone(DEFAULT_ORG_TIMEZONE),
+    today,
     timeZone: DEFAULT_ORG_TIMEZONE,
+    measured: Boolean(measurements && measurements.size),
     groups,
-    rows: rows.map((row) => ({
-      group_id: String(row.group_id),
-      row_number: Number(row.row_number),
-      slab_count: Number(row.slab_count ?? 0),
-      plants_per_slab: Number(row.plants_per_slab ?? 0),
-      stems_per_plant: numOrNull(row.stems_per_plant),
-      area_m2: rowAreaM2(
+    rows: rows.map((row) => {
+      const versions = measurements?.get(String(row.id));
+      const legacy = rowAreaM2(
         {
           group_id: String(row.group_id),
           row_number: Number(row.row_number),
@@ -93,8 +100,23 @@ export async function loadPlantsGreenhouse(organizationId: string) {
           length_meters: numOrNull(row.length_meters)
         },
         sectionsById
-      )
-    })),
+      );
+      return {
+        id: String(row.id),
+        group_id: String(row.group_id),
+        row_number: Number(row.row_number),
+        slab_count: Number(row.slab_count ?? 0),
+        plants_per_slab: Number(row.plants_per_slab ?? 0),
+        stems_per_plant: numOrNull(row.stems_per_plant),
+        area_m2: versions?.length ? measuredArea(measurementOn(versions, today)) : legacy,
+        ...(versions?.length
+          ? {
+              available_from: rowAvailableFrom(versions),
+              measurements: versions.map((v) => ({ effective_from: v.effective_from, width_m: v.width_m, length_m: v.length_m, area_m2: measuredArea(v) }))
+            }
+          : {})
+      };
+    }),
     varieties: varieties.map((v) => ({
       id: String(v.id),
       name: String(v.name),

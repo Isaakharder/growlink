@@ -51,6 +51,21 @@ type PlantingRow = RowRef & { planting_id: string; pull_out_date: string | null 
 
 const rowKey = (r: RowRef) => `${r.group_id}:${r.row_number}`;
 
+type GreenhouseRow = Awaited<ReturnType<typeof loadPlantsGreenhouse>>["rows"][number];
+/** A row's m² on a date: the measured size in effect then (0157), else today's Greenhouse Setup value. */
+function areaOn(row: GreenhouseRow, date: string): number | null {
+  if (!("measurements" in row) || !row.measurements) return row.area_m2;
+  let area: number | null = null;
+  let found = false;
+  for (const v of row.measurements) {
+    if (v.effective_from === null || v.effective_from <= date) {
+      area = v.area_m2;
+      found = true;
+    }
+  }
+  return found ? area : null;
+}
+
 function parseDate(value: unknown, field: string, required: boolean): string | null {
   if (value === undefined || value === null || value === "") {
     if (required) throw new InputError(`${field} is required`);
@@ -236,8 +251,9 @@ datedPlantingsRouter.get("/crop-planner/dated-plantings/on", canView, async (req
       t.rows += 1;
       const s = setup.get(rowKey(r));
       const plants = s && s.slab_count > 0 && s.plants_per_slab > 0 ? s.slab_count * s.plants_per_slab : null;
-      if (!s || s.area_m2 === null || plants === null || !s.stems_per_plant) t.rows_missing_inputs += 1;
-      if (s?.area_m2) t.m2 += s.area_m2;
+      const area = s ? areaOn(s, date) : null;
+      if (!s || area === null || plants === null || !s.stems_per_plant) t.rows_missing_inputs += 1;
+      if (area) t.m2 += area;
       if (plants !== null) {
         t.plants += plants;
         if (s?.stems_per_plant) t.heads += plants * s.stems_per_plant;
@@ -317,6 +333,14 @@ datedPlantingsRouter.put("/crop-planner/dated-plantings/:id/rows", canEdit, asyn
     const setupKeys = new Set(greenhouse.rows.map(rowKey));
     const notInSetup = rows.filter((r) => !setupKeys.has(rowKey(r)));
     if (notInSetup.length) throw new InputError("Some rows aren't in Greenhouse Setup", 400, { rowsNotInSetup: notInSetup });
+    // Rows added in Setup → Map for a later season exist only from their first measurement's date.
+    const byKey = new Map(greenhouse.rows.map((r) => [rowKey(r), r]));
+    const notYetBuilt = rows
+      .map((r) => ({ ...r, available_from: (byKey.get(rowKey(r)) as { available_from?: string | null } | undefined)?.available_from ?? null }))
+      .filter((r) => r.available_from && r.available_from > planting.planting_date);
+    if (notYetBuilt.length) {
+      throw new InputError("Some rows aren't in the greenhouse yet on this planting's date", 400, { rowsNotYetBuilt: notYetBuilt });
+    }
 
     // Only this planting changes. Rows it keeps keep their own pull-out dates.
     const kept = new Map((await ownRows(organizationId, planting.id)).map((r) => [rowKey(r), r.pull_out_date]));

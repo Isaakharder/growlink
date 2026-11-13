@@ -176,8 +176,9 @@ export function PlantsPage() {
       if (!res.ok) {
         return { ok: false, message: body?.message ?? "Saving the rows failed. Nothing was changed.", conflicts: body?.conflicts, rowsNotInSetup: body?.rowsNotInSetup };
       }
-      setLinking(null);
+      // Refresh first, so the card already shows the new area and phases when the map closes.
       await load();
+      setLinking(null);
       setHighlight(id);
       return { ok: true };
     } catch {
@@ -249,8 +250,8 @@ export function PlantsPage() {
         <div>
           <h1>Plants</h1>
           <p>
-            Each planting is a variety on its own rows, from its planting date to its pull-out date. Rows come from{" "}
-            <Link to="/setup/greenhouse">Greenhouse Setup</Link>.
+            Each planting is a variety on its own rows, from its planting date to its pull-out date. Rows and their real sizes
+            come from <Link to="/setup/map">Setup → Map</Link>; a card's area uses the sizes in effect on its planting date.
           </p>
         </div>
         {canEdit && data ? <button type="button" onClick={openAdd}>+ Add planting</button> : null}

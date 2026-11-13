@@ -621,6 +621,9 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", canEdit, async (req, r
       .eq("organization_id", organizationId);
 
     if (clearError) {
+      if ((clearError as { code?: string }).code === "23503") {
+        return res.status(409).json({ message: "Some rows outside the new range have history (measurements, samples or plantings), so they can't be removed here. Manage rows in Setup → Map." });
+      }
       return sendSafeError(res, 500, "Failed to update greenhouse rows.", "Greenhouse row clear error:", clearError);
     }
   } else {
@@ -632,6 +635,9 @@ greenhouseSetupRouter.put("/greenhouse-row-sections/:id", canEdit, async (req, r
       .not("row_number", "in", `(${rowNumbersToKeep.join(",")})`);
 
     if (clearError) {
+      if ((clearError as { code?: string }).code === "23503") {
+        return res.status(409).json({ message: "Some rows outside the new range have history (measurements, samples or plantings), so they can't be removed here. Manage rows in Setup → Map." });
+      }
       return sendSafeError(res, 500, "Failed to update greenhouse rows.", "Greenhouse row clear error:", clearError);
     }
   }
@@ -661,6 +667,9 @@ greenhouseSetupRouter.delete("/greenhouse-row-sections/:id", canEdit, async (req
     .eq("organization_id", organizationId);
 
   if (rowsError) {
+    if ((rowsError as { code?: string }).code === "23503") {
+      return res.status(409).json({ message: "This section's rows have history (measurements, samples or plantings), so they can't be deleted here. Manage rows in Setup → Map." });
+    }
     return sendSafeError(res, 500, "Failed to delete greenhouse rows.", "Greenhouse rows delete error:", rowsError);
   }
 

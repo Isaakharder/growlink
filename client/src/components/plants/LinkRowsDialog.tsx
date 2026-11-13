@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ModalOverlay } from "../ModalOverlay";
 import { GreenhouseMapCanvas, mapRowKey } from "../greenhouseMap/GreenhouseMapCanvas";
 import type { GreenhouseMapResponse, MapRow } from "../../lib/greenhouseMap/types";
-import { compressRows, rowEnd, type PlantingRowRef, type PlantsGreenhouse, type RowRef } from "../../lib/plants/plantingCards";
+import { compressRows, rowAreaOn, rowEnd, type PlantingRowRef, type PlantsGreenhouse, type RowRef } from "../../lib/plants/plantingCards";
 
 // Link rows → Save rows for one dated planting (preview). Opens only when the
 // person clicks Link rows. The planting's current rows start selected; rows
@@ -137,7 +137,9 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onOp
     let m2 = 0, plants = 0, heads = 0, missingArea = 0, missingPlants = 0;
     for (const r of selectedRows) {
       const s = setupRows.get(key(r));
-      if (s?.area_m2) m2 += s.area_m2; else missingArea += 1;
+      // The size that applies on this planting's date (Setup → Map measurements).
+      const area = s ? rowAreaOn(s, planting.planting_date).area : null;
+      if (area) m2 += area; else missingArea += 1;
       const p = s && s.slab_count > 0 && s.plants_per_slab > 0 ? s.slab_count * s.plants_per_slab : null;
       if (p === null) missingPlants += 1;
       else {
@@ -146,7 +148,7 @@ export function LinkRowsDialog({ planting, greenhouse, others, map, onSave, onOp
       }
     }
     return { rows: selectedRows.length, m2, plants, heads, missingArea, missingPlants };
-  }, [selectedRows, setupRows]);
+  }, [selectedRows, setupRows, planting.planting_date]);
   const occupiedInSelection = selectedRows.filter((r) => occupiedBy.has(key(r)));
 
   const describe = (refs: RowRef[]) => {

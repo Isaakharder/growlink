@@ -13,6 +13,21 @@
 
 export type PlantingStatus = "active" | "upcoming" | "past";
 
+type AreaRow = { area_m2: number | null; measurements?: Array<{ effective_from: string | null; area_m2: number | null }>; available_from?: string | null };
+
+/**
+ * A row's m² on a date: the measured size in effect that day (so a resize or a
+ * new row for a later season doesn't change an earlier figure). notYet when
+ * the row isn't in the greenhouse yet on that date.
+ */
+export function rowAreaOn(row: AreaRow, date: string): { area: number | null; notYet: boolean } {
+  if (!row.measurements?.length) return { area: row.area_m2 && row.area_m2 > 0 ? row.area_m2 : null, notYet: false };
+  let found: { area_m2: number | null } | null = null;
+  for (const v of row.measurements) if (v.effective_from === null || v.effective_from <= date) found = v;
+  if (!found) return { area: null, notYet: true };
+  return { area: found.area_m2 && found.area_m2 > 0 ? found.area_m2 : null, notYet: false };
+}
+
 /** The greenhouse and catalog every card is worked out against. */
 export type PlantsGreenhouse = {
   today: string; // YYYY-MM-DD in the organization's time zone
@@ -24,8 +39,12 @@ export type PlantsGreenhouse = {
     slab_count: number;
     plants_per_slab: number;
     stems_per_plant: number | null;
-    /** The row's m² (its own width × length, else its section's); null when neither is set. */
+    /** The row's m² today: its measured size (Setup → Map), else Greenhouse Setup's; null when unknown. */
     area_m2: number | null;
+    /** Dated measurements (0157): each size and the date it applies from (null = since the beginning). */
+    measurements?: Array<{ effective_from: string | null; width_m: number | null; length_m: number | null; area_m2: number | null }>;
+    /** The first day the row is in the greenhouse (null = always). */
+    available_from?: string | null;
   }>;
   varieties: Array<{
     id: string;
@@ -88,6 +107,8 @@ export type PhaseLine = {
   heads: Measure;
   /** Rows the assignment lists that Greenhouse Setup doesn't have. */
   rowsNotInSetup: number[];
+  /** Rows added for a later season that aren't in the greenhouse yet on the planting date. */
+  rowsNotYetBuilt: number[];
 };
 
 export type PlantingCard = {
@@ -220,7 +241,8 @@ export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): 
         m2: zero(),
         plants: zero(),
         heads: zero(),
-        rowsNotInSetup: []
+        rowsNotInSetup: [],
+        rowsNotYetBuilt: []
       };
       for (const n of rowNumbers) {
         const row = rowsByKey.get(`${groupId}:${n}`);
@@ -231,7 +253,9 @@ export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): 
           add(line.heads, null);
           continue;
         }
-        const area = row.area_m2 && row.area_m2 > 0 ? row.area_m2 : null;
+        // m² comes from the size that applied on the planting date; plants and heads from the row's inputs.
+        const { area, notYet } = rowAreaOn(row, plantingDate ?? data.today);
+        if (notYet) line.rowsNotYetBuilt.push(n);
         const plants = row.slab_count > 0 && row.plants_per_slab > 0 ? row.slab_count * row.plants_per_slab : null;
         const heads = plants !== null && row.stems_per_plant && row.stems_per_plant > 0 ? plants * row.stems_per_plant : null;
         add(line.m2, area);
@@ -271,8 +295,14 @@ export function buildBoard(data: PlantsGreenhouse, plantings: PlantingInput[]): 
         card.issues.push(`${line.groupName}: ${plural(line.rowsNotInSetup.length, "row")} not in Greenhouse Setup (${compressRows(line.rowsNotInSetup)}).`);
       }
     }
+    for (const line of card.phases) {
+      if (line.rowsNotYetBuilt.length) {
+        card.issues.push(`${line.groupName}: ${plural(line.rowsNotYetBuilt.length, "row")} not in the greenhouse yet on the planting date (${compressRows(line.rowsNotYetBuilt)}).`);
+      }
+    }
     const notInSetup = card.phases.reduce((n, l) => n + l.rowsNotInSetup.length, 0);
-    const missingArea = card.m2.missingRows - notInSetup;
+    const notYetBuilt = card.phases.reduce((n, l) => n + l.rowsNotYetBuilt.length, 0);
+    const missingArea = card.m2.missingRows - notInSetup - notYetBuilt;
     const missingPlants = card.plants.missingRows - notInSetup;
     const missingHeads = card.heads.missingRows - card.plants.missingRows;
     if (missingArea > 0) card.issues.push(`${plural(missingArea, "row")} without a width or length: m² is incomplete.`);

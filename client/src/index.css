@@ -13510,3 +13510,125 @@ details.pack-week-manual > :not(summary) {
   padding-left: 1.1rem;
   font-weight: 600;
 }
+
+/* Setup → Map: row measurements (real sizes, dated) */
+.gh-measure {
+  margin-top: 1.25rem;
+}
+
+.gh-measure h3 {
+  margin: 0.75rem 0 0.4rem;
+  font-size: 1rem;
+}
+
+.gh-measure-report > summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.gh-measure-report > summary h3 {
+  display: inline;
+  margin: 0;
+}
+
+.gh-measure-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.gh-measure-rows {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.gh-measure-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.gh-measure-table th,
+.gh-measure-table td {
+  text-align: left;
+  padding: 0.3rem 0.45rem;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.gh-measure-table thead th {
+  border-top: 0;
+  color: var(--text-muted);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.gh-measure-table tr.selected td {
+  background: var(--brand-soft);
+}
+
+.gh-measure-total th,
+.gh-measure-total td {
+  font-weight: 600;
+}
+
+.gh-measure-changed td {
+  color: #b42318;
+}
+
+.gh-measure-head,
+.gh-measure-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.gh-measure-head label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.gh-measure-head button,
+.gh-measure-tools button,
+.gh-measure-form button[type="submit"],
+.gh-measure-copy button {
+  min-height: 44px;
+}
+
+.gh-measure-form {
+  margin-top: 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.gh-measure-preview {
+  width: 100%;
+  overflow-x: auto;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.5rem;
+}
+
+.gh-measure-preview tfoot th,
+.gh-measure-preview tfoot td {
+  font-weight: 600;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
