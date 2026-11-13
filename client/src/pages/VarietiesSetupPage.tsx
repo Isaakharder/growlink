@@ -480,7 +480,7 @@ export function VarietiesSetupPage() {
   return (
     <section className="page-shell">
       <header>
-        <h1>Varieties Setup</h1>
+        <h1>Varieties</h1>
         <p>Manage crop varieties and baseline growing attributes.</p>
       </header>
 

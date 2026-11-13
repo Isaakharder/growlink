@@ -20,6 +20,8 @@ type NavGroupChild = {
   label: string;
   to: string;
   permission?: string;
+  /** Other pages that belong to this entry and highlight it too. */
+  alsoActiveOn?: string[];
 };
 
 type NavGroupItem = {
@@ -68,7 +70,16 @@ const navItems: NavItem[] = [
       { label: "Reports", to: "/food-safety/reports", permission: "food_safety:view" },
     ],
   },
-  { type: "link", label: "Crop Planner", to: "/crop-planner", permission: "greenhouse_setup:view" },
+  {
+    type: "group",
+    label: "Crop Planner",
+    base: "/crop-planner",
+    children: [
+      // Plans covers the planner and its map builder (/crop-planner/map).
+      { label: "Plans",     to: "/crop-planner",           permission: "greenhouse_setup:view", alsoActiveOn: ["/crop-planner/map"] },
+      { label: "Varieties", to: "/crop-planner/varieties", permission: "greenhouse_setup:view" },
+    ],
+  },
   {
     type: "group",
     label: "Setup",
@@ -78,7 +89,6 @@ const navItems: NavItem[] = [
       { label: "Greenhouse Setup",   to: "/setup/greenhouse",    permission: "greenhouse_setup:view" },
       { label: "Irrigation Setup",   to: "/setup/irrigation",    permission: "irrigation:view" },
       { label: "Products Setup",     to: "/setup/products",      permission: "greenhouse_setup:view" },
-      { label: "Varieties Setup",    to: "/setup/varieties",     permission: "greenhouse_setup:view" },
       { label: "Food Safety Setup",  to: "/setup/food-safety",   permission: "food_safety:view" },
       { label: "Settings",           to: "/setup/settings" }, // visible to everyone
     ],
@@ -209,7 +219,11 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                         end={child.to === item.base}
                         onClick={onCloseMobile}
                         className={({ isActive }) =>
-                          `nav-sublink ${isActive ? "active" : ""}`
+                          `nav-sublink ${
+                            isActive || child.alsoActiveOn?.some((p) => location.pathname === p || location.pathname.startsWith(`${p}/`))
+                              ? "active"
+                              : ""
+                          }`
                         }
                       >
                         {child.label}
