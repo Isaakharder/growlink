@@ -1,0 +1,18 @@
+Season,2027
+Plan,Main plan
+
+Seed order
+Variety,Phase,Rows,Target plants,Oversow %,Base seeds,Extra seeds,Total seeds to order,Status
+Cadalora,Phase 1,18,5724,,,,,
+Cadalora,Phase 2,12,4152,,,,,
+Cadalora,All phases,30,9876,30,9876,2963,12839,Complete
+Sunny,Phase 1,8,2544,,,,,
+Sunny,All phases,8,2544,0,2544,0,2544,Complete
+
+Slab order
+Slab type,Phase,Rows,Slabs to order,Status
+Grodan Expert 100,Phase 1,20,2120,
+Grodan Expert 100,All phases,20,2120,Complete
+Grodan Vital 120,Phase 1,6,636,
+Grodan Vital 120,Phase 2,12,1144,
+Grodan Vital 120,All phases,18,1780,Complete

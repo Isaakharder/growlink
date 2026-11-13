@@ -1,0 +1,58 @@
+PASS  Sidebar: Crop Planner sits between Food Safety and Setup
+PASS  Plan: 2027 · Main plan created and open
+PASS  Map: all 48 rows start unassigned
+PASS  Map: Phase 2 rows without a layout are flagged
+PASS  Selection: 20 rows selected · 6,360 plants (20 x 106 slabs x 3 plants; stems not counted)
+PASS  Overlap: the phase selection shows rows 1–20 already assigned to Cadalora
+PASS  Overlap: no plain Assign button (nothing is overwritten silently)
+PASS  Overlap: rows 1–20 stay Cadalora, 21–26 become Sunny
+PASS  Selection Phase 2: 12 rows selected · 2,880 plants (incomplete)
+PASS  Selection: rows 9–12 flagged as missing layout inputs
+PASS  Seed order (incomplete):
+        Cadalora | Phase 1 | 20 | 6,360 | 
+        Cadalora | Phase 2 | 12 | 2,880 · 4 rows missing inputs | 
+        Cadalora | All phases | 32 | 9,240 | 0 | 9,240 | 0 | 9,240 Incomplete
+        Sunny | Phase 1 | 6 | 1,908 | 0 | 1,908 | 0 | 1,908
+PASS  Order: marked incomplete while rows lack inputs
+PASS  Layout inputs: 53 × 2 × 3 = 318 plants per row shown before saving
+PASS  Selection after inputs: 4 rows selected · 1,272 plants
+PASS  Seed order Cadalora: Cadalora | All phases | 32 | 10,512 | 30 | 10,512 | 3,154 | 13,666
+PASS  Order: complete once the inputs are filled in
+PASS  After reassign, Cadalora: Cadalora | All phases | 30 | 9,876 | 30 | 9,876 | 2,963 | 12,839
+PASS  After reassign, Sunny: Sunny | Phase 1 | 8 | 2,544 | 0 | 2,544 | 0 | 2,544
+PASS  Slab mode: its own colours; no slab types yet
+PASS  Slab selection: 20 rows selected · 2,120 slabs
+PASS  Slab overlap: rows 1–20 shown as assigned
+PASS  Slab order:
+        Grodan Expert 100 | Phase 1 | 20 | 2,120
+        Grodan Vital 120 | Phase 1 | 6 | 636
+        Grodan Vital 120 | Phase 2 | 12 | 1,144
+        Grodan Vital 120 | All phases | 18 | 1,780
+PASS  Unassigned rows listed for both modes (Phase 3 rows 1–10)
+PASS  Print: printable summary (print root) with season and a not-an-order note
+PASS  CSV: crop-plan-order-2027-main-plan.csv
+PASS  CSV: season, separate seed and slab lists, final quantities
+INFO  CSV:
+        Season,2027
+        Plan,Main plan
+        
+        Seed order
+        Variety,Phase,Rows,Target plants,Oversow %,Base seeds,Extra seeds,Total seeds to order,Status
+        Cadalora,Phase 1,18,5724,,,,,
+        Cadalora,Phase 2,12,4152,,,,,
+        Cadalora,All phases,30,9876,30,9876,2963,12839,Complete
+        Sunny,Phase 1,8,2544,,,,,
+        Sunny,All phases,8,2544,0,2544,0,2544,Complete
+        
+        Slab order
+        Slab type,Phase,Rows,Slabs to order,Status
+        Grodan Expert 100,Phase 1,20,2120,
+        Grodan Expert 100,All phases,20,2120,Complete
+        Grodan Vital 120,Phase 1,6,636,
+        Grodan Vital 120,Phase 2,12,1144,
+        Grodan Vital 120,All phases,18,1780,Complete
+PASS  Server: assigning an already planted row without choosing → 409 "1 of the selected rows already has an assignment. Add only the unassigned rows, or reassign them."
+PASS  Database: 38 plantings and 38 slab rows, no row counted twice
+PASS  Live greenhouse variety assignments unchanged by planning
+
+29/29 checks passed
