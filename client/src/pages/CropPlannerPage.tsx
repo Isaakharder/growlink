@@ -117,7 +117,7 @@ export function CropPlannerPage() {
   const [planModal, setPlanModal] = useState<{ editing: boolean; season: string; name: string } | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
   const [oversowDraft, setOversowDraft] = useState<Record<string, string>>({});
-  // The organization's greenhouse map (Crop Planner → Edit map). Without one,
+  // The organization's greenhouse map (Setup → Map). Without one,
   // or with the list chosen, rows are shown as tiles by phase.
   const [greenhouseMap, setGreenhouseMap] = useState<GreenhouseMapResponse["map"]>(null);
   const [view, setView] = useState<View>(readView);
@@ -665,7 +665,7 @@ export function CropPlannerPage() {
                     <button type="button" aria-pressed={view === "list"} className={view === "list" ? "active" : ""} onClick={() => { setView("list"); rememberView("list"); }}>Rows by phase</button>
                   </div>
                 ) : null}
-                {canEdit ? <a className="crop-plan-map-edit" href="/crop-planner/map">{greenhouseMap ? "Edit map" : "Build a map"}</a> : null}
+                {canEdit ? <a className="crop-plan-map-edit" href="/setup/map">{greenhouseMap ? "Edit map" : "Build a map"}</a> : null}
               </div>
               <p className="form-hint">
                 {showMap

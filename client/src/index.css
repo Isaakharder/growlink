@@ -13065,3 +13065,170 @@ details.pack-week-manual > :not(summary) {
     height: 60vh;
   }
 }
+
+/* Crop Planner → Plants: planting cards */
+.plants-section {
+  margin-top: 1.5rem;
+}
+
+.plants-section > h2,
+.plants-section > summary h2 {
+  display: inline;
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.plants-section > summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.plants-count,
+.plants-muted {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.plants-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+  align-items: start;
+  margin-top: 0.75rem;
+}
+
+.plants-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.plants-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.plants-card-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.plants-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  flex: none;
+}
+
+.plants-crop {
+  font-size: 0.8rem;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+}
+
+.plants-dates {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.9rem;
+}
+
+.plants-rows {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.plants-totals {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.plants-totals div {
+  background: var(--surface-soft);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  min-width: 0;
+}
+
+.plants-totals dt {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.plants-totals dd {
+  margin: 0.1rem 0 0;
+  font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+.plants-totals .plants-missing {
+  display: block;
+  font-size: 0.75rem;
+}
+
+.plants-phase-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.plants-phase-table th,
+.plants-phase-table td {
+  text-align: left;
+  padding: 0.3rem 0.35rem;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.plants-phase-table tbody th {
+  white-space: nowrap;
+}
+
+.plants-phase-table thead th {
+  border-top: 0;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.plants-missing {
+  color: #9a5b00;
+  font-weight: 500;
+}
+
+.plants-issues {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.5rem 1.6rem;
+  border-left: 4px solid #d49a1f;
+  background: #fff8e6;
+  border-radius: 0 8px 8px 0;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .plants-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plants-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -73,6 +73,10 @@ const CropPlannerPage = lazy(() =>
   import("../pages/CropPlannerPage").then((m) => ({ default: m.CropPlannerPage }))
 );
 // Crop Planner → Greenhouse map builder (and LabourLink import).
+// Crop Planner → Plants: cards of what is planted where.
+const PlantsPage = lazy(() =>
+  import("../pages/PlantsPage").then((m) => ({ default: m.PlantsPage }))
+);
 const GreenhouseMapBuilderPage = lazy(() =>
   import("../pages/GreenhouseMapBuilderPage").then((m) => ({ default: m.GreenhouseMapBuilderPage }))
 );
@@ -333,6 +337,16 @@ export const appRouteConfig: RouteObject[] = [
             )
           },
           {
+            path: "setup/map",
+            element: (
+              <RequirePermission permission="greenhouse_setup:edit">
+                <LazyRoute>
+                  <GreenhouseMapBuilderPage />
+                </LazyRoute>
+              </RequirePermission>
+            )
+          },
+          {
             path: "setup/irrigation",
             element: (
               <RequirePermission permission="irrigation:view">
@@ -350,12 +364,17 @@ export const appRouteConfig: RouteObject[] = [
               </RequirePermission>
             )
           },
+          // The map builder moved to Setup → Map; old links and bookmarks follow it.
           {
             path: "crop-planner/map",
+            element: <RedirectKeepingQuery to="/setup/map" />
+          },
+          {
+            path: "crop-planner/plants",
             element: (
-              <RequirePermission permission="greenhouse_setup:edit">
+              <RequirePermission permission="greenhouse_setup:view">
                 <LazyRoute>
-                  <GreenhouseMapBuilderPage />
+                  <PlantsPage />
                 </LazyRoute>
               </RequirePermission>
             )

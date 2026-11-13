@@ -20,8 +20,6 @@ type NavGroupChild = {
   label: string;
   to: string;
   permission?: string;
-  /** Other pages that belong to this entry and highlight it too. */
-  alsoActiveOn?: string[];
 };
 
 type NavGroupItem = {
@@ -75,8 +73,10 @@ const navItems: NavItem[] = [
     label: "Crop Planner",
     base: "/crop-planner",
     children: [
-      // Plans covers the planner and its map builder (/crop-planner/map).
-      { label: "Plans",     to: "/crop-planner",           permission: "greenhouse_setup:view", alsoActiveOn: ["/crop-planner/map"] },
+      { label: "Plants",    to: "/crop-planner/plants",    permission: "greenhouse_setup:view" },
+      // Plans: the draft season planner (seed and slab order). Plants will replace
+      // it once drafts and the order workflow move over.
+      { label: "Plans",     to: "/crop-planner",           permission: "greenhouse_setup:view" },
       { label: "Varieties", to: "/crop-planner/varieties", permission: "greenhouse_setup:view" },
     ],
   },
@@ -87,6 +87,7 @@ const navItems: NavItem[] = [
     children: [
       { label: "Pest Control Setup", to: "/setup/pest-control",  permission: "pest:view" },
       { label: "Greenhouse Setup",   to: "/setup/greenhouse",    permission: "greenhouse_setup:view" },
+      { label: "Map",                to: "/setup/map",           permission: "greenhouse_setup:edit" },
       { label: "Irrigation Setup",   to: "/setup/irrigation",    permission: "irrigation:view" },
       { label: "Products Setup",     to: "/setup/products",      permission: "greenhouse_setup:view" },
       { label: "Food Safety Setup",  to: "/setup/food-safety",   permission: "food_safety:view" },
@@ -219,11 +220,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                         end={child.to === item.base}
                         onClick={onCloseMobile}
                         className={({ isActive }) =>
-                          `nav-sublink ${
-                            isActive || child.alsoActiveOn?.some((p) => location.pathname === p || location.pathname.startsWith(`${p}/`))
-                              ? "active"
-                              : ""
-                          }`
+                          `nav-sublink ${isActive ? "active" : ""}`
                         }
                       >
                         {child.label}
