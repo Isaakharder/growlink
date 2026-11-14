@@ -99,6 +99,15 @@ async function loadAll(organizationId: string) {
   return { groups, rows, sectionsById, drawn, measurements };
 }
 
+// Future-dated sizes (a resize or new rows that apply after today) stay off
+// until every area and yield report reads dated sizes and has been checked
+// on a copy; production enables them by setting ROW_SIZES_FUTURE_DATES=on.
+// Sizes from today or an earlier date are always allowed.
+export function futureRowSizesEnabled(): boolean {
+  return process.env.ROW_SIZES_FUTURE_DATES === "on";
+}
+const FUTURE_DATES_OFF = "Sizes that apply after today are turned off for now. Use today's date, or an earlier one.";
+
 // Rows with their measured size today and their history (and the Greenhouse Setup values they came from).
 rowMeasurementsRouter.get("/setup/map/measurements", canView, async (req, res) => {
   const organizationId = req.organizationId as string;
@@ -108,6 +117,7 @@ rowMeasurementsRouter.get("/setup/map/measurements", canView, async (req, res) =
     return res.json({
       today,
       timeZone: DEFAULT_ORG_TIMEZONE,
+      future_dates_enabled: futureRowSizesEnabled(),
       available: measurements !== null,
       copied: Boolean(measurements && measurements.size),
       groups,
@@ -259,6 +269,7 @@ rowMeasurementsRouter.put("/setup/map/measurements", canEdit, async (req, res) =
     if (tooEarly.length) throw new InputError("A new size must apply after the row's latest size", 400, { rowsWithLaterSize: tooEarly });
 
     const today = todayInOrgTimezone(DEFAULT_ORG_TIMEZONE);
+    if (effectiveFrom > today && !futureRowSizesEnabled()) throw new InputError(FUTURE_DATES_OFF, 403, { futureDatesDisabled: true, today });
     const { data, error } = await supabase.rpc("record_row_measurements", {
       p_organization_id: organizationId,
       p_rows: asked,
@@ -301,6 +312,7 @@ rowMeasurementsRouter.post("/setup/map/rows", canEdit, async (req, res) => {
     if (exists.length) throw new InputError("Some of those row numbers already exist in this phase", 409, { existingRows: exists });
 
     const today = todayInOrgTimezone(DEFAULT_ORG_TIMEZONE);
+    if (effectiveFrom > today && !futureRowSizesEnabled()) throw new InputError(FUTURE_DATES_OFF, 403, { futureDatesDisabled: true, today });
     const { data, error } = await supabase.rpc("add_measured_rows", {
       p_organization_id: organizationId,
       p_group_id: groupId,

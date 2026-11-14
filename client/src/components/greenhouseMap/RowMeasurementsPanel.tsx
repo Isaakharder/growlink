@@ -19,7 +19,9 @@ type MeasuredRow = {
   current: { width_m: number | null; length_m: number | null; area_m2: number | null; effective_from: string | null; source: string } | null;
   versions: Version[];
 };
-type Data = { today: string; available: boolean; copied: boolean; groups: Array<{ id: string; name: string }>; rows: MeasuredRow[] };
+const FUTURE_OFF = "Sizes that apply after today are turned off for now, until every area and yield report has been checked with dated sizes. Use today's date or an earlier one.";
+
+type Data = { today: string; future_dates_enabled?: boolean; available: boolean; copied: boolean; groups: Array<{ id: string; name: string }>; rows: MeasuredRow[] };
 type PhaseLine = { phase: string; rows: number; area_before_m2: number; area_after_m2: number; missing: number; differs_from_section: number; drawing_differs: number; not_on_map: number; area_changed: number };
 type ReportRow = {
   phase: string;
@@ -92,6 +94,11 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
   }, [data, defaulted]);
 
   const groupName = useMemo(() => new Map((data?.groups ?? []).map((g) => [g.id, g.name])), [data]);
+  // Sizes that apply after today stay off until every report reads dated sizes (server: ROW_SIZES_FUTURE_DATES).
+  const futureOff = data?.future_dates_enabled === false;
+  const today = data?.today ?? "";
+  const resizeTooLate = futureOff && Boolean(resize.from) && resize.from > today;
+  const addTooLate = futureOff && Boolean(add.exists) && add.exists > today;
   const phaseRows = useMemo(() => (data?.rows ?? []).filter((r) => r.group_id === phase).sort((a, b) => a.row_number - b.row_number), [data, phase]);
   const selectedRows = useMemo(() => (data?.rows ?? []).filter((r) => selected.has(r.id)), [data, selected]);
 
@@ -137,7 +144,7 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
 
   async function saveResize(e: FormEvent) {
     e.preventDefault();
-    if (!preview?.valid) return;
+    if (!preview?.valid || resizeTooLate) return;
     setBusy(true);
     setError(null);
     const res = await apiFetch(URL_BASE, {
@@ -164,7 +171,7 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
 
   async function saveAdd(e: FormEvent) {
     e.preventDefault();
-    if (!addPreview || addPreview.clash.length) return;
+    if (!addPreview || addPreview.clash.length || addTooLate) return;
     setBusy(true);
     setError(null);
     const res = await apiFetch("/api/setup/map/rows", {
@@ -322,8 +329,9 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
             <div className="gh-map-fields">
               <label>Width (m)<input type="number" step="any" min="0" value={resize.width} onChange={(e) => setResize({ ...resize, width: e.target.value })} placeholder="keep" /></label>
               <label>Length (m)<input type="number" step="any" min="0" value={resize.length} onChange={(e) => setResize({ ...resize, length: e.target.value })} placeholder="keep" /></label>
-              <label>Applies from<input type="date" value={resize.from} onChange={(e) => setResize({ ...resize, from: e.target.value })} required /></label>
+              <label>Applies from<input type="date" value={resize.from} max={futureOff ? today : undefined} onChange={(e) => setResize({ ...resize, from: e.target.value })} required /></label>
             </div>
+            {resizeTooLate ? <p className="crop-plan-flag" role="alert">{FUTURE_OFF}</p> : null}
             {preview ? (
               <div className="gh-measure-preview" aria-label="Resize preview">
                 <table className="gh-measure-table">
@@ -352,7 +360,7 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
                 <p className="form-hint">Old m² is the size in effect on {fmtDate(resize.from)}. Dates before {fmtDate(resize.from)} keep their size; plant and head counts don't change.</p>
               </div>
             ) : <p className="form-hint">Select rows above (or on the map) to preview a new size.</p>}
-            <button type="submit" disabled={busy || !preview?.valid}>Save new size{preview ? ` for ${plural(preview.lines.length, "row")}` : ""}</button>
+            <button type="submit" disabled={busy || !preview?.valid || resizeTooLate}>Save new size{preview ? ` for ${plural(preview.lines.length, "row")}` : ""}</button>
           </form>
 
           <form className="gh-measure-form" onSubmit={saveAdd} aria-label="Add rows">
@@ -365,8 +373,9 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
               <label>Slabs per row<input type="number" min="0" value={add.slabs} onChange={(e) => setAdd({ ...add, slabs: e.target.value })} /></label>
               <label>Plants per slab<input type="number" min="0" value={add.plants} onChange={(e) => setAdd({ ...add, plants: e.target.value })} /></label>
               <label>Stems per plant<input type="number" step="any" min="0" value={add.stems} onChange={(e) => setAdd({ ...add, stems: e.target.value })} placeholder="1" /></label>
-              <label>In the greenhouse from<input type="date" value={add.exists} onChange={(e) => setAdd({ ...add, exists: e.target.value })} required /></label>
+              <label>In the greenhouse from<input type="date" value={add.exists} max={futureOff ? today : undefined} onChange={(e) => setAdd({ ...add, exists: e.target.value })} required /></label>
             </div>
+            {addTooLate ? <p className="crop-plan-flag" role="alert">{FUTURE_OFF}</p> : null}
             {addPreview ? (
               <p className={addPreview.clash.length ? "crop-plan-flag" : "form-hint"} aria-label="Add rows preview">
                 {addPreview.clash.length
@@ -374,7 +383,7 @@ export function RowMeasurementsPanel({ selectedOnMap }: { selectedOnMap?: Set<st
                   : `${plural(addPreview.numbers.length, "new row")} (${compressRows(addPreview.numbers)}) × ${fmt(addPreview.each)} m² = ${fmt(addPreview.total)} m², from ${fmtDate(add.exists)}. Earlier dates don't include them.`}
               </p>
             ) : null}
-            <button type="submit" disabled={busy || !addPreview || addPreview.clash.length > 0}>Add {addPreview ? plural(addPreview.numbers.length, "row") : "rows"}</button>
+            <button type="submit" disabled={busy || !addPreview || addPreview.clash.length > 0 || addTooLate}>Add {addPreview ? plural(addPreview.numbers.length, "row") : "rows"}</button>
           </form>
         </>
       ) : null}

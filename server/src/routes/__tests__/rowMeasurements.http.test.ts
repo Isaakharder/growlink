@@ -52,7 +52,8 @@ async function resetDatabase() {
     create table greenhouse_groups (id uuid primary key default gen_random_uuid(), organization_id uuid not null,
       type text not null, name text not null, status text not null default 'active', created_at timestamptz default now(), updated_at timestamptz default now());
     create table greenhouse_row_sections (id uuid primary key default gen_random_uuid(), organization_id uuid not null, group_id uuid,
-      start_row int, end_row int, width_meters numeric, length_meters numeric, created_at timestamptz default now());
+      start_row int, end_row int, row_pattern text, slab_count int, plants_per_slab int, stems_per_plant numeric,
+      width_meters numeric, length_meters numeric, created_at timestamptz default now(), updated_at timestamptz default now());
     create table greenhouse_rows (id uuid primary key default gen_random_uuid(), organization_id uuid not null,
       group_id uuid not null references greenhouse_groups(id) on delete cascade, row_number int not null,
       slab_count int not null default 0, plants_per_slab int not null default 0, stems_per_plant numeric not null default 1,
@@ -94,6 +95,8 @@ async function resetDatabase() {
 }
 
 before(async () => {
+  // The future-season tests run with future-dated sizes on; one test turns them off.
+  process.env.ROW_SIZES_FUTURE_DATES = "on";
   await resetDatabase();
   const client = new Proxy({}, { get: (_t, prop) => (createPgliteSupabase(db) as unknown as Record<string | symbol, unknown>)[prop] });
   const id = require.resolve("../../config/supabase");
@@ -103,6 +106,7 @@ before(async () => {
   const { datedPlantingsRouter } = require("../datedPlantings") as typeof import("../datedPlantings");
   const { greenhouseSetupRouter } = require("../greenhouseSetup") as typeof import("../greenhouseSetup");
   const { greenhouseMapRouter } = require("../greenhouseMap") as typeof import("../greenhouseMap");
+  const { yieldEntriesRouter } = require("../yieldEntries") as typeof import("../yieldEntries");
   /* eslint-enable @typescript-eslint/no-var-requires */
   const app = express();
   app.use(express.json());
@@ -115,6 +119,7 @@ before(async () => {
   app.use("/api", datedPlantingsRouter);
   app.use("/api", greenhouseSetupRouter);
   app.use("/api", greenhouseMapRouter);
+  app.use("/api", yieldEntriesRouter);
   server = app.listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -308,4 +313,157 @@ test("measured rows can't be deleted with their history; viewers read only; orga
   assert.equal(cross.status, 400, "another organization's row is unknown there");
   assert.deepEqual(cross.body.unknownRows, [ROW("101")]);
   assert.equal((await db.query<{ n: number }>(`select count(*)::int n from greenhouse_row_measurements where row_id = '${ROW("101")}'`)).rows[0].n, 1);
+});
+
+// ── Area and yield reports that used to read greenhouse_rows' size fields ───
+import { physicalAreasByVariety } from "../../lib/croplinkV2";
+// Loaded on use: the store imports the Supabase client, which before() replaces with PGlite.
+const croplinkV2Store = {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  physicalAreas: (org: string) => (require("../croplinkV2Store") as typeof import("../croplinkV2Store")).supabaseCroplinkV2Store.physicalAreas(org)
+};
+const r3 = (n: number | null | undefined) => (n == null ? n : Math.round(n * 1000) / 1000);
+const nextMonday = (iso: string, atLeastDays: number) => {
+  let d = addDays(iso, atLeastDays);
+  while (new Date(`${d}T12:00:00Z`).getUTCDay() !== 1) d = addDays(d, 1);
+  return d;
+};
+/** Moves the process clock to `iso` (still ticking), as if that day had come; returns the undo. */
+function shiftClockTo(iso: string) {
+  const RealDate = Date;
+  const offset = new RealDate(iso).getTime() - RealDate.now();
+  class ShiftedDate extends RealDate {
+    constructor(...args: unknown[]) {
+      if (args.length === 0) super(RealDate.now() + offset);
+      else super(...(args as [string]));
+    }
+    static now() {
+      return RealDate.now() + offset;
+    }
+  }
+  globalThis.Date = ShiftedDate as DateConstructor;
+  return () => {
+    globalThis.Date = RealDate;
+  };
+}
+const setupTotals = async () => {
+  const body = (await call("/greenhouse-setup")).body;
+  const rows = body.rows as Array<{ group_id: string; row_number: number; width_meters: number | null; length_meters: number | null }>;
+  return {
+    rowSizes: body.rowSizes,
+    rows: rows.map((r) => `${r.group_id === P1 ? "P1" : "P2"}:${r.row_number}=${r.width_meters ?? "-"}x${r.length_meters ?? "-"}`).sort(),
+    m2: r3(rows.reduce((t, r) => t + Number(r.width_meters ?? 0) * Number(r.length_meters ?? 0), 0))
+  };
+};
+
+test("future-dated sizes are off unless ROW_SIZES_FUTURE_DATES=on; today and earlier always work", async () => {
+  delete process.env.ROW_SIZES_FUTURE_DATES;
+  try {
+    await call("/setup/map/measurements/copy", { body: {} });
+    const t = await today();
+    assert.equal((await call("/setup/map/measurements")).body.future_dates_enabled, false);
+    const resize = await call("/setup/map/measurements", { method: "PUT", body: { effective_from: addDays(t, 1), rows: [{ row_id: ROW("101"), width_m: 1.6, length_m: 60 }] } });
+    assert.equal(resize.status, 403);
+    assert.equal(resize.body.futureDatesDisabled, true);
+    const add = await call("/setup/map/rows", { body: { group_id: P1, from_row: 9, to_row: 9, width_m: 1.6, length_m: 60, effective_from: addDays(t, 30) } });
+    assert.equal(add.status, 403);
+    assert.equal((await db.query("select 1 from greenhouse_row_measurements where effective_from > current_date")).rows.length, 0, "nothing future-dated was saved");
+    assert.equal((await call("/setup/map/measurements", { method: "PUT", body: { effective_from: t, rows: [{ row_id: ROW("101"), width_m: 1.6, length_m: 60 }] } })).status, 200);
+    assert.equal((await call("/setup/map/rows", { body: { group_id: P1, from_row: 9, to_row: 9, width_m: 1.6, length_m: 60, effective_from: t } })).status, 201);
+  } finally {
+    process.env.ROW_SIZES_FUTURE_DATES = "on";
+  }
+  assert.equal((await call("/setup/map/measurements")).body.future_dates_enabled, true);
+});
+
+test("area and yield reports use the size in effect on their own date, before and after a future resize takes effect", async () => {
+  // Cadalora grows on Phase 2 rows 1-6 (row 6 is only added for next season).
+  await db.exec(`insert into greenhouse_variety_assignments (organization_id, group_id, variety_id, start_row, end_row) values ('${ORG}', '${P2}', '${CAD}', 1, 6)`);
+  const t = await today();
+  const pastMonday = nextMonday(addDays(t, -200), 0);
+  const season = nextMonday(t, 21);
+
+  // Before the switch (no measurements): Greenhouse Setup's values.
+  const legacy = await call("/yield-analytics/area-footprints");
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.measured, false);
+  const cadBefore = physicalAreasByVariety(legacy.body).get(CAD);
+  const setupBefore = await setupTotals();
+  assert.equal(setupBefore.rowSizes.source, "greenhouse_setup");
+
+  // The switch: identical figures.
+  await call("/setup/map/measurements/copy", { body: {} });
+  const copied = (await call("/yield-analytics/area-footprints")).body;
+  assert.equal(copied.measured, true);
+  assert.deepEqual(physicalAreasByVariety(copied).get(CAD), cadBefore, "yield analytics / CropLink area unchanged by the copy");
+  assert.deepEqual(physicalAreasByVariety(copied, pastMonday).get(CAD), cadBefore);
+  assert.deepEqual(physicalAreasByVariety(await croplinkV2Store.physicalAreas(ORG), pastMonday).get(CAD), cadBefore, "CropLink's store loads the same footprints");
+  const setupCopied = await setupTotals();
+  assert.deepEqual({ rows: setupCopied.rows, m2: setupCopied.m2 }, { rows: setupBefore.rows.map((r) => (r === "P2:2=-x-" ? "P2:2=1.6x91.44" : r)), m2: r3(setupBefore.m2! + 1.6 * 91.44) },
+    "Greenhouse Setup shows the copied sizes (row 2 had no own size; it now shows its section's, which it already counted with)");
+  assert.equal(setupCopied.rowSizes.source, "setup_map");
+
+  // Next season: row 1 resized (91.43 -> 100.58 m) and row 6 added, both from a Monday.
+  assert.equal((await call("/setup/map/measurements", { method: "PUT", body: { effective_from: season, rows: [{ row_id: ROW("201"), width_m: 1.6, length_m: 100.58 }] } })).status, 200);
+  assert.equal((await call("/setup/map/rows", { body: { group_id: P2, from_row: 6, to_row: 6, width_m: 1.6, length_m: 91.44, slab_count: 166, plants_per_slab: 3, stems_per_plant: 2, effective_from: season } })).status, 201);
+  const delta = 1.6 * (100.58 - 91.43) + 1.6 * 91.44;
+  const mirrorBefore = await rowsFingerprint();
+
+  const check = async (label: string) => {
+    const f = (await call("/yield-analytics/area-footprints")).body;
+    const store = await croplinkV2Store.physicalAreas(ORG);
+    for (const src of [f, store]) {
+      assert.deepEqual(physicalAreasByVariety(src, pastMonday).get(CAD), cadBefore, `${label}: a past week keeps its area`);
+      assert.deepEqual(physicalAreasByVariety(src, addDays(season, -7)).get(CAD), cadBefore, `${label}: the week before the resize keeps its area`);
+      const after = physicalAreasByVariety(src, season).get(CAD)!;
+      assert.equal(r3(after.areaM2), r3(cadBefore!.areaM2! + delta), `${label}: from the resize week, the new sizes and the new row`);
+      assert.equal(after.rowCount, cadBefore!.rowCount + 1);
+    }
+    return f;
+  };
+
+  // Before the resize takes effect: today's figures unchanged, the new row isn't in the greenhouse yet.
+  const beforeEffect = await check("before it takes effect");
+  assert.deepEqual(physicalAreasByVariety(beforeEffect).get(CAD), cadBefore, "today's area unchanged");
+  const setupBeforeEffect = await setupTotals();
+  assert.deepEqual({ rows: setupBeforeEffect.rows, m2: setupBeforeEffect.m2 }, { rows: setupCopied.rows, m2: setupCopied.m2 });
+  assert.equal(setupBeforeEffect.rowSizes.upcomingRows, 1);
+
+  // After it takes effect (the clock moved to the season's Monday): nothing rewrote greenhouse_rows,
+  // yet every reader shows the new sizes from that date, and earlier weeks keep theirs.
+  const restoreClock = shiftClockTo(`${season}T17:00:00Z`);
+  try {
+    assert.equal((await call("/setup/map/measurements")).body.today, season);
+    const afterEffect = await check("after it takes effect");
+    assert.equal(r3(physicalAreasByVariety(afterEffect).get(CAD)!.areaM2), r3(cadBefore!.areaM2! + delta), "today's area is the new one");
+    const setupAfter = await setupTotals();
+    assert.ok(setupAfter.rows.includes("P2:1=1.6x100.58") && setupAfter.rows.includes("P2:6=1.6x91.44"), JSON.stringify(setupAfter.rows));
+    assert.equal(setupAfter.m2, r3(setupCopied.m2! + delta));
+    assert.equal(setupAfter.rowSizes.upcomingRows, 0);
+    assert.equal(await rowsFingerprint(), mirrorBefore, "greenhouse_rows (the old size fields) was never rewritten; no reader depends on it");
+  } finally {
+    restoreClock();
+  }
+});
+
+test("Greenhouse Setup can't overwrite measured sizes: section saves keep each row's own measurement; row edits point to Setup → Map", async () => {
+  await call("/setup/map/measurements/copy", { body: {} });
+  const sizes = async () => (await db.query<{ n: number; w: string | null; l: string | null; s: number }>(`select row_number n, width_meters::text w, length_meters::text l, slab_count s from greenhouse_rows where group_id = '${P2}' order by row_number`)).rows;
+  const before = await sizes();
+  // Saving Phase 2's section with a 100.58 m length (the kind of mismatch First Light has) and new slab counts.
+  const saved = await call(`/greenhouse-row-sections/${S2}`, {
+    method: "PUT",
+    body: { group_id: P2, start_row: 1, end_row: 4, row_pattern: "all", slab_count: 170, plants_per_slab: 3, stems_per_plant: 2, width_meters: 1.6, length_meters: 100.58 }
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  const after = await sizes();
+  assert.deepEqual(after.filter((r) => r.n <= 4).map((r) => [r.n, r.w, r.l, r.s]), before.filter((r) => r.n <= 4).map((r) => [r.n, r.w, r.l, 170]), "sizes kept, other inputs saved");
+  assert.deepEqual((await measuredOn(await today())).filter((r: any) => r[2] > 91.44), [], "no measurement changed");
+
+  const resize = await call(`/greenhouse-rows/${ROW("201")}`, { method: "PUT", body: { row_number: 1, slab_count: 166, plants_per_slab: 3, stems_per_plant: 2, width_meters: 1.6, length_meters: 100.58 } });
+  assert.equal(resize.status, 409);
+  assert.match(resize.body.message, /Setup → Map/);
+  const inputs = await call(`/greenhouse-rows/${ROW("201")}`, { method: "PUT", body: { row_number: 1, slab_count: 160, plants_per_slab: 3, stems_per_plant: 2, width_meters: 1.6, length_meters: 91.43 } });
+  assert.equal(inputs.status, 200, JSON.stringify(inputs.body));
+  assert.equal(inputs.body.slab_count, 160);
 });

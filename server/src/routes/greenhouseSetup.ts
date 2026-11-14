@@ -1,5 +1,8 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { loadRowMeasurements, measurementOn } from "../utils/rowMeasurements";
+import { todayInOrgTimezone } from "./foodSafety/services/checklistPeriod";
+import { DEFAULT_ORG_TIMEZONE } from "../config/orgTimezone";
 import { sendSafeError } from "../utils/safeError";
 import { fetchCsvSizeSettings } from "../utils/csvSizeSettings";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
@@ -327,6 +330,11 @@ async function upsertRowsFromSection(
     return;
   }
 
+  // Rows with Setup → Map sizes keep them: a section's width and length only
+  // fill rows that haven't been measured, so saving a section never rewrites
+  // a row's own measurement (e.g. rows measured shorter than their section).
+  const measured = await measuredRowNumbers(organizationId, payload.group_id, rowNumbers);
+
   const now = new Date().toISOString();
   const rows = rowNumbers.map((rowNumber) => ({
     organization_id: organizationId,
@@ -340,15 +348,61 @@ async function upsertRowsFromSection(
     length_meters: payload.length_meters,
     updated_at: now
   }));
+  const unmeasuredRows = rows.filter((r) => !measured.has(r.row_number));
+  const measuredRows = rows
+    .filter((r) => measured.has(r.row_number))
+    .map(({ width_meters: _w, length_meters: _l, ...rest }) => rest);
 
-  const { error } = await supabase
-    .from("greenhouse_rows")
-    .upsert(rows, { onConflict: "group_id,row_number" });
+  for (const batch of [unmeasuredRows, measuredRows]) {
+    if (batch.length === 0) continue;
+    const { error } = await supabase
+      .from("greenhouse_rows")
+      .upsert(batch, { onConflict: "group_id,row_number" });
 
-  if (error) {
-    console.error("Row upsert error:", error);
-    throw new Error("Failed to generate greenhouse rows.");
+    if (error) {
+      console.error("Row upsert error:", error);
+      throw new Error("Failed to generate greenhouse rows.");
+    }
   }
+}
+
+/** Overlays each row's Setup → Map size in effect today (when it has one) and leaves out rows not in the greenhouse yet. */
+async function todaysRowSizes(organizationId: string, rows: Array<Record<string, unknown>>) {
+  const measurements = await loadRowMeasurements(organizationId);
+  const today = todayInOrgTimezone(DEFAULT_ORG_TIMEZONE);
+  if (!measurements || measurements.size === 0) {
+    return { rows, info: { source: "greenhouse_setup" as const, today, upcomingRows: 0 } };
+  }
+  let upcomingRows = 0;
+  const out: Array<Record<string, unknown>> = [];
+  for (const row of rows) {
+    const versions = measurements.get(String(row.id));
+    if (!versions || versions.length === 0) {
+      out.push({ ...row, size_source: "greenhouse_setup" });
+      continue;
+    }
+    const current = measurementOn(versions, today);
+    if (!current) {
+      upcomingRows += 1;
+      continue;
+    }
+    out.push({ ...row, width_meters: current.width_m, length_meters: current.length_m, size_source: "setup_map" });
+  }
+  return { rows: out, info: { source: "setup_map" as const, today, upcomingRows } };
+}
+
+/** Row numbers in this group that have Setup → Map sizes; those sizes are only changed in Setup → Map. */
+async function measuredRowNumbers(organizationId: string, groupId: string, rowNumbers: number[]) {
+  const measurements = await loadRowMeasurements(organizationId);
+  if (!measurements || measurements.size === 0 || rowNumbers.length === 0) return new Set<number>();
+  const { data, error } = await supabase
+    .from("greenhouse_rows")
+    .select("id, row_number")
+    .eq("organization_id", organizationId)
+    .eq("group_id", groupId)
+    .in("row_number", rowNumbers);
+  if (error) throw error;
+  return new Set(((data ?? []) as Array<{ id: string; row_number: number }>).filter((r) => measurements.has(String(r.id))).map((r) => Number(r.row_number)));
 }
 
 const greenhouseSetupRouter = Router();
@@ -429,13 +483,25 @@ greenhouseSetupRouter.get("/greenhouse-setup", canView, async (req, res) => {
   // rowValves gracefully degrades — table may not exist if migration is pending
   const rowValves = rowValvesResult.error ? [] : (rowValvesResult.data ?? []);
 
+  // Row sizes come from Setup → Map (0157) once they've been copied: each row
+  // shows the size in effect today, so a future-season resize shows up here
+  // on its own date and not before. Rows added for a later season aren't in
+  // the greenhouse yet and are left out until then.
+  let rowSizes;
+  try {
+    rowSizes = await todaysRowSizes(organizationId as string, (rowsResult.data ?? []) as Array<Record<string, unknown>>);
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to load greenhouse setup.", "Greenhouse setup - row measurements error:", error);
+  }
+
   return res.json({
     groups: groupsResult.data ?? [],
     rowSections: (sectionsResult.data ?? []).map((section) => ({
       ...section,
       row_pattern: normalizeRowPattern(section.row_pattern)
     })),
-    rows: rowsResult.data ?? [],
+    rows: rowSizes.rows,
+    rowSizes: rowSizes.info,
     varietyAssignments: assignmentsResult.data ?? [],
     varieties: varietiesResult.data ?? [],
     rowValves
@@ -700,9 +766,27 @@ greenhouseSetupRouter.put("/greenhouse-rows/:id", canEdit, async (req, res) => {
     return res.status(400).json({ message });
   }
 
+  // A row with Setup → Map sizes keeps them; its size is changed (with a date) in Setup → Map.
+  let update: Partial<GreenhouseRowPayload> = payload;
+  try {
+    const measurements = await loadRowMeasurements(organizationId as string);
+    const versions = measurements?.get(String(id));
+    if (versions && versions.length) {
+      const current = measurementOn(versions, todayInOrgTimezone(DEFAULT_ORG_TIMEZONE));
+      const same = (a: number | null, b: number | null) => (a === null || b === null ? a === b : Math.abs(a - b) < 1e-9);
+      if (!same(payload.width_meters, current?.width_m ?? null) || !same(payload.length_meters, current?.length_m ?? null)) {
+        return res.status(409).json({ message: "This row's width and length are managed in Setup → Map, where a new size gets the date it applies from." });
+      }
+      const { width_meters: _w, length_meters: _l, ...rest } = payload;
+      update = rest;
+    }
+  } catch (error) {
+    return sendSafeError(res, 500, "Failed to update greenhouse row.", "Greenhouse row measurements error:", error);
+  }
+
   const { data, error } = await supabase
     .from("greenhouse_rows")
-    .update({ ...payload, updated_at: new Date().toISOString() })
+    .update({ ...update, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("organization_id", organizationId)
     .select("*")

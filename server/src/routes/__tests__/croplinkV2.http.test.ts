@@ -63,7 +63,9 @@ const store: CroplinkV2Store = {
     return m && m.organization_id === org ? m : null;
   },
   async physicalAreas() {
-    return new Map([[uuid(5000), { areaM2: 11600.5, rowCount: 40, rowsMissingDimensions: 0 }]]);
+    // 39 footprint rows of 290 m² and one of 290.5 m² = 11,600.5 m².
+    const rows = Array.from({ length: 40 }, (_, i) => ({ key: `g:${i + 1}`, groupId: "g", areaM2: i === 0 ? 290.5 : 290 }));
+    return { groups: [{ id: "g", name: "Phase 1" }], rows, footprints: { [uuid(5000)]: rows.map(r => r.key) } };
   }
 };
 
@@ -263,4 +265,30 @@ test("contract: items carry both the variety record area and the measured physic
   rows = [makeRow(1, 10)];
   const it = ((await (await get("/yield-weeks")).json()) as { items: Record<string, unknown>[] }).items[0];
   assert.deepEqual([it.varietyAreaM2, it.physicalAreaM2, it.physicalAreaRowCount, it.physicalAreaRowsMissingDimensions], [11627, 11600.5, 40, 0]);
+});
+
+test("contract: each yield week's physicalAreaM2 uses the Setup → Map sizes in effect on that packing week's Monday", async () => {
+  const original = store.physicalAreas;
+  // Row 1 resized from Mon Dec 7, 2026 (ISO week 50); row 3 only in the greenhouse from then.
+  store.physicalAreas = async () => ({
+    groups: [{ id: "g", name: "Phase 1" }],
+    rows: [
+      { key: "g:1", groupId: "g", areaM2: 290.5, sizes: [{ from: null, areaM2: 290.5 }, { from: "2026-12-07", areaM2: 300 }] },
+      { key: "g:2", groupId: "g", areaM2: 290, sizes: [{ from: null, areaM2: 290 }] },
+      { key: "g:3", groupId: "g", areaM2: null, sizes: [{ from: "2026-12-07", areaM2: 100 }] }
+    ],
+    footprints: { [uuid(5000)]: ["g:1", "g:2", "g:3"] },
+    today: "2026-10-04"
+  });
+  try {
+    rows = [makeRow(1, 10, ORG, 18), makeRow(2, 11, ORG, 49), makeRow(3, 12, ORG, 50)];
+    const items = ((await (await get("/yield-weeks")).json()) as { items: Record<string, unknown>[] }).items;
+    assert.deepEqual(items.map(i => [i.packingWeek, i.physicalAreaM2, i.physicalAreaRowCount, i.physicalAreaRowsMissingDimensions]), [
+      [18, 580.5, 2, 0],
+      [49, 580.5, 2, 0],
+      [50, 690, 3, 0]
+    ]);
+  } finally {
+    store.physicalAreas = original;
+  }
 });

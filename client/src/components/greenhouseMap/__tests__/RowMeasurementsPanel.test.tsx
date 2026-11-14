@@ -14,6 +14,7 @@ import { RowMeasurementsPanel } from "../RowMeasurementsPanel";
 
 const P1 = "g1";
 let copied: boolean;
+let futureEnabled: boolean;
 let writes: Array<{ path: string; method: string; body: any }>;
 const lengthOf = (n: number) => (n === 3 ? 91.43 : 91.44);
 function rows() {
@@ -35,13 +36,14 @@ const json = (status: number, body: unknown) => ({ ok: status < 400, status, jso
 
 beforeEach(() => {
   copied = false;
+  futureEnabled = true;
   writes = [];
   downloads.length = 0;
   apiFetchMock.mockImplementation(async (path: string, init: RequestInit = {}) => {
     const method = init.method ?? "GET";
     if (method !== "GET") writes.push({ path, method, body: init.body ? JSON.parse(String(init.body)) : undefined });
     if (path === "/api/setup/map/measurements" && method === "GET") {
-      return json(200, { today: "2026-11-13", available: true, copied, groups: [{ id: P1, name: "Phase 1" }], rows: rows() });
+      return json(200, { today: "2026-11-13", future_dates_enabled: futureEnabled, available: true, copied, groups: [{ id: P1, name: "Phase 1" }], rows: rows() });
     }
     if (path === "/api/setup/map/measurements/copy") {
       copied = true;
@@ -147,5 +149,31 @@ describe("Setup → Map row measurements", () => {
     await user.click(within(form).getByRole("button", { name: "Add 2 rows" }));
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0].body).toEqual({ group_id: P1, from_row: 4, to_row: 5, width_m: 1.6, length_m: 91.44, slab_count: "166", plants_per_slab: "3", stems_per_plant: 1, effective_from: "2026-12-08" });
+  });
+
+  it("while future-dated sizes are off, a resize or new rows can only apply from today or earlier", async () => {
+    copied = true;
+    futureEnabled = false;
+    const user = userEvent.setup();
+    render(<RowMeasurementsPanel selectedOnMap={new Set([`${P1}:1`])} />);
+    await user.click(await screen.findByRole("button", { name: "Use the 1 row selected on the map" }));
+    await user.type(within(resizeForm()).getByLabelText("Length (m)"), "95");
+    expect(within(resizeForm()).getByLabelText("Applies from")).toHaveAttribute("max", "2026-11-13");
+    await setDate(user, "2026-12-08");
+    expect(within(resizeForm()).getByRole("alert")).toHaveTextContent("Sizes that apply after today are turned off for now");
+    expect(within(resizeForm()).getByRole("button", { name: "Save new size for 1 row" })).toBeDisabled();
+    await setDate(user, "2026-11-13");
+    expect(within(resizeForm()).queryByRole("alert")).toBeNull();
+    expect(within(resizeForm()).getByRole("button", { name: "Save new size for 1 row" })).toBeEnabled();
+
+    const form = screen.getByRole("form", { name: "Add rows" });
+    await user.type(within(form).getByLabelText("From row"), "4");
+    await user.type(within(form).getByLabelText("Width (m)"), "1.6");
+    await user.type(within(form).getByLabelText("Length (m)"), "91.44");
+    await user.clear(within(form).getByLabelText("In the greenhouse from"));
+    await user.type(within(form).getByLabelText("In the greenhouse from"), "2026-12-08");
+    expect(within(form).getByRole("alert")).toHaveTextContent("Sizes that apply after today are turned off for now");
+    expect(within(form).getByRole("button", { name: "Add 1 row" })).toBeDisabled();
+    expect(writes).toHaveLength(0);
   });
 });
