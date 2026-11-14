@@ -121,6 +121,12 @@ export function createPgliteSupabase(db: PGlite) {
       lte: (c: string, v: unknown) => (where.push(`${c} <= ${p(v)}`), builder),
       in: (c: string, vs: unknown[]) => (where.push(vs.length ? `${c} in (${vs.map(p).join(", ")})` : "false"), builder),
       not: (c: string, op: string, v: unknown) => {
+        // PostgREST's not(col, "in", "(1,2,3)") — Greenhouse Setup's section save uses it.
+        if (op === "in" && typeof v === "string" && /^\(.*\)$/.test(v)) {
+          const items = v.slice(1, -1).split(",").map((x) => x.trim()).filter(Boolean);
+          where.push(items.length ? `${c} not in (${items.map(p).join(", ")})` : "true");
+          return builder;
+        }
         if (op !== "is" || v !== null) throw new Error(`pglite adapter: unsupported not(${op})`);
         where.push(`${c} is not null`);
         return builder;

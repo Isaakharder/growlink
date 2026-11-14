@@ -4,8 +4,9 @@
 import { RequestHandler, Request, Response, Router } from "express";
 import {
   DeletionRow, ManifestRow, YieldWeekRow, KeysetCursor, MANIFEST_TTL_MS, PhysicalArea,
-  manifestHeader, pageOf, parseListParams, parseManifestPage, toYieldWeekItem
+  isoWeekMondayUtc, manifestHeader, pageOf, parseListParams, parseManifestPage, physicalAreasByVariety, toYieldWeekItem
 } from "../lib/croplinkV2";
+import type { VarietyFootprints } from "../utils/varietyAreaFootprints";
 
 export interface CroplinkV2Store {
   /** Rows ordered by (updated_at, id) ascending, strictly after `cursor` (or `after`), at most `limit` rows. */
@@ -15,8 +16,8 @@ export interface CroplinkV2Store {
   /** Snapshots every current yield entry id for the organization into an immutable manifest. */
   createManifest(organizationId: string, ttlMs: number): Promise<ManifestRow>;
   getManifest(organizationId: string, manifestId: string): Promise<ManifestRow | null>;
-  /** Physical (measured greenhouse-row) area per variety id. */
-  physicalAreas(organizationId: string): Promise<Map<string, PhysicalArea>>;
+  /** Physical growing-area footprints (measured greenhouse rows, with their dated Setup → Map sizes). */
+  physicalAreas(organizationId: string): Promise<VarietyFootprints>;
 }
 
 export interface CroplinkV2Deps {
@@ -45,9 +46,19 @@ export function createCroplinkV2Router(deps: CroplinkV2Deps): Router {
     try {
       const rows = await deps.store.listYieldWeeks(req.organizationId, { cursor, after: cursor ? null : after, year, limit: limit + 1 });
       const page = pageOf(rows, limit, r => ({ at: r.updated_at, id: r.id }), cursor);
-      const areas = page.items.length ? await deps.store.physicalAreas(req.organizationId) : new Map<string, PhysicalArea>();
+      const footprints = page.items.length ? await deps.store.physicalAreas(req.organizationId) : null;
+      // Each packing week uses the row sizes in effect on its Monday, so a
+      // resize for a later season never changes an earlier week's area.
+      const byWeek = new Map<string, Map<string, PhysicalArea>>();
+      const areaFor = (r: YieldWeekRow): PhysicalArea | undefined => {
+        if (!footprints) return undefined;
+        const monday = Number.isInteger(r.year) && Number.isInteger(r.week) ? isoWeekMondayUtc(r.year, r.week).toISOString().slice(0, 10) : "";
+        let areas = byWeek.get(monday);
+        if (!areas) byWeek.set(monday, (areas = physicalAreasByVariety(footprints, monday || null)));
+        return areas.get(r.variety_id);
+      };
       const at = now();
-      return res.json({ items: page.items.map(r => toYieldWeekItem(r, at, deps.timeZone, areas.get(r.variety_id))), nextCursor: page.nextCursor, resumeCursor: page.resumeCursor, hasMore: page.hasMore, serverTime: at.toISOString() });
+      return res.json({ items: page.items.map(r => toYieldWeekItem(r, at, deps.timeZone, areaFor(r))), nextCursor: page.nextCursor, resumeCursor: page.resumeCursor, hasMore: page.hasMore, serverTime: at.toISOString() });
     } catch (err) {
       return fail(res, "Failed to load yield weeks.", err);
     }

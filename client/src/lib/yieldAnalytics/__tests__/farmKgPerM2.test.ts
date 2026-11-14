@@ -116,4 +116,28 @@ describe("computeFarmKgPerM2", () => {
     const source = readFileSync(resolve(process.cwd(), "src/lib/yieldAnalytics/farmKgPerM2.ts"), "utf-8");
     expect(source).not.toMatch(/levente|cadalora|silverstone|mathieu|lavreysen/i);
   });
+
+  it("puts each packing week over the Setup → Map sizes in effect on its Monday", () => {
+    // Row 1 is resized from Mon Dec 7, 2026 (ISO week 50); row 3 is added from that date. Today's
+    // areaM2 is what the stale Greenhouse Setup mirror would say and must not decide past weeks.
+    const dated: AreaFootprints = {
+      rows: [
+        { key: "g:1", groupId: "g", areaM2: 100, sizes: [{ from: null, areaM2: 100 }, { from: "2026-12-07", areaM2: 110 }] },
+        { key: "g:2", groupId: "g", areaM2: 100, sizes: [{ from: null, areaM2: 100 }] },
+        { key: "g:3", groupId: "g", areaM2: null, sizes: [{ from: "2026-12-07", areaM2: 50 }] }
+      ],
+      footprints: { A: ["g:1", "g:2", "g:3"] }
+    };
+    const week = (w: number, kg = 26) => ({ variety_id: "A", total_kg: kg, year: 2026, week: w });
+    // A past week and the week before the resize: the original 200 m², the new row not counted at all.
+    expect(computeFarmKgPerM2([week(18)], dated)).toMatchObject({ areaM2: 200, unmeasuredRowCount: 0 });
+    expect(computeFarmKgPerM2([week(49)], dated)).toMatchObject({ areaM2: 200, unmeasuredRowCount: 0 });
+    // From the resize week: 110 + 100 + 50.
+    expect(computeFarmKgPerM2([week(50)], dated)).toMatchObject({ areaM2: 260, kgPerM2: 0.1 });
+    // A period spanning the resize counts each row once, at its size in the latest week it produced.
+    expect(computeFarmKgPerM2([week(48), week(51)], dated).areaM2).toBe(260);
+    expect(computeFarmKgPerM2([week(48), week(49)], dated).areaM2).toBe(200);
+    // Without a packing week (older callers): today's size.
+    expect(computeFarmKgPerM2([{ variety_id: "A", total_kg: 1 }], { ...dated, today: "2026-11-14" })).toMatchObject({ areaM2: 200, unmeasuredRowCount: 0 });
+  });
 });

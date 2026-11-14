@@ -6,7 +6,7 @@
 // date. They are deliberately not called "harvest week": CropLink keeps its
 // own survey/biological harvest timing separately.
 import { createHash } from "crypto";
-import type { VarietyFootprints } from "../utils/varietyAreaFootprints";
+import { footprintRowAreaOn, type VarietyFootprints } from "../utils/varietyAreaFootprints";
 
 export const V2_DEFAULT_LIMIT = 500;
 export const V2_MAX_LIMIT = 500;
@@ -249,18 +249,27 @@ export interface PhysicalArea {
   rowsMissingDimensions: number;
 }
 
-/** Physical area per variety from resolveVarietyFootprints(): the sum of its footprint rows' measured areas. */
-export function physicalAreasByVariety(f: VarietyFootprints): Map<string, PhysicalArea> {
-  const areaByRow = new Map(f.rows.map(r => [r.key, r.areaM2]));
+/**
+ * Physical area per variety from resolveVarietyFootprints(): the sum of its
+ * footprint rows' measured areas on `date` (a packing week's Monday). Rows
+ * with Setup → Map sizes use the size in effect that day, and a row that
+ * isn't in the greenhouse yet on that date doesn't count. Without a date,
+ * today's sizes.
+ */
+export function physicalAreasByVariety(f: VarietyFootprints, date?: string | null): Map<string, PhysicalArea> {
+  const rowByKey = new Map(f.rows.map(r => [r.key, r]));
   const out = new Map<string, PhysicalArea>();
   for (const [varietyId, keys] of Object.entries(f.footprints)) {
-    let sum = 0, measured = 0, missing = 0;
+    let sum = 0, measured = 0, missing = 0, rows = 0;
     for (const k of keys) {
-      const a = areaByRow.get(k);
+      const row = rowByKey.get(k);
+      const a = row ? footprintRowAreaOn(row, date ?? f.today) : null;
+      if (a === undefined) continue; // not in the greenhouse yet on this date
+      rows++;
       if (a == null) missing++;
       else { sum += a; measured++; }
     }
-    out.set(varietyId, { areaM2: measured > 0 ? sum : null, rowCount: keys.length, rowsMissingDimensions: missing });
+    out.set(varietyId, { areaM2: measured > 0 ? sum : null, rowCount: rows, rowsMissingDimensions: missing });
   }
   return out;
 }

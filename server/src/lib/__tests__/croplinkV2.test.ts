@@ -141,3 +141,28 @@ test("physical area: sum of measured footprint rows; shared rows count for each 
   assert.deepEqual(areas.get("B"), { areaM2: 800, rowCount: 1, rowsMissingDimensions: 0 });
   assert.equal(areas.get("C"), undefined);
 });
+
+test("physical area by packing week: each week uses the Setup → Map size in effect on its Monday; rows added for a later season count only from then", () => {
+  const f = resolveVarietyFootprints({
+    groups: [{ id: "g1", name: "Phase 1" }],
+    rows: [
+      { id: "r1", group_id: "g1", row_number: 1, width_meters: 8, length_meters: 100, section_id: null },
+      { id: "r2", group_id: "g1", row_number: 2, width_meters: 8, length_meters: 100, section_id: null },
+      { id: "r3", group_id: "g1", row_number: 3, width_meters: null, length_meters: null, section_id: null }
+    ],
+    sections: [],
+    assignments: [{ group_id: "g1", variety_id: "A", start_row: 1, end_row: 3, assignment_pattern: null }],
+    links: [],
+    measurements: new Map([
+      // Row 1 resized from Mon Dec 7, 2026; row 3 added from that date; the stale mirror (8 × 100) is ignored.
+      ["r1", [{ width_m: 8, length_m: 100, effective_from: null }, { width_m: 8, length_m: 110, effective_from: "2026-12-07" }]],
+      ["r2", [{ width_m: 8, length_m: 100, effective_from: null }]],
+      ["r3", [{ width_m: 8, length_m: 50, effective_from: "2026-12-07" }]]
+    ]),
+    today: "2026-11-14"
+  });
+  assert.deepEqual(physicalAreasByVariety(f).get("A"), { areaM2: 1600, rowCount: 2, rowsMissingDimensions: 0 }, "today");
+  assert.deepEqual(physicalAreasByVariety(f, "2026-04-27").get("A"), { areaM2: 1600, rowCount: 2, rowsMissingDimensions: 0 }, "a past week");
+  assert.deepEqual(physicalAreasByVariety(f, "2026-11-30").get("A"), { areaM2: 1600, rowCount: 2, rowsMissingDimensions: 0 }, "the week before");
+  assert.deepEqual(physicalAreasByVariety(f, "2026-12-07").get("A"), { areaM2: 1680 + 400, rowCount: 3, rowsMissingDimensions: 0 }, "from the resize week");
+});

@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { downloadBlobFile } from "../lib/downloadFile";
 import { GreenhouseMapCanvas, mapRowKey } from "../components/greenhouseMap/GreenhouseMapCanvas";
+import { RowMeasurementsPanel } from "../components/greenhouseMap/RowMeasurementsPanel";
 import {
   computeContinuationOffset,
   detectRowOverlap,
@@ -372,8 +373,8 @@ export function GreenhouseMapBuilderPage() {
       <header>
         <h1>Greenhouse map</h1>
         <p>
-          Draw your greenhouse from the phases and rows in Greenhouse Setup, so the Crop Planner can select rows by clicking them.
-          The map is a drawing only: it never adds or changes Greenhouse Setup rows, what is growing today, or any plan.
+          Draw your greenhouse from its phases and rows, so the Crop Planner can select rows by clicking them. The drawing only sets where
+          rows are drawn; each row's real width and length are kept under Row measurements below, which every area figure uses.
         </p>
       </header>
 
@@ -548,6 +549,7 @@ export function GreenhouseMapBuilderPage() {
           </aside>
         </div>
       ) : null}
+      {loaded && !imp ? <RowMeasurementsPanel selectedOnMap={selectedRows} /> : null}
     </section>
   );
 }
