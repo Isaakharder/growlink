@@ -93,6 +93,8 @@ before(async () => {
   require.cache[id] = { id, filename: id, loaded: true, exports: { supabase: client } } as unknown as NodeJS.Module;
   /* eslint-disable @typescript-eslint/no-var-requires */
   const { plantingsRouter } = require("../plantings") as typeof import("../plantings");
+  const { datedPlantingsRouter } = require("../datedPlantings") as typeof import("../datedPlantings");
+  const { rowMeasurementsRouter } = require("../rowMeasurements") as typeof import("../rowMeasurements");
   /* eslint-enable @typescript-eslint/no-var-requires */
   const app = express();
   app.use((req, _res, next) => {
@@ -100,7 +102,10 @@ before(async () => {
     req.organizationId = String(req.headers["x-test-org"] ?? ORG);
     next();
   });
+  app.use(express.json());
   app.use("/api", plantingsRouter);
+  app.use("/api", datedPlantingsRouter);
+  app.use("/api", rowMeasurementsRouter);
   server = app.listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -155,4 +160,17 @@ test("is read-only and each organization sees only its own greenhouse", async ()
 test("uses the Greenhouse Setup view permission", async () => {
   assert.equal((await get(VIEWER)).status, 200);
   assert.equal((await get(YIELD_EDITOR)).status, 403);
+});
+
+test("rollout safety: with the server live before 0156/0157 are applied, the new endpoints say so instead of failing", async () => {
+  const headers = { "content-type": "application/json", "x-test-user": OWNER, "x-test-org": ORG };
+  const dated = await fetch(`${baseUrl}/api/crop-planner/dated-plantings`, { headers });
+  assert.equal(dated.status, 409);
+  assert.equal(((await dated.json()) as any).notSetUp, true);
+  const measurements = (await (await fetch(`${baseUrl}/api/setup/map/measurements`, { headers })).json()) as any;
+  assert.equal(measurements.available, false);
+  const copy = await fetch(`${baseUrl}/api/setup/map/measurements/copy`, { method: "POST", headers, body: "{}" });
+  assert.equal(copy.status, 409);
+  // Plants keeps working on Greenhouse Setup's sizes.
+  assert.equal((await get()).status, 200);
 });

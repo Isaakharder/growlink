@@ -211,6 +211,10 @@ function handleError(res: Response, error: unknown, message: string, context: st
   const code = (error as { code?: string } | null)?.code;
   if (code === "23P01") return res.status(409).json({ message: "Another save changed these rows at the same time. Try again.", conflicts: [] });
   if (code === "23514" || code === "22007" || code === "22008") return res.status(400).json({ message: "Those dates or rows aren't valid." });
+  // The server can go out before 0156 is applied (or 0156 can fail): say so instead of a bare 500.
+  if (code === "42P01" || code === "PGRST205" || code === "42883" || code === "PGRST202") {
+    return res.status(409).json({ message: "Dated plantings aren't set up yet (migration 0156).", notSetUp: true });
+  }
   return sendSafeError(res, 500, message, context, error);
 }
 
