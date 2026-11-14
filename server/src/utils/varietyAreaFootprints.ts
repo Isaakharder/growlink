@@ -11,6 +11,8 @@
 // one physical area.
 
 export type FootprintRowInput = {
+  /** The greenhouse_rows id; needed to attach Setup → Map measurements. */
+  id?: string;
   group_id: string;
   row_number: number;
   width_meters: number | null;
@@ -40,12 +42,32 @@ export type FootprintLinkInput = {
 
 export type FootprintGroupInput = { id: string; name: string };
 
+/** A dated size from Setup → Map (migration 0157): applies from `from` (null = since the beginning). */
+export type FootprintRowSize = { from: string | null; areaM2: number | null };
+
+export type FootprintRow = {
+  key: string;
+  groupId: string;
+  /** Today's m²; null when the row has no dimensions (or isn't in the greenhouse yet today). */
+  areaM2: number | null;
+  /**
+   * Setup → Map sizes, oldest first, when the row has them. A report for a
+   * date uses the size in effect on that date (footprintRowAreaOn); a row
+   * whose first size starts later isn't in the greenhouse before then.
+   */
+  sizes?: FootprintRowSize[];
+};
+
+export type MeasurementVersionInput = { width_m: number | null; length_m: number | null; effective_from: string | null };
+
 export type VarietyFootprints = {
   groups: Array<{ id: string; name: string }>;
-  /** Every measured row, keyed "groupId:rowNumber"; areaM2 is null when neither the row nor its section has dimensions. */
-  rows: Array<{ key: string; groupId: string; areaM2: number | null }>;
+  /** Every measured row, keyed "groupId:rowNumber". */
+  rows: FootprintRow[];
   /** Row keys each variety's yield physically came from. A variety absent here has no known footprint. */
   footprints: Record<string, string[]>;
+  /** The date areaM2 describes (today in the organization's time zone), when rows carry dated sizes. */
+  today?: string;
 };
 
 export function rowKey(groupId: string, rowNumber: number): string {
@@ -66,19 +88,42 @@ export function rowAreaM2(row: FootprintRowInput, sectionsById: Map<string, Foot
   return null;
 }
 
+/**
+ * A footprint row's m² on a date: the Setup → Map size in effect that day,
+ * else (no dated sizes) today's Greenhouse Setup size. undefined = the row
+ * isn't in the greenhouse yet on that date (added for a later season).
+ */
+export function footprintRowAreaOn(row: FootprintRow, date: string | null | undefined): number | null | undefined {
+  if (!row.sizes || !row.sizes.length || !date) return row.areaM2;
+  let found: FootprintRowSize | undefined;
+  for (const s of row.sizes) if (s.from === null || s.from <= date) found = s;
+  return found ? found.areaM2 : undefined;
+}
+
 export function resolveVarietyFootprints(input: {
   groups: FootprintGroupInput[];
   rows: FootprintRowInput[];
   sections: FootprintSectionInput[];
   assignments: FootprintAssignmentInput[];
   links: FootprintLinkInput[];
+  /** Setup → Map measurements by row id (null/absent before 0157); rows that have them use them instead of Greenhouse Setup. */
+  measurements?: Map<string, MeasurementVersionInput[]> | null;
+  /** Today in the organization's time zone, for areaM2 of measured rows. */
+  today?: string;
 }): VarietyFootprints {
   const sectionsById = new Map(input.sections.map((s) => [s.id, s]));
-  const rows = input.rows.map((row) => ({
-    key: rowKey(row.group_id, row.row_number),
-    groupId: row.group_id,
-    areaM2: rowAreaM2(row, sectionsById)
-  }));
+  const rows: FootprintRow[] = input.rows.map((row) => {
+    const base = { key: rowKey(row.group_id, row.row_number), groupId: row.group_id };
+    const versions = row.id ? input.measurements?.get(row.id) : undefined;
+    if (!versions || !versions.length) return { ...base, areaM2: rowAreaM2(row, sectionsById) };
+    const sizes = versions.map((v) => ({
+      from: v.effective_from,
+      areaM2: positive(v.width_m) && positive(v.length_m) ? v.width_m * v.length_m : null
+    }));
+    const withSizes: FootprintRow = { ...base, areaM2: null, sizes };
+    const today = footprintRowAreaOn(withSizes, input.today ?? new Date().toISOString().slice(0, 10));
+    return { ...withSizes, areaM2: today ?? null };
+  });
   const knownRows = new Set(rows.map((r) => r.key));
   const rowsByGroup = new Map<string, string[]>();
   for (const row of rows) {
@@ -132,6 +177,7 @@ export function resolveVarietyFootprints(input: {
   return {
     groups: input.groups.map((g) => ({ id: g.id, name: g.name })),
     rows,
-    footprints
+    footprints,
+    ...(input.today ? { today: input.today } : {})
   };
 }

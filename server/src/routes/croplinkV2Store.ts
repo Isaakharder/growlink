@@ -4,9 +4,9 @@ import { randomUUID } from "crypto";
 import { supabase } from "../config/supabase";
 import { CroplinkV2Store } from "./croplinkV2";
 import {
-  DeletionRow, ManifestRow, YieldWeekRow, MANIFEST_CHECKSUM_ALGORITHM, buildKeysetFilter, manifestChecksum, physicalAreasByVariety
+  DeletionRow, ManifestRow, YieldWeekRow, MANIFEST_CHECKSUM_ALGORITHM, buildKeysetFilter, manifestChecksum
 } from "../lib/croplinkV2";
-import { resolveVarietyFootprints, FootprintRowInput } from "../utils/varietyAreaFootprints";
+import { loadVarietyFootprints } from "../utils/loadVarietyFootprints";
 
 const YIELD_WEEK_SELECT =
   "id, variety_id, year, week, packed_date, size_kg, total_kg, average_fruit_weight_g, kg_per_m2, total_cases, last_write_source, created_at, updated_at, " +
@@ -72,27 +72,8 @@ export const supabaseCroplinkV2Store: CroplinkV2Store = {
   },
 
   async physicalAreas(organizationId) {
-    // Same inputs as GET /yield-analytics/area-footprints (yieldEntries.ts).
-    const rows: FootprintRowInput[] = [];
-    for (let from = 0; ; from += ID_PAGE) {
-      const { data, error } = await supabase.from("greenhouse_rows").select("group_id, row_number, width_meters, length_meters, section_id")
-        .eq("organization_id", organizationId).order("group_id", { ascending: true }).order("row_number", { ascending: true }).range(from, from + ID_PAGE - 1);
-      if (error) throw error;
-      rows.push(...((data ?? []) as FootprintRowInput[]));
-      if (!data || data.length < ID_PAGE) break;
-    }
-    const [groups, sections, assignments, links] = await Promise.all([
-      supabase.from("greenhouse_groups").select("id, name").eq("organization_id", organizationId),
-      supabase.from("greenhouse_row_sections").select("id, width_meters, length_meters").eq("organization_id", organizationId),
-      supabase.from("greenhouse_variety_assignments").select("group_id, variety_id, start_row, end_row, assignment_pattern").eq("organization_id", organizationId),
-      supabase.from("variety_area_links").select("variety_id, successor_variety_id, greenhouse_group_id").eq("organization_id", organizationId)
-    ]);
-    for (const r of [groups, sections, assignments]) if (r.error) throw r.error;
-    // 42P01 / PGRST205: variety_area_links not migrated yet — footprints from row assignments alone.
-    if (links.error && links.error.code !== "42P01" && links.error.code !== "PGRST205") throw links.error;
-    return physicalAreasByVariety(resolveVarietyFootprints({
-      groups: groups.data ?? [], rows, sections: sections.data ?? [], assignments: assignments.data ?? [], links: links.error ? [] : links.data ?? []
-    }));
+    // Same loader as GET /yield-analytics/area-footprints (utils/loadVarietyFootprints.ts).
+    return loadVarietyFootprints(organizationId);
   },
 
   async getManifest(organizationId, manifestId) {

@@ -994,7 +994,7 @@ export function YieldAnalyticsPage() {
   const farmPiecesPerM2 = useMemo(
     () =>
       computeFarmKgPerM2(
-        filteredPieceEntries.map((entry) => ({ variety_id: entry.variety_id, total_kg: Number(entry.total_pieces ?? 0) })),
+        filteredPieceEntries.map((entry) => ({ variety_id: entry.variety_id, total_kg: Number(entry.total_pieces ?? 0), year: Number(entry.year), week: Number(entry.week) })),
         areaFootprints
       ),
     [filteredPieceEntries, areaFootprints]

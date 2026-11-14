@@ -127,3 +127,65 @@ describe("buildPlantingBoard", () => {
     expect(cad.issues).toEqual(["Phase 1 rows 5–6 are also assigned to Sunny today."]);
   });
 });
+
+describe("partial pull-out on cards", () => {
+  it("lists rows pulled out early, and a row ended before today doesn't clash with today's planting", async () => {
+    const { buildBoard } = await import("../plantingCards");
+    const base = data({ varieties: [variety("cad", "Cadalora", null), variety("sun", "Sunny", null)] });
+    const board = buildBoard(base, [
+      {
+        id: "a",
+        variety_id: "cad",
+        planting_date: "2025-12-15",
+        pull_out_date: null,
+        rows: [
+          { group_id: P1, row_number: 1, pull_out_date: "2026-10-01" },
+          { group_id: P1, row_number: 2, pull_out_date: "2026-10-01" },
+          { group_id: P2, row_number: 1, pull_out_date: "2026-11-01" },
+          { group_id: P1, row_number: 3, pull_out_date: null }
+        ]
+      },
+      // Sunny went onto row 1 after Cadalora's row 1 was pulled out.
+      { id: "b", variety_id: "sun", planting_date: "2026-10-15", pull_out_date: null, rows: [{ group_id: P1, row_number: 1 }] }
+    ]);
+    const cad = board.active.find((c) => c.varietyName === "Cadalora")!;
+    expect(cad.endedEarly).toEqual([
+      { date: "2026-10-01", rows: "Phase 1 rows 1–2" },
+      { date: "2026-11-01", rows: "Phase 2 row 1" }
+    ]);
+    expect(cad.rowCount).toBe(4);
+    expect([...cad.issues, ...board.active.find((c) => c.varietyName === "Sunny")!.issues].some((i) => i.includes("also assigned"))).toBe(false);
+  });
+});
+
+describe("measured row sizes (Setup → Map)", () => {
+  it("a card uses the size in effect on its planting date; plants and heads stay from the row's inputs; rows not built yet are flagged", async () => {
+    const { buildBoard, rowAreaOn } = await import("../plantingCards");
+    const r1 = {
+      ...row(P1, 1),
+      measurements: [
+        { effective_from: null, width_m: 1.6, length_m: 91.44, area_m2: 1.6 * 91.44 },
+        { effective_from: "2026-12-08", width_m: 1.6, length_m: 100.58, area_m2: 1.6 * 100.58 }
+      ]
+    };
+    const r2 = { ...row(P1, 2), available_from: "2026-12-01", measurements: [{ effective_from: "2026-12-01", width_m: 1.6, length_m: 50, area_m2: 80 }] };
+    expect(rowAreaOn(r1, "2026-11-13").area).toBeCloseTo(146.304, 6);
+    expect(rowAreaOn(r1, "2026-12-08").area).toBeCloseTo(160.928, 6);
+    expect(rowAreaOn(r2, "2026-11-13")).toEqual({ area: null, notYet: true });
+
+    const base = data({ rows: [r1, r2], varieties: [variety("cad", "Cadalora", null), variety("c27", "Cadalora 2027", null)] });
+    const board = buildBoard(base, [
+      { id: "now", variety_id: "cad", planting_date: "2025-12-15", pull_out_date: "2026-11-27", rows: [{ group_id: P1, row_number: 1 }, { group_id: P1, row_number: 2 }] },
+      { id: "next", variety_id: "c27", planting_date: "2026-12-08", pull_out_date: null, rows: [{ group_id: P1, row_number: 1 }, { group_id: P1, row_number: 2 }] }
+    ]);
+    const now = board.active[0];
+    expect(now.m2.value).toBeCloseTo(146.304, 6);
+    expect(now.m2.missingRows).toBe(1);
+    expect(now.plants.value).toBe(2 * 318);
+    expect(now.issues).toContain("Phase 1: 1 row not in the greenhouse yet on the planting date (2).");
+    const next = board.upcoming[0];
+    expect(next.m2.value).toBeCloseTo(160.928 + 80, 6);
+    expect(next.plants.value).toBe(2 * 318);
+    expect(next.issues).toEqual([]);
+  });
+});
