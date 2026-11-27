@@ -23,6 +23,12 @@ export type H1SheetLog = {
   pcp_number: string | null;
   actual_quantity_used: number | null;
   actual_quantity_unit: string | null;
+  // 0158: which figure is which. quantity_basis "mix_records" means
+  // actual_quantity_used is the product MIXED; applied/leftover are null
+  // when a tank's leftover wasn't recorded.
+  quantity_basis?: "mix_records" | "plan" | null;
+  quantity_applied?: number | null;
+  quantity_note?: string | null;
   rate_applied_per_unit: string | null;
   label_instructions_followed: boolean;
   area_quantity_treated_m2: number | null;
@@ -70,7 +76,9 @@ function fmtRate(log: H1SheetLog): string {
   const stored = log.rate_applied_per_unit?.trim();
   if (stored) return stored;
 
-  const qty = log.actual_quantity_used;
+  // With tank records the used quantity is what was MIXED; the rate is
+  // worked out from what was applied, and only when that is known.
+  const qty = log.quantity_basis === "mix_records" ? log.quantity_applied ?? null : log.actual_quantity_used;
   const areaM2 = log.area_quantity_treated_m2;
   const unit = log.actual_quantity_unit?.trim() ?? "";
 
@@ -284,7 +292,13 @@ export function H1SheetPreview({ logs, onEditLog }: Props) {
               <td style={dataCell}>{fmtDate(log.application_date)}</td>
               <td style={dataCell}>{fmt(log.product_name)}</td>
               <td style={dataCell}>{fmt(log.pcp_number)}</td>
-              <td style={dataCell}>{fmtQuantity(log.actual_quantity_used, log.actual_quantity_unit)}</td>
+              <td style={dataCell}>
+                {fmtQuantity(log.actual_quantity_used, log.actual_quantity_unit)}
+                {log.quantity_basis === "mix_records" && log.actual_quantity_used != null ? " mixed" : ""}
+                {log.quantity_note ? (
+                  <div data-testid="h1-quantity-note" style={{ fontSize: "0.85em", color: "#555", marginTop: 2 }}>{log.quantity_note}</div>
+                ) : null}
+              </td>
               <td style={dataCell}>{fmtRate(log)}</td>
               <td style={{ ...dataCell, textAlign: "center", fontWeight: 700 }}>
                 {log.label_instructions_followed ? "✓" : "No"}

@@ -73,6 +73,12 @@ type H1Log = {
   pcp_number: string | null;
   actual_quantity_used: number | null;
   actual_quantity_unit: string | null;
+  // 0158: which figure is which. quantity_basis "mix_records" means
+  // actual_quantity_used is the product MIXED; applied/leftover are null
+  // when a tank's leftover wasn't recorded.
+  quantity_basis?: "mix_records" | "plan" | null;
+  quantity_applied?: number | null;
+  quantity_note?: string | null;
   rate_applied_per_unit: string | null;
   label_instructions_followed: boolean;
   area_quantity_treated_m2: number | null;
@@ -297,13 +303,17 @@ function generateH1Pdf(logs: H1Log[]): void {
   function fmtQty(log: H1Log): string {
     if (log.actual_quantity_used == null) return "";
     const u = log.actual_quantity_unit?.trim() ?? "";
-    return u ? `${log.actual_quantity_used} ${u}` : String(log.actual_quantity_used);
+    const base = u ? `${log.actual_quantity_used} ${u}` : String(log.actual_quantity_used);
+    const mixed = log.quantity_basis === "mix_records" ? `${base} mixed` : base;
+    return log.quantity_note ? `${mixed}\n${log.quantity_note}` : mixed;
   }
 
   function fmtRate(log: H1Log): string {
     const stored = log.rate_applied_per_unit?.trim();
     if (stored) return stored;
-    const { actual_quantity_used: qty, area_quantity_treated_m2: areaM2, actual_quantity_unit: unit } = log;
+    const { area_quantity_treated_m2: areaM2, actual_quantity_unit: unit } = log;
+    // With tank records, the rate comes from what was applied (when known), not what was mixed.
+    const qty = log.quantity_basis === "mix_records" ? log.quantity_applied ?? null : log.actual_quantity_used;
     if (qty == null || areaM2 == null || areaM2 <= 0 || !unit?.trim()) return "";
     const ha = areaM2 / 10000;
     return `${Math.round(qty / ha * 100) / 100} ${unit.trim()}/ha`;

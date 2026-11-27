@@ -4,7 +4,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
-import { planFromTodo, summarizeMixes, type MixChemicalLine, type MixInput, type RowInput } from "../utils/pestMixSummary";
+import { h1QuantityNote, planFromTodo, summarizeMixes, type MixChemicalLine, type MixInput, type MixSummary, type RowInput } from "../utils/pestMixSummary";
 
 type SprayerPayload = {
   name: string;
@@ -1399,7 +1399,10 @@ async function writeH1Log(
   id: string,
   now: string,
   chemId: string | null,
-  actualBaseOverride: number | null
+  actualBaseOverride: number | null,
+  // Set once 0158 is applied (the quantity_* columns exist); summary is null
+  // for a job without mix records.
+  quantityDetail: { summary: MixSummary | null } | null = null
 ): Promise<void> {
   try {
     const h1ChemSnap   = todo.chemical_snapshot    as Record<string, unknown> | null;
@@ -1482,6 +1485,38 @@ async function writeH1Log(
             ? Math.round((h1TotalBase / 1000) * 100) / 100
             : Math.round(h1TotalBase * 10) / 10;
           actualQtyUnit = h1TotalBase >= 1000 ? "L" : "ml";
+        }
+      }
+
+      // Which quantity is which (0158): actual_quantity_used is the product
+      // MIXED for jobs with mix records (what inventory deducts); applied and
+      // leftover are spelled out separately and stay NULL when a tank's
+      // leftover was not recorded.
+      let quantityFields: Record<string, unknown> = {};
+      if (quantityDetail && actualQtyUnit) {
+        const unit = actualQtyUnit;
+        const toUnit = (base: number) =>
+          unit === "L" || unit === "kg" ? Math.round((base / 1000) * 1000) / 1000 : Math.round(base * 10) / 10;
+        const summary = quantityDetail.summary;
+        const line = summary && chemId ? summary.chemicals.find((c) => c.chemical_id === chemId) : undefined;
+        if (summary && line && chemId) {
+          quantityFields = {
+            quantity_mixed: toUnit(line.mixed),
+            quantity_applied: line.applied == null ? null : toUnit(line.applied),
+            quantity_leftover: line.applied == null ? null : toUnit(line.leftover),
+            quantity_unit: unit,
+            quantity_basis: "mix_records",
+            quantity_note: h1QuantityNote(summary, chemId, (b) => `${toUnit(b).toLocaleString("en-CA")} ${unit}`)
+          };
+        } else {
+          quantityFields = {
+            quantity_mixed: null,
+            quantity_applied: null,
+            quantity_leftover: null,
+            quantity_unit: unit,
+            quantity_basis: "plan",
+            quantity_note: "Planned amount: no tank records for this job."
+          };
         }
       }
 
@@ -1640,6 +1675,7 @@ async function writeH1Log(
           confirmation_signature:          null,
           confirmation_date:               null,
           version_label:                   "Version 11.0",
+          ...quantityFields,
         })
         .select("id")
         .single();
@@ -1694,7 +1730,9 @@ type JobMixRow = {
   planned_chemicals: MixChemicalLine[];
   water_l: number;
   chemicals: MixChemicalLine[];
-  leftover_l: number;
+  /** null = not recorded. */
+  leftover_l: number | null;
+  amount_source: "recorded" | "planned_estimate";
   started_at: string;
   ended_at: string | null;
   revision: number;
@@ -1719,8 +1757,9 @@ function toMixInput(m: JobMixRow): MixInput {
     status: m.status,
     is_extra: Boolean(m.is_extra),
     water_l: Number(m.water_l),
-    leftover_l: Number(m.leftover_l),
-    chemicals: (m.chemicals ?? []).map((c) => ({ ...c, amount: Number(c.amount) }))
+    leftover_l: m.leftover_l == null ? null : Number(m.leftover_l),
+    chemicals: (m.chemicals ?? []).map((c) => ({ ...c, amount: Number(c.amount) })),
+    estimated: m.amount_source === "planned_estimate"
   };
 }
 
@@ -1807,7 +1846,7 @@ pestControlRouter.post("/pest/todos/:id/mixes", canMobileWrite, async (req, res)
   const body = (req.body ?? {}) as Record<string, unknown>;
 
   const mix: Record<string, unknown> = {};
-  for (const key of ["client_key", "mix_number", "water_l", "chemicals", "leftover_l", "status", "reason", "previous_leftover_l"]) {
+  for (const key of ["client_key", "mix_number", "water_l", "chemicals", "leftover_l", "status", "reason", "previous_leftover_l", "confirm"]) {
     if (key in body) mix[key] = body[key];
   }
 
@@ -1951,7 +1990,7 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
     if (result.already_completed) {
       return res.json({ ok: true, already_completed: true });
     }
-    await writeH1Log(todo, organizationId!, id, now, chemId, actualBase);
+    await writeH1Log(todo, organizationId!, id, now, chemId, actualBase, { summary: mixSummary });
     return res.json({
       ok: true,
       todo: { id, status: "completed", completed_at: result.completed_at ?? now },

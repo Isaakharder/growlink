@@ -47,7 +47,8 @@ function setup(opts: { rows: number; doneRows?: number; mixesMade?: number }) {
   mixes = Array.from({ length: opts.mixesMade ?? 0 }, (_, i) => ({
     id: `m${i + 1}`, client_key: `k${i + 1}`, mix_number: i + 1, status: i + 1 === opts.mixesMade ? "active" : "completed",
     is_extra: i + 1 > 16, planned_water_l: i + 1 === 16 ? 300 : 600, planned_chemicals: [],
-    water_l: 600, chemicals: [{ chemical_id: CHEM, name: "Kontos", amount: 264, unit: "ml" }], leftover_l: 0,
+    water_l: 600, chemicals: [{ chemical_id: CHEM, name: "Kontos", amount: 264, unit: "ml" }],
+    leftover_l: i + 1 === opts.mixesMade ? null : 0, amount_source: "recorded",
     started_at: "2026-11-27T08:00:00Z", ended_at: null, revision: 1
   }));
   revisions = mixes.map((m) => ({ mix_id: m.id, revision: 1, action: "created", before: null, after: { ...m }, reason: null, changed_at: m.started_at }));
@@ -82,7 +83,7 @@ function fakeServer(path: string, init?: { method?: string; body?: string }) {
   if (path.endsWith("/complete")) {
     for (const m of mixes) m.status = "completed";
     const rows = todo.progress_snapshot.phases.flatMap((p: any) => p.rows);
-    const summary = summarizeMixes(planFromTodo(todo), mixes as any, rows, { assumeClosed: true });
+    const summary = summarizeMixes(planFromTodo(todo), mixes.map((m) => ({ ...m, estimated: m.amount_source === "planned_estimate" })) as any, rows, { assumeClosed: true });
     todo.status = "completed";
     return json({ ok: true, todo: { id: todo.id }, mix_summary: summary });
   }
@@ -93,13 +94,21 @@ function applyMix(b: Record<string, any>) {
   const existing = mixes.find((m) => m.client_key === b.client_key);
   if (existing) {
     const before = { ...existing };
-    Object.assign(existing, { water_l: b.water_l, chemicals: b.chemicals, leftover_l: b.leftover_l ?? existing.leftover_l, status: b.status ?? existing.status, revision: existing.revision + 1 });
-    revisions.push({ mix_id: existing.id, revision: existing.revision, action: before.water_l !== b.water_l ? "corrected" : "leftover", before, after: { ...existing }, reason: b.reason ?? null, changed_at: "2026-11-27T09:00:00Z" });
+    const changed = before.water_l !== b.water_l || before.chemicals[0]?.amount !== b.chemicals[0]?.amount;
+    Object.assign(existing, {
+      water_l: b.water_l, chemicals: b.chemicals,
+      leftover_l: "leftover_l" in b ? b.leftover_l : existing.leftover_l,
+      status: b.status ?? existing.status,
+      amount_source: changed || b.confirm ? "recorded" : existing.amount_source,
+      revision: existing.revision + 1
+    });
+    const action = changed ? "corrected" : before.amount_source !== existing.amount_source ? "confirmed" : "leftover";
+    revisions.push({ mix_id: existing.id, revision: existing.revision, action, before, after: { ...existing }, reason: b.reason ?? null, changed_at: "2026-11-27T09:00:00Z" });
     return { mix: existing, created: false, changed: true };
   }
-  for (const m of mixes) if (m.status === "active") Object.assign(m, { status: "completed", leftover_l: b.previous_leftover_l ?? m.leftover_l });
+  for (const m of mixes) if (m.status === "active") Object.assign(m, { status: "completed", leftover_l: typeof b.previous_leftover_l === "number" ? b.previous_leftover_l : m.leftover_l });
   const m = { id: `m${b.mix_number}`, client_key: b.client_key, mix_number: b.mix_number, status: "active", is_extra: b.mix_number > 16,
-    planned_water_l: 600, planned_chemicals: [], water_l: b.water_l, chemicals: b.chemicals, leftover_l: 0,
+    planned_water_l: 600, planned_chemicals: [], water_l: b.water_l, chemicals: b.chemicals, leftover_l: null, amount_source: "recorded",
     started_at: "2026-11-27T09:00:00Z", ended_at: null, revision: 1 };
   mixes.push(m);
   revisions.push({ mix_id: m.id, revision: 1, action: "created", before: null, after: { ...m }, reason: null, changed_at: m.started_at });
@@ -134,7 +143,10 @@ describe("Mobile Pest Log mixes", () => {
     expect((within(form).getByLabelText("Kontos (ml)") as HTMLInputElement).value).toBe("264");
     await user.clear(water);
     await user.type(water, "450");
-    await user.clear(within(form).getByLabelText(/Left over in Mix #16/));
+    // The previous tank's leftover must be answered — it is never assumed to be 0.
+    await user.click(within(form).getByRole("button", { name: "Save Mix #17" }));
+    expect(within(form).getByText(/Enter the leftover \(0 if the tank is empty\), or tick Not known/)).toBeInTheDocument();
+    expect(posts).toHaveLength(0);
     await user.type(within(form).getByLabelText(/Left over in Mix #16/), "20");
     await user.click(within(form).getByRole("button", { name: "Save Mix #17" }));
 
@@ -151,6 +163,7 @@ describe("Mobile Pest Log mixes", () => {
     const user = userEvent.setup();
     await openJob(user);
     await user.click(screen.getByRole("button", { name: "Start Mix #2" }));
+    await user.type(screen.getByLabelText(/Left over in Mix #1/), "0");
     failNextPost = true;
     await user.click(screen.getByRole("button", { name: "Save Mix #2" }));
     expect(await screen.findByText(/retrying won't add a second mix/)).toBeInTheDocument();
@@ -169,12 +182,13 @@ describe("Mobile Pest Log mixes", () => {
     await waitFor(() => expect(patches).toHaveLength(1));
     expect(patches[0].progress_snapshot.phases[0].rows[1]).toMatchObject({ completed: false, partial: true, mixNumbers: [1] });
 
+    await user.type(within(screen.getByTestId("mix-form")).getByLabelText(/Left over in Mix #1/), "0");
     await user.click(within(screen.getByTestId("mix-form")).getByRole("button", { name: "Save Mix #2" }));
     await screen.findByText("Mix #2");
     await user.click(screen.getByRole("button", { name: /Row 2/ }));
     await waitFor(() => expect(patches).toHaveLength(2));
     expect(patches[1].progress_snapshot.phases[0].rows[1]).toMatchObject({ completed: true, mixNumbers: [1, 2], completedByMixNumber: 2 });
-    expect(await screen.findByText("Mix #1 → #2")).toBeInTheDocument();
+    expect(await screen.findByText("Mix #1 → #2 · ½ each (est.)")).toBeInTheDocument();
   });
 
   it("correcting an entry needs a reason and keeps the original in the history", async () => {
@@ -204,7 +218,6 @@ describe("Mobile Pest Log mixes", () => {
     await openJob(user);
     await user.click(screen.getByRole("button", { name: /Row 4/ }));
     const leftover = await screen.findByTestId("leftover-form");
-    await user.clear(within(leftover).getByLabelText("Leftover (L)"));
     await user.type(within(leftover).getByLabelText("Leftover (L)"), "100");
     await user.click(within(leftover).getByRole("button", { name: "Save record" }));
 
@@ -214,5 +227,39 @@ describe("Mobile Pest Log mixes", () => {
     expect(within(result).getByText(/Applied vs plan: −8,200 L \(−88\.2%\) under/)).toBeInTheDocument();
     expect(within(result).getByText(/Mixed vs plan: −8,100 L/)).toBeInTheDocument();
     expect(within(result).getByText("2 mixes made · 16 planned · 100 L left over")).toBeInTheDocument();
+  });
+
+  it("a final leftover marked Not known keeps applied unknown instead of reporting it as exact", async () => {
+    setup({ rows: 4, doneRows: 3, mixesMade: 2 });
+    const user = userEvent.setup();
+    await openJob(user);
+    await user.click(screen.getByRole("button", { name: /Row 4/ }));
+    const leftover = await screen.findByTestId("leftover-form");
+    await user.click(within(leftover).getByLabelText("Not known"));
+    await user.click(within(leftover).getByRole("button", { name: "Save record" }));
+
+    const result = await screen.findByTestId("planned-vs-actual");
+    expect(posts.at(-1)).toMatchObject({ client_key: "k2", leftover_l: null, status: "completed" });
+    expect(within(result).getAllByText("Not known")).toHaveLength(2);
+    expect(within(result).getByText(/Applied vs plan: not known — leftover not recorded for Mix #2\. At most 1,200 L\./)).toBeInTheDocument();
+    expect(within(result).queryByText(/^Applied vs plan: .*(under|over)$/)).toBeNull();
+  });
+
+  it("carried-over mixes are labelled planned estimates until confirmed", async () => {
+    setup({ rows: 4, doneRows: 2, mixesMade: 2 });
+    Object.assign(mixes[0], { amount_source: "planned_estimate", leftover_l: null });
+    const user = userEvent.setup();
+    await openJob(user);
+    expect(within(screen.getByTestId("mix-progress")).getByText(/Mix #1: planned estimates, not confirmed/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Previous mixes/ }));
+    expect(screen.getByText("Planned estimate")).toBeInTheDocument();
+    expect(document.querySelector(".pest-mix-card--done .pest-mix-unknown")).toHaveTextContent("leftover not recorded");
+    await user.click(screen.getByRole("button", { name: "Confirm Mix #1" }));
+    const form = screen.getByTestId("mix-form");
+    expect(within(form).getByLabelText("Not known")).toBeChecked();
+    await user.click(within(form).getByRole("button", { name: "Confirm amounts" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toMatchObject({ client_key: "k1", confirm: true, water_l: 600, leftover_l: null });
+    await waitFor(() => expect(screen.queryByText("Planned estimate")).toBeNull());
   });
 });

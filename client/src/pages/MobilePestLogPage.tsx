@@ -202,6 +202,8 @@ type MixData = { available: boolean; mixes: JobMix[]; revisions: MixRevision[]; 
 
 type MixFormState =
   | { kind: "start"; clientKey: string }
+  | { kind: "confirm"; mix: JobMix }
+  | { kind: "leftover"; mix: JobMix }
   | { kind: "correct"; mix: JobMix }
   | { kind: "finish" };
 
@@ -210,7 +212,7 @@ function normalizeMix(m: JobMix): JobMix {
     ...m,
     mix_number: Number(m.mix_number),
     water_l: Number(m.water_l),
-    leftover_l: Number(m.leftover_l),
+    leftover_l: m.leftover_l == null ? null : Number(m.leftover_l),
     planned_water_l: m.planned_water_l == null ? null : Number(m.planned_water_l),
     chemicals: (m.chemicals ?? []).map((c) => ({ ...c, amount: Number(c.amount) }))
   };
@@ -730,7 +732,7 @@ export function MobilePestLogPage() {
     }
   }
 
-  async function submitCorrection(todo: PestTodo, mix: JobMix, values: MixFormValues) {
+  async function submitCorrection(todo: PestTodo, mix: JobMix, values: MixFormValues, opts: { confirm?: boolean } = {}) {
     const chemicals = chemicalLines(todo, values.chemical_amount);
     const payload: Record<string, unknown> = {
       client_key: mix.client_key,
@@ -738,12 +740,13 @@ export function MobilePestLogPage() {
       chemicals,
       reason: values.reason
     };
+    if (opts.confirm) payload.confirm = true;
     if (mix.status === "completed") payload.leftover_l = values.leftover_l;
     const ok = await postMix(todo, payload, (prev) => ({
       ...prev,
       mixes: prev.mixes.map((m) =>
         m.client_key === mix.client_key
-          ? { ...m, water_l: values.water_l, chemicals, leftover_l: mix.status === "completed" ? values.leftover_l : m.leftover_l, pending: true }
+          ? { ...m, water_l: values.water_l, chemicals, leftover_l: mix.status === "completed" ? values.leftover_l : m.leftover_l, amount_source: "recorded" as const, pending: true }
           : m
       )
     }));
@@ -782,7 +785,18 @@ export function MobilePestLogPage() {
     });
   }
 
-  async function finishWithLeftover(todo: PestTodo, active: JobMix, leftoverL: number) {
+  // A closed tank whose leftover was not recorded: record it now (not a correction).
+  async function recordLeftover(todo: PestTodo, mix: JobMix, leftoverL: number | null) {
+    const ok = await postMix(
+      todo,
+      { client_key: mix.client_key, water_l: mix.water_l, chemicals: mix.chemicals, leftover_l: leftoverL },
+      (prev) => ({ ...prev, mixes: prev.mixes.map((m) => (m.client_key === mix.client_key ? { ...m, leftover_l: leftoverL, pending: true } : m)) })
+    );
+    if (ok) setMixForm(null);
+  }
+
+  // leftoverL null = not known: the tank is closed with its leftover unrecorded.
+  async function finishWithLeftover(todo: PestTodo, active: JobMix, leftoverL: number | null) {
     const ok = await postMix(
       todo,
       { client_key: active.client_key, water_l: active.water_l, chemicals: active.chemicals, leftover_l: leftoverL, status: "completed" },
@@ -1010,7 +1024,7 @@ export function MobilePestLogPage() {
             chemical_snapshot: selectedTodo.chemical_snapshot as Record<string, unknown>,
             calculation_snapshot: selectedTodo.calculation_snapshot as Record<string, unknown>
           }),
-          mixes,
+          mixes.map((m) => ({ ...m, estimated: m.amount_source === "planned_estimate" })),
           allProgressRows,
           { assumeClosed: selectedTodo.status === "completed" }
         )
@@ -1090,6 +1104,7 @@ export function MobilePestLogPage() {
                   <span className="pest-mix-card-number">Mix #{activeMix.mix_number}</span>
                   <span className="pest-mix-card-status">In Use</span>
                   {activeMix.is_extra ? <span className="pest-mix-extra-tag">Extra</span> : null}
+                  {activeMix.amount_source === "planned_estimate" ? <span className="pest-mix-estimate-tag">Planned estimate</span> : null}
                   {activeMix.pending ? <span className="pest-mix-pending-tag">Not synced</span> : null}
                 </div>
                 <div className="pest-mix-card-amounts">
@@ -1117,9 +1132,15 @@ export function MobilePestLogPage() {
                       <button type="button" className="secondary" disabled={savingProgress} onClick={() => { setSplitRowOpen((v) => !v); setSplitRowId(""); }}>
                         Tank ran out mid-row
                       </button>
-                      <button type="button" className="secondary" aria-label={`Correct Mix #${activeMix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "correct", mix: activeMix })}>
-                        Correct
-                      </button>
+                      {activeMix.amount_source === "planned_estimate" ? (
+                        <button type="button" className="secondary" aria-label={`Confirm Mix #${activeMix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "confirm", mix: activeMix })}>
+                          Confirm amounts
+                        </button>
+                      ) : (
+                        <button type="button" className="secondary" aria-label={`Correct Mix #${activeMix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "correct", mix: activeMix })}>
+                          Correct
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -1172,9 +1193,9 @@ export function MobilePestLogPage() {
                 }
                 chemicalName={chem.name ?? "Chemical"}
                 chemicalUnit={chemUnit}
-                initial={{ water_l: roundTo(nextDefaults.water_l, 1), chemical_amount: roundTo(nextDefaults.chemical_amount, 1), leftover_l: 0, reason: "" }}
+                initial={{ water_l: roundTo(nextDefaults.water_l, 1), chemical_amount: roundTo(nextDefaults.chemical_amount, 1), leftover_l: null, reason: "" }}
                 maxLeftover={activeMix ? activeMix.water_l : undefined}
-                leftoverLabel={activeMix ? `Left over in Mix #${activeMix.mix_number} (L, drained or not sprayed)` : undefined}
+                leftoverLabel={activeMix ? `Left over in Mix #${activeMix.mix_number} (L) — drained or not sprayed` : undefined}
                 busy={savingProgress}
                 submitLabel={`Save Mix #${nextMixNumber}`}
                 onSubmit={(v) => void submitStartMix(selectedTodo, v, mixForm.clientKey)}
@@ -1194,23 +1215,50 @@ export function MobilePestLogPage() {
                   reason: ""
                 }}
                 maxLeftover={mixForm.mix.status === "completed" ? null : undefined}
+                leftoverInitiallyUnknown={mixForm.mix.leftover_l == null}
                 leftoverLabel="Leftover (L)"
                 requireReason
                 busy={savingProgress}
                 submitLabel="Save correction"
-                onSubmit={(v) => {
-                  if (mixForm.mix.status === "completed" && v.leftover_l > v.water_l) {
-                    setError("Leftover can't be more than the water in the tank.");
-                    return;
-                  }
-                  void submitCorrection(selectedTodo, mixForm.mix, v);
+                onSubmit={(v) => void submitCorrection(selectedTodo, mixForm.mix, v)}
+                onCancel={() => setMixForm(null)}
+              />
+            ) : mixForm?.kind === "confirm" ? (
+              <MixForm
+                key={`confirm-${mixForm.mix.client_key}-${mixForm.mix.revision}`}
+                title={`Confirm Mix #${mixForm.mix.mix_number}`}
+                hint="Carried over from before tank tracking with the plan's amounts. Enter what actually went in the tank, or confirm these if they're right."
+                chemicalName={chem.name ?? "Chemical"}
+                chemicalUnit={chemUnit}
+                initial={{
+                  water_l: mixForm.mix.water_l,
+                  chemical_amount: mixForm.mix.chemicals[0]?.amount ?? 0,
+                  leftover_l: mixForm.mix.leftover_l,
+                  reason: ""
                 }}
+                maxLeftover={mixForm.mix.status === "completed" ? null : undefined}
+                leftoverInitiallyUnknown={mixForm.mix.leftover_l == null}
+                leftoverLabel="Leftover (L)"
+                reasonOptional
+                busy={savingProgress}
+                submitLabel="Confirm amounts"
+                onSubmit={(v) => void submitCorrection(selectedTodo, mixForm.mix, v, { confirm: true })}
+                onCancel={() => setMixForm(null)}
+              />
+            ) : mixForm?.kind === "leftover" ? (
+              <LeftoverForm
+                title={`Leftover in Mix #${mixForm.mix.mix_number}`}
+                hint="How much of this tank was drained or not sprayed? Until it's recorded, the job's applied total is not known."
+                maxLeftover={mixForm.mix.water_l}
+                busy={savingProgress}
+                submitLabel="Save leftover"
+                onSubmit={(l) => void recordLeftover(selectedTodo, mixForm.mix, l)}
                 onCancel={() => setMixForm(null)}
               />
             ) : mixForm?.kind === "finish" && activeMix ? (
               <LeftoverForm
                 title={`Close Mix #${activeMix.mix_number} and save the record`}
-                hint="How much mixture is left in the tank (or was drained) and won't be sprayed? Enter 0 if the tank is empty."
+                hint="How much mixture is left in the tank (or was drained) and won't be sprayed? Enter 0 if the tank is empty. If nobody checked, tick Not known — the applied total then stays unknown."
                 maxLeftover={activeMix.water_l}
                 busy={savingProgress || completing}
                 submitLabel={completing ? "Saving…" : "Save record"}
@@ -1244,24 +1292,46 @@ export function MobilePestLogPage() {
                             {mix.is_extra ? <span className="pest-mix-extra-tag">Extra</span> : null}
                             {mix.pending ? <span className="pest-mix-pending-tag">Not synced</span> : null}
                             {corrections > 0 ? <span className="pest-mix-pending-tag">Corrected {corrections}×</span> : null}
+                            {mix.amount_source === "planned_estimate" ? <span className="pest-mix-estimate-tag">Planned estimate</span> : null}
                           </div>
                           <div className="pest-mix-card-amounts" style={{ flexWrap: "wrap", fontSize: "0.82em" }}>
                             <span>{roundTo(mix.water_l, 1)} L</span>
                             {mix.chemicals.map((c) => (
                               <span key={c.chemical_id}><span className="pest-mix-summary-sep">·</span> {roundTo(c.amount, 1)} {c.unit}</span>
                             ))}
-                            {mix.leftover_l > 0 ? <span><span className="pest-mix-summary-sep">·</span> {roundTo(mix.leftover_l, 1)} L left over</span> : null}
-                            {share ? <span><span className="pest-mix-summary-sep">·</span> {roundTo(share.rows, 1)} row{share.rows === 1 ? "" : "s"}</span> : null}
+                            {mix.leftover_l == null ? (
+                              <span className="pest-mix-unknown"><span className="pest-mix-summary-sep">·</span> leftover not recorded</span>
+                            ) : mix.leftover_l > 0 ? (
+                              <span><span className="pest-mix-summary-sep">·</span> {roundTo(mix.leftover_l, 1)} L left over</span>
+                            ) : (
+                              <span><span className="pest-mix-summary-sep">·</span> no leftover</span>
+                            )}
+                            {share ? <span><span className="pest-mix-summary-sep">·</span> {roundTo(share.rows, 1)} row{share.rows === 1 ? "" : "s"}{share.split_rows > 0 ? ` (incl. ${roundTo(share.split_rows, 1)} est.)` : ""}</span> : null}
                             {share?.avg_water_per_row != null ? (
-                              <span><span className="pest-mix-summary-sep">·</span> ~{roundTo(share.avg_water_per_row, 1)} L/row avg</span>
+                              <span><span className="pest-mix-summary-sep">·</span> ~{roundTo(share.avg_water_per_row, 1)} L/row avg{share.split_rows > 0 || share.estimated ? " (est.)" : ""}</span>
                             ) : null}
                           </div>
                           {isOpenJob ? (
-                            <button type="button" className="secondary" style={{ fontSize: "0.78em", padding: "0.25rem 0.55rem", marginTop: "0.35rem" }} aria-label={`Correct Mix #${mix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "correct", mix })}>
-                              Correct
-                            </button>
+                            <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginTop: "0.35rem" }}>
+                              {mix.amount_source === "planned_estimate" ? (
+                                <button type="button" className="secondary" style={{ fontSize: "0.78em", padding: "0.25rem 0.55rem" }} aria-label={`Confirm Mix #${mix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "confirm", mix })}>
+                                  Confirm amounts
+                                </button>
+                              ) : (
+                                <button type="button" className="secondary" style={{ fontSize: "0.78em", padding: "0.25rem 0.55rem" }} aria-label={`Correct Mix #${mix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "correct", mix })}>
+                                  Correct
+                                </button>
+                              )}
+                              {mix.leftover_l == null ? (
+                                <button type="button" className="secondary" style={{ fontSize: "0.78em", padding: "0.25rem 0.55rem" }} aria-label={`Record leftover for Mix #${mix.mix_number}`} disabled={savingProgress} onClick={() => setMixForm({ kind: "leftover", mix })}>
+                                  Record leftover
+                                </button>
+                              ) : null}
+                            </div>
                           ) : null}
-                          {history.some((r) => r.action === "corrected" || r.action === "leftover" || r.action === "imported") ? <MixHistory revisions={history} unit={chemUnit} /> : null}
+                          {history.some((r) => (r.action !== "created" && r.action !== "closed") || (r.before != null && (r.before.leftover_l ?? null) !== (r.after.leftover_l ?? null))) ? (
+                            <MixHistory revisions={history} unit={chemUnit} />
+                          ) : null}
                         </div>
                       );
                     })}
@@ -1431,7 +1501,7 @@ export function MobilePestLogPage() {
                           {row.completed ? (
                             <span className="pest-row-btn-time">
                               {(row.mixNumbers?.length ?? 0) > 1
-                                ? `Mix ${row.mixNumbers!.map((n) => `#${n}`).join(" → ")}`
+                                ? `Mix ${row.mixNumbers!.map((n) => `#${n}`).join(" → ")} · ½ each (est.)`
                                 : row.completedByMixNumber != null
                                   ? `Mix #${row.completedByMixNumber}`
                                   : row.completedAt ? formatDate(row.completedAt) : "done"}

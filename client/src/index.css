@@ -13422,3 +13422,45 @@ details.pack-week-manual > :not(summary) {
   min-width: 0;
   box-sizing: border-box;
 }
+
+.pest-mix-estimate-tag {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  margin-left: 0.25rem;
+  background: #e8e4fb;
+  color: #4b3a9a;
+}
+
+.pest-mix-unknown {
+  color: #b45309;
+}
+
+.pest-plan-vs-actual-diff.is-unknown {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.pest-leftover-input {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.pest-leftover-input input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+label.pest-leftover-unknown {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+label.pest-leftover-unknown input {
+  width: auto;
+}

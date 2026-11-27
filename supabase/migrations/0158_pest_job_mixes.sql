@@ -8,10 +8,18 @@
 --
 --   pest_job_mixes           one row per mix actually made (planned or extra)
 --   pest_job_mix_revisions   append-only history: created / corrected /
---                            leftover / closed / imported
+--                            confirmed / leftover / closed / imported
 --   pest_control_records     + mix_summary (planned vs actual, frozen at
 --                            completion) and a UNIQUE (todo_id) so a retried
 --                            completion can never write a second record
+--   food_safety_h1_logs      + quantity_mixed / quantity_applied /
+--                            quantity_leftover / quantity_unit /
+--                            quantity_basis / quantity_note, so the H1 record
+--                            says which figure is which
+--
+-- Unknowns stay unknown: a leftover that wasn't recorded is NULL (never 0),
+-- and mixes carried over from progress_snapshot are marked
+-- amount_source = 'planned_estimate' until an operator confirms them.
 --
 -- The plan itself (pest_control_todos.calculation_snapshot) is never changed:
 -- it stays the baseline the actual figures are compared against.
@@ -24,6 +32,7 @@
 --                                           one transaction, idempotent
 --
 -- Only adds tables, columns, a constraint and functions; one transaction.
+-- Independent of 0156/0157 (Crop Planner), which are not part of this release.
 
 begin;
 
@@ -51,7 +60,11 @@ create table if not exists public.pest_job_mixes (
   -- (ml for liquids, g for dry products).
   chemicals jsonb not null default '[]',
   -- Mixture not applied to the crop (drained, returned, left in the tank).
-  leftover_l numeric not null default 0 check (leftover_l >= 0),
+  -- NULL = not recorded (unknown) — never treated as 0.
+  leftover_l numeric check (leftover_l is null or leftover_l >= 0),
+  -- 'recorded': entered by an operator. 'planned_estimate': carried over from
+  -- before mix tracking with the plan's amounts, not yet confirmed.
+  amount_source text not null default 'recorded' check (amount_source in ('recorded', 'planned_estimate')),
   started_at timestamptz not null default now(),
   ended_at timestamptz,
   revision integer not null default 1,
@@ -59,7 +72,7 @@ create table if not exists public.pest_job_mixes (
   updated_by uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint pest_job_mixes_leftover_within_water check (leftover_l <= water_l),
+  constraint pest_job_mixes_leftover_within_water check (leftover_l is null or leftover_l <= water_l),
   constraint pest_job_mixes_todo_client_key_key unique (todo_id, client_key),
   constraint pest_job_mixes_todo_mix_number_key unique (todo_id, mix_number)
 );
@@ -82,7 +95,7 @@ create table if not exists public.pest_job_mix_revisions (
   todo_id uuid not null references public.pest_control_todos(id) on delete cascade,
   mix_id uuid not null references public.pest_job_mixes(id) on delete cascade,
   revision integer not null,
-  action text not null check (action in ('created', 'corrected', 'leftover', 'closed', 'imported')),
+  action text not null check (action in ('created', 'corrected', 'confirmed', 'leftover', 'closed', 'imported')),
   before jsonb,
   after jsonb not null,
   reason text,
@@ -118,6 +131,20 @@ begin
   end if;
 end $$;
 
+-- ── H1 food-safety log: which quantity is which ─────────────────────────────
+-- actual_quantity_used keeps its meaning on the CanadaGAP sheet; for jobs with
+-- mix records it is the product MIXED (what left the store, as inventory
+-- deducts). These columns spell the figures out; quantity_applied and
+-- quantity_leftover are NULL when a leftover was not recorded.
+
+alter table public.food_safety_h1_logs
+  add column if not exists quantity_mixed numeric,
+  add column if not exists quantity_applied numeric,
+  add column if not exists quantity_leftover numeric,
+  add column if not exists quantity_unit text,
+  add column if not exists quantity_basis text check (quantity_basis is null or quantity_basis in ('mix_records', 'plan')),
+  add column if not exists quantity_note text;
+
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
 create or replace function public.pest_mix_json(m public.pest_job_mixes)
@@ -130,6 +157,7 @@ as $$
     'status', m.status, 'is_extra', m.is_extra,
     'planned_water_l', m.planned_water_l, 'planned_chemicals', m.planned_chemicals,
     'water_l', m.water_l, 'chemicals', m.chemicals, 'leftover_l', m.leftover_l,
+    'amount_source', m.amount_source,
     'started_at', m.started_at, 'ended_at', m.ended_at, 'revision', m.revision,
     'created_by', m.created_by, 'updated_by', m.updated_by, 'updated_at', m.updated_at
   );
@@ -211,7 +239,7 @@ begin
       insert into public.pest_job_mixes (
         organization_id, todo_id, client_key, mix_number, status, is_extra,
         planned_water_l, planned_chemicals, water_l, chemicals, leftover_l,
-        started_at, ended_at
+        amount_source, started_at, ended_at
       )
       select p_org, p_todo,
              md5(p_todo::text || ':legacy-mix:' || (e->>'mixNumber'))::uuid,
@@ -226,7 +254,8 @@ begin
              case when t.chemical_id is null then '[]'::jsonb else jsonb_build_array(jsonb_build_object(
                'chemical_id', t.chemical_id, 'name', coalesce(t.chemical_snapshot->>'name', ''),
                'amount', greatest(coalesce((e->>'chemicalAmountMl')::numeric, 0), 0), 'unit', v_unit)) end,
-             0,
+             null,                -- leftover was never recorded
+             'planned_estimate',  -- the plan's amounts, until an operator confirms
              coalesce((e->>'startedAt')::timestamptz, now()),
              (e->>'endedAt')::timestamptz
         from jsonb_array_elements(v_legacy) e
@@ -235,7 +264,7 @@ begin
       returning *
     loop
       insert into public.pest_job_mix_revisions (organization_id, todo_id, mix_id, revision, action, before, after, reason)
-      values (p_org, p_todo, m.id, 1, 'imported', null, public.pest_mix_json(m), 'Recorded before actual mix amounts were tracked (planned amounts)');
+      values (p_org, p_todo, m.id, 1, 'imported', null, public.pest_mix_json(m), 'Carried over from before tank tracking: planned amounts, leftover not recorded');
     end loop;
   end if;
 
@@ -260,7 +289,10 @@ $$;
 
 -- ── Save (create or correct one mix) ─────────────────────────────────────────
 -- p_mix: { client_key, mix_number, water_l, chemicals, leftover_l?, status?,
---          reason?, previous_leftover_l? }
+--          reason?, previous_leftover_l?, confirm? }
+--   leftover_l / previous_leftover_l: a number, or null = not known. Leaving
+--   a leftover out never records it as 0.
+--   confirm: true marks planned-estimate amounts as confirmed by an operator.
 --   new client_key  → creates mix #mix_number (must be the next number) and
 --                     closes the mix that was in use, recording
 --                     previous_leftover_l on it when given
@@ -288,6 +320,8 @@ declare
   v_reason text;
   v_action text;
   v_unit text;
+  v_source text;
+  v_has_prev_leftover boolean;
   v_is_last boolean;
   v_planned_water numeric;
   v_planned_chem numeric;
@@ -336,15 +370,16 @@ begin
     if v_num <> v_next then
       raise exception 'Mix #% was already recorded for this job (next is #%). Reload the job.', v_num, v_next using errcode = 'GL409';
     end if;
-    v_leftover := coalesce((p_mix->>'leftover_l')::numeric, 0);
-    if v_leftover < 0 or v_leftover > v_water then
+    v_leftover := case when jsonb_typeof(p_mix->'leftover_l') = 'number' then (p_mix->>'leftover_l')::numeric end;
+    if v_leftover is not null and (v_leftover < 0 or v_leftover > v_water) then
       raise exception 'Leftover must be between 0 and the water in the tank' using errcode = 'GL422';
     end if;
 
     -- Close the mix that was in use. Its leftover is recorded here so a
     -- retry of this whole call cannot record it twice.
-    v_prev_leftover := case when jsonb_typeof(p_mix->'previous_leftover_l') = 'number'
-                            then (p_mix->>'previous_leftover_l')::numeric end;
+    -- Absent or null = not known: the closed tank keeps a NULL leftover.
+    v_has_prev_leftover := jsonb_typeof(p_mix->'previous_leftover_l') = 'number';
+    v_prev_leftover := case when v_has_prev_leftover then (p_mix->>'previous_leftover_l')::numeric end;
     for prev in
       select * from public.pest_job_mixes where todo_id = p_todo and status = 'active' for update
     loop
@@ -355,7 +390,7 @@ begin
       update public.pest_job_mixes
          set status = 'completed',
              ended_at = now(),
-             leftover_l = coalesce(v_prev_leftover, leftover_l),
+             leftover_l = case when v_has_prev_leftover then v_prev_leftover else leftover_l end,
              revision = revision + 1,
              updated_by = p_user,
              updated_at = now()
@@ -410,8 +445,10 @@ begin
   if m.organization_id <> p_org then
     raise exception 'Todo not found' using errcode = 'GL404';
   end if;
-  v_leftover := case when p_mix ? 'leftover_l' then (p_mix->>'leftover_l')::numeric else m.leftover_l end;
-  if v_leftover < 0 or v_leftover > v_water then
+  v_leftover := case when not (p_mix ? 'leftover_l') then m.leftover_l
+                     when jsonb_typeof(p_mix->'leftover_l') = 'number' then (p_mix->>'leftover_l')::numeric
+                     else null end;
+  if v_leftover is not null and (v_leftover < 0 or v_leftover > v_water) then
     raise exception 'Leftover must be between 0 and the water in the tank' using errcode = 'GL422';
   end if;
   v_status := coalesce(p_mix->>'status', m.status);
@@ -422,13 +459,21 @@ begin
     raise exception 'A finished mix cannot be put back in use; start a new mix instead' using errcode = 'GL409';
   end if;
 
-  if m.water_l = v_water and m.chemicals = v_chems and m.leftover_l = v_leftover and m.status = v_status then
+  -- Entering new amounts, or confirming, makes them operator-recorded.
+  v_source := case when m.water_l <> v_water or m.chemicals <> v_chems
+                     or coalesce((p_mix->>'confirm')::boolean, false)
+                   then 'recorded' else m.amount_source end;
+
+  if m.water_l = v_water and m.chemicals = v_chems and m.leftover_l is not distinct from v_leftover
+     and m.status = v_status and m.amount_source = v_source then
     return jsonb_build_object('mix', public.pest_mix_json(m), 'created', false, 'changed', false);
   end if;
 
   if m.water_l <> v_water or m.chemicals <> v_chems then
     v_action := 'corrected';
-  elsif m.leftover_l <> v_leftover then
+  elsif m.amount_source <> v_source then
+    v_action := 'confirmed';
+  elsif m.leftover_l is distinct from v_leftover then
     v_action := 'leftover';
   else
     v_action := 'closed';
@@ -439,6 +484,7 @@ begin
      set water_l = v_water,
          chemicals = v_chems,
          leftover_l = v_leftover,
+         amount_source = v_source,
          status = v_status,
          ended_at = case when v_status = 'completed' then coalesce(ended_at, now()) else ended_at end,
          revision = revision + 1,
@@ -547,4 +593,8 @@ commit;
 -- drop table if exists public.pest_job_mixes;
 -- alter table public.pest_control_records drop constraint if exists pest_control_records_todo_id_key;
 -- alter table public.pest_control_records drop column if exists mix_summary;
+-- alter table public.food_safety_h1_logs
+--   drop column if exists quantity_mixed, drop column if exists quantity_applied,
+--   drop column if exists quantity_leftover, drop column if exists quantity_unit,
+--   drop column if exists quantity_basis, drop column if exists quantity_note;
 -- commit;
