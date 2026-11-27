@@ -74,7 +74,7 @@ function buildWeekExplanation(group: BonusWeekGroup): string {
 // .bonus-print-root element below carries that attribute) — this stylesheet
 // only needs its own @page and layout rules. It's still injected at print
 // time rather than living in index.css because it needs a portrait letter
-// @page while Food Safety/H1 printing need landscape; @page rules aren't
+// @page while Food Safety printing needs landscape; @page rules aren't
 // selector-scoped, so this one is only ever present in the document while a
 // bonus print job is actually running, and wins the cascade for @page's
 // size/margin (last declared in source order) over index.css's landscape
