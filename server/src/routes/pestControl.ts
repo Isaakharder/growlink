@@ -4,6 +4,7 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { sendSafeError } from "../utils/safeError";
 import { requirePermission, requireAnyPermission } from "../middleware/requirePermission";
+import { planFromTodo, summarizeMixes, type MixChemicalLine, type MixInput, type RowInput } from "../utils/pestMixSummary";
 
 type SprayerPayload = {
   name: string;
@@ -195,6 +196,13 @@ function validateProgressSnapshot(raw: unknown): Record<string, unknown> {
       if (typeof r.rowId !== "string" || !r.rowId) throw new Error("row.rowId must be a non-empty string");
       if (typeof r.rowNumber !== "number") throw new Error("row.rowNumber must be a number");
       if (typeof r.completed !== "boolean") throw new Error("row.completed must be a boolean");
+      // Tanks that sprayed this row (a row started on one tank and finished
+      // on the next lists both).
+      if (r.mixNumbers !== undefined && r.mixNumbers !== null) {
+        if (!Array.isArray(r.mixNumbers) || !r.mixNumbers.every((x) => Number.isInteger(x) && (x as number) > 0)) {
+          throw new Error("row.mixNumbers must be an array of mix numbers");
+        }
+      }
     }
   }
   const result: Record<string, unknown> = { phases: snap.phases };
@@ -1383,186 +1391,16 @@ pestControlRouter.patch("/pest/todos/:id/progress", canMobileWrite, async (req, 
   return res.json(data);
 });
 
-// POST /pest/todos/:id/complete — verifies completion, saves record, marks todo completed
-pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, res) => {
-  const organizationId = req.organizationId;
-  const userId = req.userId;
-  const { id } = req.params;
-  const body = req.body as Record<string, unknown>;
-
-  // Load the todo
-  const { data: todo, error: fetchError } = await supabase
-    .from("pest_control_todos")
-    .select("*")
-    .eq("id", id)
-    .eq("organization_id", organizationId)
-    .maybeSingle();
-
-  if (fetchError) {
-    return sendSafeError(res, 500, "Failed to load todo.", "Todo fetch error:", fetchError);
-  }
-  if (!todo) {
-    return res.status(404).json({ message: "Todo not found" });
-  }
-
-  // Idempotent: already completed — return success without inserting another record
-  if (todo.status === "completed") {
-    const { data: existingRecord } = await supabase
-      .from("pest_control_records")
-      .select("id")
-      .eq("todo_id", id)
-      .eq("organization_id", organizationId)
-      .maybeSingle();
-    if (existingRecord) {
-      return res.json({ ok: true, already_completed: true });
-    }
-  }
-
-  // Verify completion — branch on snapshot type
-  type SnapRow = { completed: boolean };
-  type SnapPhase = { completed: boolean; rows?: SnapRow[] };
-  type SnapValve = { completed: boolean };
-  const snap = todo.progress_snapshot as {
-    type?: string;
-    phases?: SnapPhase[];
-    valves?: SnapValve[];
-  };
-
-  if (snap.type === "valve_drench") {
-    if (!snap.valves || snap.valves.length === 0) {
-      return res.status(400).json({ message: "No valves found in plan." });
-    }
-    if (!snap.valves.every((v) => v.completed)) {
-      return res.status(400).json({ message: "All valves must be completed before finishing." });
-    }
-  } else if (snap.phases && snap.phases.length > 0) {
-    const allPhasesComplete = snap.phases.every((p) => p.completed);
-    const allRowsComplete = snap.phases.every((p) => (p.rows ?? []).every((r) => r.completed));
-    if (!allPhasesComplete || !allRowsComplete) {
-      return res.status(400).json({ message: "Job is not fully complete yet." });
-    }
-  }
-
-  const now = new Date().toISOString();
-  const notes = typeof body.notes === "string" ? body.notes.trim() || null : null;
-
-  // Insert permanent record
-  const { error: insertError } = await supabase
-    .from("pest_control_records")
-    .insert({
-      organization_id: organizationId,
-      todo_id: id,
-      type: todo.type as string,
-      chemical_id: (todo.chemical_id as string | null) ?? null,
-      chemical_snapshot: todo.chemical_snapshot,
-      target_snapshot: todo.target_snapshot,
-      sprayer_snapshot: todo.sprayer_snapshot,
-      tank_snapshot: todo.tank_snapshot,
-      calculation_snapshot: todo.calculation_snapshot,
-      progress_snapshot: todo.progress_snapshot,
-      completed_by: userId ?? null,
-      completed_at: now,
-      notes
-    });
-
-  if (insertError) {
-    return sendSafeError(res, 500, "Failed to save record.", "Record insert error:", insertError);
-  }
-
-  // Mark todo completed
-  const { data: updatedTodo, error: updateError } = await supabase
-    .from("pest_control_todos")
-    .update({
-      status: "completed",
-      completed_by: userId ?? null,
-      completed_at: now,
-      updated_at: now
-    })
-    .eq("id", id)
-    .eq("organization_id", organizationId)
-    .select("id, status, completed_at")
-    .single();
-
-  if (updateError) {
-    return sendSafeError(res, 500, "Failed to complete todo.", "Todo update error:", updateError);
-  }
-
-  // ── Inventory deduction ─────────────────────────────────────────────────────
-  // For valve_drench: sum the displayed-rounded per-valve amounts from the
-  // progress_snapshot (matching exactly what the operator was told to apply).
-  //   dry (g)  → each valve rounded to nearest 5 g
-  //   wet (ml) → each valve rounded to 1 decimal ml
-  // For all other todos: use calculation_snapshot.total_chemical_ml (raw total).
-  const chemId = (todo.chemical_id as string | null) ?? null;
-  if (chemId) {
-    const chemSnap = todo.chemical_snapshot as Record<string, unknown> | null;
-    const rateUnit = typeof chemSnap?.rate_unit === "string" ? chemSnap.rate_unit : null;
-
-    let totalBaseUnits: number | null = null;
-    let isDry = false;
-
-    if (snap.type === "valve_drench" && Array.isArray(snap.valves) && snap.valves.length > 0) {
-      type ValveAmt = { productAmount: unknown; productUnit: unknown };
-      const valves = snap.valves as unknown as ValveAmt[];
-      const firstUnit = typeof valves[0]?.productUnit === "string" ? valves[0].productUnit : "";
-      isDry = firstUnit === "g";
-      let sum = 0;
-      for (const v of valves) {
-        const amt = typeof v.productAmount === "number" ? v.productAmount : 0;
-        const unit = typeof v.productUnit === "string" ? v.productUnit : "";
-        // Mirror the display rounding used by the mobile valve cards.
-        const rounded = unit === "g"
-          ? Math.round(amt / 5) * 5          // nearest 5 g
-          : Math.round(amt * 10) / 10;        // 1 decimal ml
-        sum += rounded;
-      }
-      totalBaseUnits = sum;
-    } else if (rateUnit) {
-      const calcSnap = todo.calculation_snapshot as Record<string, unknown> | null;
-      totalBaseUnits = typeof calcSnap?.total_chemical_ml === "number" ? calcSnap.total_chemical_ml : null;
-      isDry = rateUnit.startsWith("g_") || rateUnit.startsWith("kg_");
-    }
-
-    if (totalBaseUnits != null && totalBaseUnits > 0) {
-      const { data: chemRow } = await supabase
-        .from("pest_chemicals")
-        .select("inventory_qty, inventory_unit")
-        .eq("id", chemId)
-        .eq("organization_id", organizationId)
-        .maybeSingle();
-
-      if (chemRow) {
-        const invUnit = (chemRow.inventory_unit as string | null) ?? "";
-        // Convert base units (g for dry, ml for wet) to the stored inventory unit.
-        let deductInInvUnit: number | null = null;
-        if (!isDry) {
-          if (invUnit === "ml") deductInInvUnit = totalBaseUnits;
-          else if (invUnit === "L") deductInInvUnit = totalBaseUnits / 1000;
-        } else {
-          if (invUnit === "g") deductInInvUnit = totalBaseUnits;
-          else if (invUnit === "kg") deductInInvUnit = totalBaseUnits / 1000;
-        }
-
-        if (deductInInvUnit != null) {
-          const currentQty = typeof chemRow.inventory_qty === "number" ? chemRow.inventory_qty : 0;
-          const newQty = Math.max(0, currentQty - deductInInvUnit);
-          await supabase
-            .from("pest_chemicals")
-            .update({ inventory_qty: newQty, updated_at: now })
-            .eq("id", chemId)
-            .eq("organization_id", organizationId);
-        } else {
-          console.warn(
-            `[pest-complete] Cannot deduct inventory: unit mismatch` +
-            ` (base=${isDry ? "g" : "ml"}, inv=${invUnit}) for chemical ${chemId}`
-          );
-        }
-      }
-    }
-  }
-
-  // ── H1 Food Safety Log ──────────────────────────────────────────────────────
-  // Non-blocking: a failure here must never prevent job completion from returning.
+// ── H1 Food Safety Log ──────────────────────────────────────────────────────
+// Non-blocking: a failure here must never prevent job completion from returning.
+async function writeH1Log(
+  todo: Record<string, unknown>,
+  organizationId: string,
+  id: string,
+  now: string,
+  chemId: string | null,
+  actualBaseOverride: number | null
+): Promise<void> {
   try {
     const h1ChemSnap   = todo.chemical_snapshot    as Record<string, unknown> | null;
     const h1TargetSnap = todo.target_snapshot      as Record<string, unknown> | null;
@@ -1628,6 +1466,8 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
         const raw = h1CalcSnap.total_chemical_ml;
         h1TotalBase = typeof raw === "number" ? raw : null;
       }
+      // Jobs with recorded mixes: the chemical actually mixed, not the plan.
+      if (actualBaseOverride != null) h1TotalBase = actualBaseOverride;
 
       let actualQtyUsed: number | null = null;
       let actualQtyUnit: string | null = null;
@@ -1821,6 +1661,372 @@ pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, r
   } catch (h1Err) {
     console.error("[pest-complete] H1 log creation threw (non-blocking):", h1Err);
   }
+}
+
+// ── Mixes (0158) ─────────────────────────────────────────────────────────────
+// Each mix the operator actually makes is its own pest_job_mixes row, created
+// or corrected through pest_mix_save() so the history row is written in the
+// same transaction. The planned tank count is only a baseline: mixes beyond
+// it are recorded as extra, never refused.
+
+const MIX_NOT_SET_UP = new Set(["42883", "PGRST202", "42P01", "PGRST205"]);
+
+function isMixNotSetUp(error: unknown): boolean {
+  return MIX_NOT_SET_UP.has(String((error as { code?: string } | null)?.code ?? ""));
+}
+
+function mixErrorStatus(error: unknown): { status: number; message: string } | null {
+  const e = error as { code?: string; message?: string } | null;
+  const message = e?.message ?? "Request failed";
+  if (e?.code === "GL404") return { status: 404, message };
+  if (e?.code === "GL409") return { status: 409, message };
+  if (e?.code === "GL422") return { status: 400, message };
+  return null;
+}
+
+type JobMixRow = {
+  id: string;
+  client_key: string;
+  mix_number: number;
+  status: "active" | "completed";
+  is_extra: boolean;
+  planned_water_l: number | null;
+  planned_chemicals: MixChemicalLine[];
+  water_l: number;
+  chemicals: MixChemicalLine[];
+  leftover_l: number;
+  started_at: string;
+  ended_at: string | null;
+  revision: number;
+};
+
+async function loadJobMixes(
+  organizationId: string,
+  todoId: string
+): Promise<{ available: boolean; mixes: JobMixRow[]; revisions: unknown[]; error?: unknown }> {
+  const { data, error } = await supabase.rpc("pest_job_mixes_load", { p_org: organizationId, p_todo: todoId });
+  if (error) {
+    if (isMixNotSetUp(error)) return { available: false, mixes: [], revisions: [] };
+    return { available: false, mixes: [], revisions: [], error };
+  }
+  const out = (data ?? {}) as { mixes?: JobMixRow[]; revisions?: unknown[] };
+  return { available: true, mixes: out.mixes ?? [], revisions: out.revisions ?? [] };
+}
+
+function toMixInput(m: JobMixRow): MixInput {
+  return {
+    mix_number: Number(m.mix_number),
+    status: m.status,
+    is_extra: Boolean(m.is_extra),
+    water_l: Number(m.water_l),
+    leftover_l: Number(m.leftover_l),
+    chemicals: (m.chemicals ?? []).map((c) => ({ ...c, amount: Number(c.amount) }))
+  };
+}
+
+function progressRows(snapshot: unknown): RowInput[] {
+  const phases = (snapshot as { phases?: Array<{ rows?: RowInput[] }> } | null)?.phases;
+  return Array.isArray(phases) ? phases.flatMap((p) => (Array.isArray(p.rows) ? p.rows : [])) : [];
+}
+
+// The planned chemical total in base units (g dry, ml wet), exactly as the
+// inventory deduction has always worked out the plan:
+//   valve_drench -> sum of the displayed-rounded per-valve amounts
+//                   (dry: nearest 5 g; wet: 1 decimal ml)
+//   otherwise    -> calculation_snapshot.total_chemical_ml
+function plannedChemicalBaseUnits(todo: Record<string, unknown>): { totalBaseUnits: number | null; isDry: boolean } {
+  const snap = (todo.progress_snapshot ?? {}) as { type?: string; valves?: Array<{ productAmount: unknown; productUnit: unknown }> };
+  const chemSnap = todo.chemical_snapshot as Record<string, unknown> | null;
+  const rateUnit = typeof chemSnap?.rate_unit === "string" ? chemSnap.rate_unit : null;
+  if (snap.type === "valve_drench" && Array.isArray(snap.valves) && snap.valves.length > 0) {
+    const firstUnit = typeof snap.valves[0]?.productUnit === "string" ? snap.valves[0].productUnit : "";
+    let sum = 0;
+    for (const v of snap.valves) {
+      const amt = typeof v.productAmount === "number" ? v.productAmount : 0;
+      const unit = typeof v.productUnit === "string" ? v.productUnit : "";
+      sum += unit === "g" ? Math.round(amt / 5) * 5 : Math.round(amt * 10) / 10;
+    }
+    return { totalBaseUnits: sum, isDry: firstUnit === "g" };
+  }
+  if (rateUnit) {
+    const calcSnap = todo.calculation_snapshot as Record<string, unknown> | null;
+    return {
+      totalBaseUnits: typeof calcSnap?.total_chemical_ml === "number" ? calcSnap.total_chemical_ml : null,
+      isDry: rateUnit.startsWith("g_") || rateUnit.startsWith("kg_")
+    };
+  }
+  return { totalBaseUnits: null, isDry: false };
+}
+
+/** Base units (g dry, ml wet) to the chemical's stored inventory unit; null on a unit mismatch. */
+function toInventoryUnits(base: number, isDry: boolean, invUnit: string): number | null {
+  if (!isDry) {
+    if (invUnit === "ml") return base;
+    if (invUnit === "L") return base / 1000;
+  } else {
+    if (invUnit === "g") return base;
+    if (invUnit === "kg") return base / 1000;
+  }
+  return null;
+}
+
+// GET /pest/todos/:id/mixes — mixes, their history and the live summary.
+pestControlRouter.get("/pest/todos/:id/mixes", canMobileView, async (req, res) => {
+  const organizationId = req.organizationId!;
+  const id = String(req.params.id);
+
+  const { data: todo, error: todoErr } = await supabase
+    .from("pest_control_todos")
+    .select("id, status, chemical_id, chemical_snapshot, calculation_snapshot, progress_snapshot")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (todoErr) return sendSafeError(res, 500, "Failed to load todo.", "Todo fetch error:", todoErr);
+  if (!todo) return res.status(404).json({ message: "Todo not found" });
+
+  const state = await loadJobMixes(organizationId, id);
+  if (state.error) {
+    const mapped = mixErrorStatus(state.error);
+    if (mapped) return res.status(mapped.status).json({ message: mapped.message });
+    return sendSafeError(res, 500, "Failed to load mixes.", "Mix load error:", state.error);
+  }
+  const summary = summarizeMixes(
+    planFromTodo(todo as Record<string, unknown>),
+    state.mixes.map(toMixInput),
+    progressRows(todo.progress_snapshot),
+    { assumeClosed: todo.status === "completed" }
+  );
+  return res.json({ available: state.available, mixes: state.mixes, revisions: state.revisions, summary });
+});
+
+// POST /pest/todos/:id/mixes — start a mix (new client_key) or correct one
+// (known client_key). Same permission as saving progress.
+pestControlRouter.post("/pest/todos/:id/mixes", canMobileWrite, async (req, res) => {
+  const organizationId = req.organizationId!;
+  const { id } = req.params;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  const mix: Record<string, unknown> = {};
+  for (const key of ["client_key", "mix_number", "water_l", "chemicals", "leftover_l", "status", "reason", "previous_leftover_l"]) {
+    if (key in body) mix[key] = body[key];
+  }
+
+  const { data, error } = await supabase.rpc("pest_mix_save", {
+    p_org: organizationId,
+    p_todo: id,
+    p_user: req.userId ?? null,
+    p_mix: mix
+  });
+  if (error) {
+    if (isMixNotSetUp(error)) {
+      return res.status(409).json({ message: "Mix recording isn't set up yet (migration 0158).", notSetUp: true });
+    }
+    const mapped = mixErrorStatus(error);
+    if (mapped) return res.status(mapped.status).json({ message: mapped.message });
+    return sendSafeError(res, 500, "Failed to save mix.", "Mix save error:", error);
+  }
+  const out = (data ?? {}) as { created?: boolean };
+  return res.status(out.created ? 201 : 200).json(data);
+});
+
+// POST /pest/todos/:id/complete — verifies completion, saves record, marks todo completed
+pestControlRouter.post("/pest/todos/:id/complete", canMobileWrite, async (req, res) => {
+  const organizationId = req.organizationId;
+  const userId = req.userId;
+  const id = String(req.params.id);
+  const body = req.body as Record<string, unknown>;
+
+  // Load the todo
+  const { data: todo, error: fetchError } = await supabase
+    .from("pest_control_todos")
+    .select("*")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return sendSafeError(res, 500, "Failed to load todo.", "Todo fetch error:", fetchError);
+  }
+  if (!todo) {
+    return res.status(404).json({ message: "Todo not found" });
+  }
+
+  // Idempotent: already completed — return success without inserting another record
+  if (todo.status === "completed") {
+    const { data: existingRecord } = await supabase
+      .from("pest_control_records")
+      .select("id")
+      .eq("todo_id", id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (existingRecord) {
+      return res.json({ ok: true, already_completed: true });
+    }
+  }
+
+  // Verify completion — branch on snapshot type
+  type SnapRow = { completed: boolean };
+  type SnapPhase = { completed: boolean; rows?: SnapRow[] };
+  type SnapValve = { completed: boolean };
+  const snap = todo.progress_snapshot as {
+    type?: string;
+    phases?: SnapPhase[];
+    valves?: SnapValve[];
+  };
+
+  if (snap.type === "valve_drench") {
+    if (!snap.valves || snap.valves.length === 0) {
+      return res.status(400).json({ message: "No valves found in plan." });
+    }
+    if (!snap.valves.every((v) => v.completed)) {
+      return res.status(400).json({ message: "All valves must be completed before finishing." });
+    }
+  } else if (snap.phases && snap.phases.length > 0) {
+    const allPhasesComplete = snap.phases.every((p) => p.completed);
+    const allRowsComplete = snap.phases.every((p) => (p.rows ?? []).every((r) => r.completed));
+    if (!allPhasesComplete || !allRowsComplete) {
+      return res.status(400).json({ message: "Job is not fully complete yet." });
+    }
+  }
+
+  const now = new Date().toISOString();
+  const notes = typeof body.notes === "string" ? body.notes.trim() || null : null;
+  const chemId = (todo.chemical_id as string | null) ?? null;
+
+  // ── Recorded mixes (0158) ──────────────────────────────────────────────────
+  // With mix records the job is completed in one transaction (record, status,
+  // inventory), so a retried request can neither write a second record nor
+  // deduct inventory twice. Without 0158 the pre-0158 path below runs.
+  const mixState = await loadJobMixes(organizationId!, id);
+  if (mixState.error) {
+    return sendSafeError(res, 500, "Failed to load mixes.", "Mix load error:", mixState.error);
+  }
+
+  if (mixState.available) {
+    const mixes = mixState.mixes;
+    const plannedBase = plannedChemicalBaseUnits(todo);
+    const mixSummary = mixes.length > 0
+      ? summarizeMixes(planFromTodo(todo), mixes.map(toMixInput), progressRows(todo.progress_snapshot), { assumeClosed: true })
+      : null;
+    // Chemical leaves the store when it goes into a tank, so a job with
+    // recorded mixes deducts what was mixed (including extra mixes and
+    // leftovers); a job without mix records deducts the plan, as before.
+    const actualBase = mixSummary && chemId
+      ? mixSummary.chemicals.find((c) => c.chemical_id === chemId)?.mixed ?? 0
+      : null;
+    const deductBase = actualBase ?? plannedBase.totalBaseUnits;
+
+    const deductions: Array<{ chemical_id: string; qty: number }> = [];
+    if (chemId && deductBase != null && deductBase > 0) {
+      const { data: chemRow, error: chemErr } = await supabase
+        .from("pest_chemicals")
+        .select("inventory_unit")
+        .eq("id", chemId)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (chemErr) {
+        return sendSafeError(res, 500, "Failed to load chemical.", "Chemical fetch error:", chemErr);
+      }
+      if (chemRow) {
+        const qty = toInventoryUnits(deductBase, plannedBase.isDry, (chemRow.inventory_unit as string | null) ?? "");
+        if (qty != null) deductions.push({ chemical_id: chemId, qty });
+        else console.warn(`[pest-complete] Cannot deduct inventory: unit mismatch for chemical ${chemId}`);
+      }
+    }
+
+    const { data: done, error: completeErr } = await supabase.rpc("pest_job_complete", {
+      p_org: organizationId,
+      p_todo: id,
+      p_user: userId ?? null,
+      p_notes: notes,
+      p_mix_summary: mixSummary,
+      p_deductions: deductions
+    });
+    if (completeErr) {
+      const mapped = mixErrorStatus(completeErr);
+      if (mapped) return res.status(mapped.status).json({ message: mapped.message });
+      return sendSafeError(res, 500, "Failed to complete job.", "Job complete error:", completeErr);
+    }
+    const result = (done ?? {}) as { already_completed?: boolean; completed_at?: string };
+    if (result.already_completed) {
+      return res.json({ ok: true, already_completed: true });
+    }
+    await writeH1Log(todo, organizationId!, id, now, chemId, actualBase);
+    return res.json({
+      ok: true,
+      todo: { id, status: "completed", completed_at: result.completed_at ?? now },
+      mix_summary: mixSummary
+    });
+  }
+
+
+  // Insert permanent record
+  const { error: insertError } = await supabase
+    .from("pest_control_records")
+    .insert({
+      organization_id: organizationId,
+      todo_id: id,
+      type: todo.type as string,
+      chemical_id: (todo.chemical_id as string | null) ?? null,
+      chemical_snapshot: todo.chemical_snapshot,
+      target_snapshot: todo.target_snapshot,
+      sprayer_snapshot: todo.sprayer_snapshot,
+      tank_snapshot: todo.tank_snapshot,
+      calculation_snapshot: todo.calculation_snapshot,
+      progress_snapshot: todo.progress_snapshot,
+      completed_by: userId ?? null,
+      completed_at: now,
+      notes
+    });
+
+  if (insertError) {
+    return sendSafeError(res, 500, "Failed to save record.", "Record insert error:", insertError);
+  }
+
+  // Mark todo completed
+  const { data: updatedTodo, error: updateError } = await supabase
+    .from("pest_control_todos")
+    .update({
+      status: "completed",
+      completed_by: userId ?? null,
+      completed_at: now,
+      updated_at: now
+    })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .select("id, status, completed_at")
+    .single();
+
+  if (updateError) {
+    return sendSafeError(res, 500, "Failed to complete todo.", "Todo update error:", updateError);
+  }
+
+  const legacyPlanned = plannedChemicalBaseUnits(todo);
+  if (chemId && legacyPlanned.totalBaseUnits != null && legacyPlanned.totalBaseUnits > 0) {
+    const { data: chemRow } = await supabase
+      .from("pest_chemicals")
+      .select("inventory_qty, inventory_unit")
+      .eq("id", chemId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+
+    if (chemRow) {
+      const deductInInvUnit = toInventoryUnits(legacyPlanned.totalBaseUnits, legacyPlanned.isDry, (chemRow.inventory_unit as string | null) ?? "");
+      if (deductInInvUnit != null) {
+        const currentQty = typeof chemRow.inventory_qty === "number" ? chemRow.inventory_qty : 0;
+        const newQty = Math.max(0, currentQty - deductInInvUnit);
+        await supabase
+          .from("pest_chemicals")
+          .update({ inventory_qty: newQty, updated_at: now })
+          .eq("id", chemId)
+          .eq("organization_id", organizationId);
+      } else {
+        console.warn(`[pest-complete] Cannot deduct inventory: unit mismatch for chemical ${chemId}`);
+      }
+    }
+  }
+
+  await writeH1Log(todo, organizationId!, id, now, chemId, null);
 
   return res.json({ ok: true, todo: updatedTodo });
 });

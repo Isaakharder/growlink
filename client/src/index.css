@@ -13232,3 +13232,193 @@ details.pack-week-manual > :not(summary) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ── Mobile Pest Log — actual mixes, progress and planned vs actual ─────── */
+
+.pest-mix-progress {
+  margin-top: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.7rem 0.85rem;
+}
+
+.pest-mix-progress-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.pest-mix-progress-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.pest-mix-progress-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.pest-mix-progress-value small {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.pest-mix-progress-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.pest-mix-progress-table th,
+.pest-mix-progress-table td {
+  padding: 0.3rem 0.25rem;
+  text-align: right;
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.pest-mix-progress-table thead th {
+  border-top: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.pest-mix-progress-table tbody th {
+  text-align: left;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.pest-mix-progress-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.pest-mix-extra-tag,
+.pest-mix-pending-tag {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  margin-left: 0.25rem;
+}
+
+.pest-mix-extra-tag {
+  background: #fdecc8;
+  color: #8a4b0a;
+}
+
+.pest-mix-pending-tag {
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.pest-mix-actions {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.pest-mix-actions .secondary {
+  flex: 1;
+  font-size: 0.82em;
+}
+
+.pest-mix-form {
+  margin-top: 0.6rem;
+}
+
+.pest-mix-history {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.pest-mix-history li + li {
+  margin-top: 0.15rem;
+}
+
+.pest-plan-vs-actual {
+  margin-top: 0.75rem;
+  border: 1px solid var(--brand);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.75rem 0.9rem;
+}
+
+.pest-plan-vs-actual h3 {
+  margin: 0 0 0.2rem;
+}
+
+.pest-plan-vs-actual-line {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.pest-plan-vs-actual-name {
+  margin: 0 0 0.3rem;
+  font-weight: 700;
+}
+
+.pest-plan-vs-actual-line dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.pest-plan-vs-actual-line dt {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.pest-plan-vs-actual-line dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pest-plan-vs-actual-diff {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.pest-plan-vs-actual-diff.is-over {
+  color: #b45309;
+}
+
+.pest-plan-vs-actual-diff.is-under {
+  color: #b42318;
+}
+
+.pest-plan-vs-actual-sub {
+  margin: 0.1rem 0 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.pest-mix-form label {
+  min-width: 0;
+}
+
+.pest-mix-form input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
