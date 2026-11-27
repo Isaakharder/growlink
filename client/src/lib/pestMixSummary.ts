@@ -294,28 +294,3 @@ export function planFromTodo(todo: {
       : []
   };
 }
-
-/**
- * Plain-language quantity note for the H1 food-safety log, so the record says
- * which figure is which: mixed (what left the store and went into tanks),
- * applied (mixed − leftover; only when every leftover is recorded) and the
- * leftover. `fmt` formats an amount in the log's unit.
- */
-export function h1QuantityNote(s: MixSummary, chemicalId: string, fmt: (baseAmount: number) => string): string {
-  const c = s.chemicals.find((x) => x.chemical_id === chemicalId);
-  if (!c) return "";
-  const list = (nums: number[]) => nums.map((x) => `#${x}`).join(", ");
-  const parts = [`Mixed ${fmt(c.mixed)} in ${s.mixes_made} tank${s.mixes_made === 1 ? "" : "s"}`];
-  if (c.applied != null) {
-    parts.push(`applied ${fmt(c.applied)} (mixed − leftover)`);
-    parts.push(`leftover ${fmt(c.leftover)}`);
-  } else {
-    parts.push(`applied not known: leftover not recorded for tank ${list(s.unknown_leftover_mixes)} (at most ${fmt(c.applied_max)})`);
-    if (c.leftover > 0) parts.push(`recorded leftover ${fmt(c.leftover)}`);
-  }
-  let note = parts.join("; ") + ".";
-  if (s.estimated_mixes.length) {
-    note += ` Tank ${list(s.estimated_mixes)} carried over from before tank tracking: planned amounts, not confirmed.`;
-  }
-  return note;
-}

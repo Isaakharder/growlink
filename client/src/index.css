@@ -6216,8 +6216,8 @@ body.keyboard-open .mobile-bottom-nav {
    pagination even though nothing of it is visible. display:none removes
    the box entirely, so it can never push out extra pages.
 
-   Every print flow in this file (H1 sheet preview, Food Safety cleaning
-   log, Bonus History — see BonusPrintStatements.tsx) shares this single
+   Every print flow in this file (Food Safety cleaning log, Bonus
+   History — see BonusPrintStatements.tsx) shares this single
    rule instead of each rolling its own "hide everything else" logic, so
    they can never fight each other for what gets shown during a print job. */
 @media print {
@@ -6227,21 +6227,6 @@ body.keyboard-open .mobile-bottom-nav {
 
   [data-print-root] {
     display: block !important;
-  }
-}
-
-/* ── H1 preview print styles ───────────────────────────────────────────────── */
-
-@media print {
-  @page { size: landscape; margin: 8mm; }
-
-  /* Remove modal chrome so only the document body prints */
-  .h1-sheet-preview {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    background: #fff;
   }
 }
 

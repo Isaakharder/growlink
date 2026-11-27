@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
-import { h1QuantityNote, summarizeMixes, type MixInput, type PlanInput, type RowInput } from "../pestMixSummary";
+import { summarizeMixes, type MixInput, type PlanInput, type RowInput } from "../pestMixSummary";
 
 const CHEM = "chem-1";
 const line = (amount: number) => [{ chemical_id: CHEM, name: "Kontos", amount, unit: "ml" }];
@@ -103,17 +103,6 @@ describe("pestMixSummary", () => {
     const s = summarizeMixes(plan(1200, 528, 2), [{ ...mix(1, 600, 264, null), estimated: true }, mix(2, 600, 264, 0)], rows([[1], [2]]));
     expect(s.estimated_mixes).toEqual([1]);
     expect(s.mixes[0].estimated).toBe(true);
-  });
-
-  it("the H1 note says which quantity is which", () => {
-    const full = summarizeMixes(plan(1500, 660, 3), [mix(1, 600, 264, 40), mix(2, 600, 264), mix(3, 250, 110, 25)], []);
-    const f = (b: number) => `${Math.round(b * 10) / 10} ml`;
-    expect(h1QuantityNote(full, CHEM, f)).toBe("Mixed 638 ml in 3 tanks; applied 609.4 ml (mixed − leftover); leftover 28.6 ml.");
-    const unknown = summarizeMixes(plan(1200, 528, 2), [{ ...mix(1, 600, 264, null), estimated: true }, mix(2, 600, 264, 60)], []);
-    expect(h1QuantityNote(unknown, CHEM, f)).toBe(
-      "Mixed 528 ml in 2 tanks; applied not known: leftover not recorded for tank #1 (at most 501.6 ml); recorded leftover 26.4 ml. " +
-        "Tank #1 carried over from before tank tracking: planned amounts, not confirmed."
-    );
   });
 
   it("rows without a linked tank are reported, not averaged", () => {

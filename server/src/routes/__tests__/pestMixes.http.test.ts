@@ -1,7 +1,8 @@
 // Pest Control execution over HTTP: mixes beyond the plan, actual amounts,
 // leftovers, rows across two tanks, corrections and retry safety.
 // The real pestControl router runs on PGlite with the pest migrations
-// (0032-0034, 0048) and 0158 applied verbatim.
+// (0032-0034, 0048), 0158 and 0159 applied verbatim. Job completion no longer
+// writes any Food Safety H1 log (the H1 feature was removed).
 // Run: node --require tsx/cjs --test src/routes/__tests__/pestMixes.http.test.ts
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -58,6 +59,7 @@ before(async () => {
       ('${OTHER_CHEM}', '${ORG}', 'Other', 5, 'L', null, null);
     create table varieties (id uuid primary key, name text, planting_date date, product_code text);
     create table greenhouse_variety_assignments (organization_id uuid, group_id uuid, variety_id uuid);
+    -- Only because applied migration 0158 adds columns to it; nothing writes here any more.
     create table food_safety_h1_logs (id uuid primary key default gen_random_uuid(), organization_id uuid,
       pest_job_id uuid, sheet_group_id uuid, application_date date, product_name text, pcp_number text,
       actual_quantity_used numeric, actual_quantity_unit text, rate_applied_per_unit text,
@@ -66,11 +68,13 @@ before(async () => {
       operation_name text, current_crop text, previous_year_crops text, variety text,
       production_site_information text, production_site_area text, date_planted date,
       confirmation_signature text, confirmation_date date, version_label text, created_at timestamptz default now());
+    -- Production's default privileges, which handed these to every new table (see 0159).
+    alter default privileges in schema public grant truncate, trigger, references on tables to anon, authenticated, service_role;
   `);
   for (const name of [
     "0032_pest_control_todos.sql", "0033_pest_todos_progress.sql",
     "0034_pest_control_records.sql", "0048_pest_todos_application_date.sql",
-    "0158_pest_job_mixes.sql"
+    "0158_pest_job_mixes.sql", "0159_pest_job_mixes_tighten_grants.sql"
   ]) await db.exec(migration(name));
 
   const client = createPgliteSupabase(db);
@@ -136,10 +140,8 @@ async function closeMix(todo: string, key: string, water: number, amount: number
   assert.equal(r.status, 200, JSON.stringify(r.body));
 }
 
-async function h1For(todo: string) {
-  return (await db.query<Record<string, any>>(
-    `select actual_quantity_used, actual_quantity_unit, quantity_mixed, quantity_applied, quantity_leftover, quantity_unit, quantity_basis, quantity_note
-       from food_safety_h1_logs where pest_job_id = $1`, [todo])).rows;
+async function h1Count() {
+  return Number((await db.query<{ n: string }>(`select count(*) n from food_safety_h1_logs`)).rows[0].n);
 }
 
 async function saveProgress(todo: string, progress: unknown) {
@@ -255,14 +257,7 @@ test("partial final tank and leftovers: mixed and applied are separate figures",
   close(s.chemicals[0].applied, 264 * (560 / 600) + 264 + 110 * (225 / 250));
   close(s.water.applied_vs_plan.diff, 1385 - 1500);
   assert.equal(s.applied_complete, true);
-  // H1: mixed, applied and leftover each stated; actual_quantity_used is the mixed amount.
-  const [h1] = await h1For(job.id);
-  assert.equal(Number(h1.actual_quantity_used), 638);
-  assert.equal(h1.quantity_basis, "mix_records");
-  assert.equal(Number(h1.quantity_mixed), 638);
-  close(Number(h1.quantity_applied), Math.round(s.chemicals[0].applied * 10) / 10, 1e-9);
-  close(Number(h1.quantity_leftover), Math.round(s.chemicals[0].leftover * 10) / 10, 1e-9);
-  assert.match(h1.quantity_note, /^Mixed 638 ml in 3 tanks; applied 609\.4 ml \(mixed − leftover\); leftover 28\.6 ml\.$/);
+  assert.equal(await h1Count(), 0, "completion writes no H1 log");
   // Inventory deducts what was mixed: 638 ml.
   const hist = await call("GET", `/pest/todos/${job.id}/mixes`);
   assert.ok(hist.body.revisions.some((r: any) => r.action === "leftover"), "final leftover is in the history");
@@ -338,14 +333,7 @@ test("retries never duplicate a mix, a record or an inventory deduction", async 
   const records = await db.query(`select mix_summary from pest_control_records where todo_id = $1`, [job.id]);
   assert.equal(records.rows.length, 1);
   close(await inventory(), 10 - 0.3);
-  const h1 = await db.query<{ q: string; u: string }>(`select actual_quantity_used q, actual_quantity_unit u from food_safety_h1_logs where pest_job_id = $1`, [job.id]);
-  assert.equal(h1.rows.length, 1, "one H1 log");
-  assert.deepEqual([Number(h1.rows[0].q), h1.rows[0].u], [300, "ml"], "H1 shows the chemical actually mixed");
-  // The tank was never closed with a leftover: applied and leftover stay unknown, not 0.
-  const [q] = await h1For(job.id);
-  assert.equal(q.quantity_applied, null);
-  assert.equal(q.quantity_leftover, null);
-  assert.match(q.quantity_note, /applied not known: leftover not recorded for tank #1 \(at most 300 ml\)/);
+  assert.equal(await h1Count(), 0, "no H1 log");
   const mixes = await db.query(`select count(*)::int n from pest_job_mixes where todo_id = $1`, [job.id]);
   assert.equal((mixes.rows[0] as { n: number }).n, 1);
   // A mix after completion is refused.
@@ -440,10 +428,57 @@ test("unknown leftovers stay unknown: no zero, no exact applied total, mixed sti
   assert.equal(s.water.per_row, null, "no per-row average from unknown applied amounts");
   close(s.water.mixed_vs_plan.diff, 0);
   close(await inventory(), 10 - 0.528);
-  const [h1] = await h1For(job.id);
-  assert.equal(Number(h1.quantity_mixed), 528);
-  assert.equal(h1.quantity_applied, null);
-  assert.match(h1.quantity_note, /applied not known: leftover not recorded for tank #1, #2/);
   const record = await db.query<{ m: any }>(`select mix_summary m from pest_control_records where todo_id = $1`, [job.id]);
   assert.equal(record.rows[0].m.water.applied, null);
+});
+
+test("completion does not depend on H1: works with the H1 table gone, one record and one deduction, retries included", async () => {
+  await db.query(`update pest_chemicals set inventory_qty = 10 where id = $1`, [CHEM]);
+  const job = await createJob({ rows: 1, calc: { ...PLAN16, total_volume_l: 600, total_chemical_ml: 264, tank_count: 1 } });
+  const { key } = await startMix(job.id, 1, 600, 250);
+  markRows(job.progress, 1, 1, [1]);
+  await saveProgress(job.id, job.progress);
+  await closeMix(job.id, key, 600, 250, 0);
+  const updatedAt = async () => (await db.query<{ u: string | null }>(`select updated_at::text u from pest_chemicals where id = $1`, [CHEM])).rows[0].u;
+
+  await db.exec(`alter table food_safety_h1_logs rename to food_safety_h1_logs_hidden`);
+  try {
+    const first = await call("POST", `/pest/todos/${job.id}/complete`, {});
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(first.body.ok, true);
+    const stampAfterFirst = await updatedAt();
+    const retries = await Promise.all([1, 2, 3].map(() => call("POST", `/pest/todos/${job.id}/complete`, {})));
+    for (const r of retries) assert.deepEqual([r.status, r.body.already_completed], [200, true]);
+    const records = await db.query(`select id from pest_control_records where todo_id = $1`, [job.id]);
+    assert.equal(records.rows.length, 1, "exactly one completion record");
+    close(await inventory(), 10 - 0.25);
+    assert.equal(await updatedAt(), stampAfterFirst, "inventory touched once, not again on retries");
+    const status = await db.query<{ status: string }>(`select status from pest_control_todos where id = $1`, [job.id]);
+    assert.equal(status.rows[0].status, "completed");
+  } finally {
+    await db.exec(`alter table food_safety_h1_logs_hidden rename to food_safety_h1_logs`);
+  }
+});
+
+test("0159: mix tables keep organization-scoped read for members and full access for the server only", async () => {
+  const grants = await db.query<{ t: string; g: string; p: string }>(
+    `select table_name::text t, grantee::text g, string_agg(privilege_type, ',' order by privilege_type)::text p
+       from information_schema.role_table_grants
+      where table_schema = 'public' and table_name in ('pest_job_mixes', 'pest_job_mix_revisions')
+        and grantee in ('anon', 'authenticated', 'service_role')
+      group by 1, 2 order by 1, 2`);
+  const byTable = (t: string) => Object.fromEntries(grants.rows.filter((r) => r.t === t).map((r) => [r.g, r.p]));
+  for (const t of ["pest_job_mixes", "pest_job_mix_revisions"]) {
+    assert.deepEqual(byTable(t), { authenticated: "SELECT", service_role: "DELETE,INSERT,SELECT,UPDATE" }, t);
+  }
+  const rls = await db.query<{ t: string; rls: boolean; policies: string }>(
+    `select c.relname::text t, c.relrowsecurity rls,
+            (select string_agg(polname::text || ':' || polcmd::text || ':' || pg_get_expr(polqual, polrelid), ',') from pg_policy where polrelid = c.oid) policies
+       from pg_class c where c.relname in ('pest_job_mixes', 'pest_job_mix_revisions') order by 1`);
+  for (const r of rls.rows) {
+    assert.equal(r.rls, true, `${r.t} keeps RLS`);
+    assert.match(r.policies, /_select_org:r:is_org_member\(organization_id\)$/, `${r.t} reads are organization-scoped`);
+  }
+  // Re-running 0159 is harmless.
+  await db.exec(migration("0159_pest_job_mixes_tighten_grants.sql"));
 });

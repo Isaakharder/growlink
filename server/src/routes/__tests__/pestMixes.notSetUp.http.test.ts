@@ -87,4 +87,7 @@ test("without 0158: mixes report not set up; completion keeps the pre-0158 behav
   assert.equal(records.rows.length, 1);
   const inv = await db.query<{ q: string }>(`select inventory_qty q from pest_chemicals where id = $1`, [CHEM]);
   assert.ok(Math.abs(Number(inv.rows[0].q) - (20 - 4.092)) < 1e-9, "planned amount, deducted once");
+  // This database has no food_safety_h1_logs table at all: completion never needed it.
+  const h1 = await db.query<{ t: string | null }>(`select to_regclass('public.food_safety_h1_logs')::text t`);
+  assert.equal(h1.rows[0].t, null);
 });
